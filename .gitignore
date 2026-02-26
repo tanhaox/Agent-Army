@@ -1,0 +1,30 @@
+# Backup Agent - 排除有问题的目录
+
+# 超长路径的 node_modules（Windows 路径限制）
+github_downloads/*/node_modules/
+**/node_modules/@*/*/
+
+# 临时文件
+*.tmp
+*.temp
+~*
+
+# 日志文件（可选，如果不想备份日志）
+projects/tools/backup-agent/logs/*.log
+
+# 缓存
+.next/
+.cache/
+*.pyc
+__pypy__/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
