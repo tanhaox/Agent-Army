@@ -1,0 +1,44 @@
+[coverage:run]
+source = .
+branch = true
+
+# 排除的目录和文件
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */site-packages/*
+    */dist/*
+    github_downloads/*
+    shared/testing/*
+
+[coverage:report]
+# 精度
+precision = 2
+
+# 显示未覆盖的行
+show_missing = True
+
+# 跳过已覆盖的文件
+skip_covered = False
+
+# 忽略的代码
+exclude_lines =
+    # 常见的排除模式
+    pragma: no cover
+    def __repr__
+    def __str__
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    @abstractmethod
+    @abc.abstractmethod
+    # 调试代码
+    if DEBUG:
+    logger.debug
+    # 测试代码
+    assert
+    # 类型检查
+    : Type =
+    -> Type
