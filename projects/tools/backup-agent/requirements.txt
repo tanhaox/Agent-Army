@@ -1,0 +1,24 @@
+# Backup Agent 依赖清单
+# 自动备份系统
+
+# Git 操作
+GitPython>=3.1.40
+
+# 文件系统监控
+watchdog>=3.0.0
+
+# 定时任务
+schedule>=1.2.0
+
+# 系统托盘
+pystray>=0.19.5
+Pillow>=10.0.0
+
+# 命令行参数解析（Python 标准库，无需安装）
+# argparse
+
+# 日志系统（Python 标准库，无需安装）
+# logging
+
+# 日期时间（Python 标准库，无需安装）
+# datetime

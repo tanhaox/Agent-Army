@@ -1,0 +1,52 @@
+{
+  "monitor_path": "C:\\AI-Agent-Local",
+  "backup_intervals": {
+    "hourly": true
+  },
+  "keywords": [
+    "方案",
+    "bug",
+    "漏洞",
+    "升级",
+    "修复",
+    "添加功能",
+    "改进",
+    "开发",
+    "实现",
+    "重构",
+    "优化",
+    "部署",
+    "更新"
+  ],
+  "commit_message_template": "💾 [{type}] 在检测到'{keyword}'讨论前 - {date}",
+  "notification": {
+    "backup_start": "老板，我在备份...",
+    "backup_complete": "老板，我备份好了"
+  },
+  "rollback": {
+    "list_hours": 12
+  },
+  "git": {
+    "auto_init": true,
+    "user_name": "Backup Agent",
+    "user_email": "backup-agent@local"
+  },
+  "backup_cooldown": 60,
+  "tray_icon": {
+    "enabled": true,
+    "icon_path": "C:\\AI-Agent-Local\\projects\\tools\\icon\\32x32.ico",
+    "tooltip_format": "Backup Agent - 上次备份：{time_ago}"
+  },
+  "backup_compression": {
+    "enabled": true,
+    "compress_on": "hourly",
+    "backup_dir": "backups",
+    "keep_count": 10,
+    "exclude_patterns": [".git", ".git.backup", ".git.broken.*", "node_modules", "__pycache__", ".next", "github_downloads", ".claude/cache", ".claude/sessions"]
+  },
+  "file_monitor": {
+    "improvement_filename_patterns": [
+      "^(待改进|进行中)-.*\\.md$"
+    ]
+  }
+}
