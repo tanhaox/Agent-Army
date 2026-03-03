@@ -265,6 +265,16 @@ def main():
     parser.add_argument('--hours', type=int, default=12,
                         help='查询最近多少小时的备份（默认12小时）')
 
+    # GitHub远程仓库管理（新增）
+    parser.add_argument('--github-push', action='store_true',
+                        help='推送代码到GitHub远程仓库')
+    parser.add_argument('--github-status', action='store_true',
+                        help='显示GitHub远程仓库状态')
+    parser.add_argument('--github-setup', metavar='URL',
+                        help='设置GitHub远程仓库（URL格式：https://github.com/user/repo.git 或 git@github.com:user/repo.git）')
+    parser.add_argument('--github-test', action='store_true',
+                        help='测试GitHub连接')
+
     args = parser.parse_args()
 
     # 创建 Backup Agent 实例
@@ -290,6 +300,51 @@ def main():
     elif args.status:
         # 显示状态
         agent.show_status()
+
+    elif args.github_push:
+        # 推送到GitHub
+        success, message = agent.git_manager.push_to_github()
+        print(message)
+        if not success:
+            sys.exit(1)
+
+    elif args.github_status:
+        # 显示GitHub状态
+        status = agent.git_manager.get_github_status()
+        print(f"\n{'═' * 60}")
+        print(f" 🌐 GitHub 远程仓库状态")
+        print(f"{'═' * 60}")
+        if status['has_remote']:
+            print(f" ✅ 远程仓库: {status['remote_name']}")
+            print(f" 📡 远程URL: {status['remote_url']}")
+            print(f" 🌿 当前分支: {status['branch']}")
+            if status['needs_push']:
+                print(f" ⚠️  状态: 本地有未推送的提交")
+                print(f" 📊 领先: {status['ahead_count']} 个提交")
+                if status['behind_count'] > 0:
+                    print(f" 📊 落后: {status['behind_count']} 个提交")
+            else:
+                print(f" ✅ 状态: 已同步")
+                if status['behind_count'] > 0:
+                    print(f" ⚠️  落后: {status['behind_count']} 个提交")
+        else:
+            print(f" ❌ 未配置远程仓库")
+            print(f" 💡 使用 --github-setup <URL> 配置远程仓库")
+        print(f"{'═' * 60}\n")
+
+    elif args.github_setup:
+        # 设置GitHub远程仓库
+        success, message = agent.git_manager.setup_github_remote(args.github_setup)
+        print(message)
+        if not success:
+            sys.exit(1)
+
+    elif args.github_test:
+        # 测试GitHub连接
+        success, message = agent.git_manager.test_github_connection()
+        print(message)
+        if not success:
+            sys.exit(1)
 
     else:
         # 显示帮助
