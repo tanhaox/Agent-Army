@@ -8,12 +8,13 @@
  *
  * 数据源：
  * - PEK（首都机场）：使用官方API bcia.com.cn
- * - PKX（大兴机场）：暂不支持（或使用 AviationStack API）
+ * - PKX（大兴机场）：使用Trip.com + Puppeteer
  */
 
 import { getPool, getAuxiliaryPool, getDrizzleDb } from '@/storage/database/connection';
 import { sql } from 'drizzle-orm';
 import { pekFlightScraper } from '@/services/flight-scrapers/pek-flight-scraper';
+import { fetchTodayPKXArrivals } from '@/lib/airport/pkxScraper';
 
 /**
  * 检查今天是否有航班预订单
@@ -59,12 +60,34 @@ async function fetchPEKArrivals(): Promise<any[]> {
 }
 
 /**
- * 从大兴机场获取PKX航班数据（暂未实现）
+ * 从大兴机场获取PKX航班数据
+ * 数据源: Trip.com (hk.trip.com) + Puppeteer
  */
 async function fetchPKXArrivals(): Promise<any[]> {
-  // TODO: 实现大兴机场航班抓取
-  console.log('[航班服务] PKX航班抓取暂未实现，返回空数据');
-  return [];
+  try {
+    console.log('[航班服务] 从Trip.com获取PKX航班数据');
+    const flights = await fetchTodayPKXArrivals();
+    console.log(`[航班服务] PKX航班获取成功: ${flights.length} 条`);
+
+    // FlightRecord 格式转换为 StandardFlightData 格式（字段映射）
+    // FlightRecord: flightNo, scheduledTime
+    // StandardFlightData: flight_no, scheduled_time
+    return flights.map(flight => ({
+      flight_no: flight.flightNo,
+      flight_number: flight.flightNo, // 兼容旧格式
+      airport_code: flight.airportCode,
+      arrival_terminal: flight.arrivalTerminal,
+      scheduled_time: flight.scheduledTime,
+      arrival_time: flight.scheduledTime, // 兼容旧格式
+      estimated_time: flight.estimatedTime,
+      actual_time: flight.actualTime,
+      flight_status: flight.flightStatus,
+      fetched_at: new Date()
+    }));
+  } catch (error) {
+    console.error('[航班服务] PKX航班获取失败:', error);
+    return [];
+  }
 }
 
 /**
