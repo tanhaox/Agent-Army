@@ -1,0 +1,3894 @@
+{
+  "success": true,
+  "data": {
+    "airport_code": "PKX",
+    "airport_name": "大兴机场",
+    "flight_type": "arrivals",
+    "date": "2026-03-04",
+    "fetched_at": "2026-03-03T20:46:52.900Z",
+    "total_flights": 430,
+    "time_slots_count": 8,
+    "total_clicks": 32,
+    "filtered_flights": 0,
+    "statistics": {
+      "by_status": {
+        "SCH": 420,
+        "DLY": 2,
+        "DEP": 7,
+        "ARR": 1
+      }
+    },
+    "flights": [
+      {
+        "flight_no": "S76311",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 04:45:00",
+        "estimated_time": "2026-03-04 04:45:00",
+        "actual_time": "2026-03-04 04:09:00",
+        "flight_status": "ARR"
+      },
+      {
+        "flight_no": "VN516",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 06:30:00",
+        "estimated_time": "2026-03-04 06:30:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "SQ810",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 06:35:00",
+        "estimated_time": "2026-03-04 06:35:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "MU2072",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 06:55:00",
+        "estimated_time": "2026-03-04 06:55:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "MH318",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 07:00:00",
+        "estimated_time": "2026-03-04 07:00:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "MU5032",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 07:10:00",
+        "estimated_time": "2026-03-04 07:10:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "MU796",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 07:30:00",
+        "estimated_time": "2026-03-04 07:30:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "S76241",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 07:50:00",
+        "estimated_time": "2026-03-04 07:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2123",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 08:30:00",
+        "estimated_time": "2026-03-04 08:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8223",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:00:00",
+        "estimated_time": "2026-03-04 09:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6810",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:10:00",
+        "estimated_time": "2026-03-04 09:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5367",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:20:00",
+        "estimated_time": "2026-03-04 09:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5210",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:20:00",
+        "estimated_time": "2026-03-04 09:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:25:00",
+        "estimated_time": "2026-03-04 09:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8369",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:25:00",
+        "estimated_time": "2026-03-04 09:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6236",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:25:00",
+        "estimated_time": "2026-03-04 09:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5177",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:30:00",
+        "estimated_time": "2026-03-04 09:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6125",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:30:00",
+        "estimated_time": "2026-03-04 09:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6143",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:35:00",
+        "estimated_time": "2026-03-04 09:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5131",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:35:00",
+        "estimated_time": "2026-03-04 09:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6213",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:45:00",
+        "estimated_time": null,
+        "actual_time": null,
+        "flight_status": "DLY"
+      },
+      {
+        "flight_no": "MU5173",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:50:00",
+        "estimated_time": "2026-03-04 09:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2427",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:50:00",
+        "estimated_time": "2026-03-04 09:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8822",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2411",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8878",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6201",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "U6775",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 09:55:00",
+        "estimated_time": "2026-03-04 09:55:00",
+        "actual_time": null,
+        "flight_status": "DEP"
+      },
+      {
+        "flight_no": "MU2731",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:00:00",
+        "estimated_time": "2026-03-04 10:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3123",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:00:00",
+        "estimated_time": "2026-03-04 10:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6646",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:00:00",
+        "estimated_time": "2026-03-04 10:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3117",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:05:00",
+        "estimated_time": "2026-03-04 10:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6135",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:10:00",
+        "estimated_time": "2026-03-04 10:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5362",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:10:00",
+        "estimated_time": "2026-03-04 10:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8374",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:10:00",
+        "estimated_time": "2026-03-04 10:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8618",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:15:00",
+        "estimated_time": "2026-03-04 10:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2811",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:20:00",
+        "estimated_time": "2026-03-04 10:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5302",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:20:00",
+        "estimated_time": "2026-03-04 10:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8388",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:20:00",
+        "estimated_time": "2026-03-04 10:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5988",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:25:00",
+        "estimated_time": "2026-03-04 10:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "HO1257",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:25:00",
+        "estimated_time": "2026-03-04 10:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6654",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:25:00",
+        "estimated_time": "2026-03-04 10:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8622",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:30:00",
+        "estimated_time": "2026-03-04 10:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6662",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:30:00",
+        "estimated_time": "2026-03-04 10:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8890",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:35:00",
+        "estimated_time": "2026-03-04 10:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ2001",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:35:00",
+        "estimated_time": "2026-03-04 10:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6145",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:40:00",
+        "estimated_time": "2026-03-04 10:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8454",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:40:00",
+        "estimated_time": "2026-03-04 10:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5662",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:40:00",
+        "estimated_time": "2026-03-04 10:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ316",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:40:00",
+        "estimated_time": "2026-03-04 10:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2451",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:50:00",
+        "estimated_time": "2026-03-04 10:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6129",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:55:00",
+        "estimated_time": "2026-03-04 10:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6219",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:55:00",
+        "estimated_time": "2026-03-04 10:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2103",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:55:00",
+        "estimated_time": "2026-03-04 10:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6302",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 10:55:00",
+        "estimated_time": "2026-03-04 10:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8666",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:00:00",
+        "estimated_time": "2026-03-04 11:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "A67777",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:00:00",
+        "estimated_time": "2026-03-04 11:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:00:00",
+        "estimated_time": "2026-03-04 11:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3681",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:00:00",
+        "estimated_time": "2026-03-04 11:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "GY7101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:10:00",
+        "estimated_time": "2026-03-04 11:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8648",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:10:00",
+        "estimated_time": "2026-03-04 11:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF887",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:15:00",
+        "estimated_time": "2026-03-04 11:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "RY8865",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:15:00",
+        "estimated_time": "2026-03-04 11:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8113",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:15:00",
+        "estimated_time": "2026-03-04 11:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8115",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:15:00",
+        "estimated_time": "2026-03-04 11:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5701",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:15:00",
+        "estimated_time": "2026-03-04 11:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3277",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:25:00",
+        "estimated_time": "2026-03-04 11:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8854",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:25:00",
+        "estimated_time": "2026-03-04 11:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5596",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:25:00",
+        "estimated_time": "2026-03-04 11:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8287",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:25:00",
+        "estimated_time": "2026-03-04 11:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5129",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:25:00",
+        "estimated_time": "2026-03-04 11:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5526",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:30:00",
+        "estimated_time": "2026-03-04 11:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5644",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:30:00",
+        "estimated_time": "2026-03-04 11:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8977",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:35:00",
+        "estimated_time": "2026-03-04 11:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "DZ6203",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:35:00",
+        "estimated_time": "2026-03-04 11:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5158",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:35:00",
+        "estimated_time": "2026-03-04 11:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8624",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:40:00",
+        "estimated_time": "2026-03-04 11:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5664",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:40:00",
+        "estimated_time": "2026-03-04 11:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3731",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:40:00",
+        "estimated_time": "2026-03-04 11:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8954",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:45:00",
+        "estimated_time": "2026-03-04 11:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5010",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:45:00",
+        "estimated_time": "2026-03-04 11:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3998",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:45:00",
+        "estimated_time": "2026-03-04 11:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "EU6665",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:50:00",
+        "estimated_time": "2026-03-04 11:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5137",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:50:00",
+        "estimated_time": "2026-03-04 11:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5902",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:50:00",
+        "estimated_time": "2026-03-04 11:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3119",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:55:00",
+        "estimated_time": "2026-03-04 11:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8127",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:55:00",
+        "estimated_time": "2026-03-04 11:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3717",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 11:55:00",
+        "estimated_time": "2026-03-04 11:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3151",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:00:00",
+        "estimated_time": "2026-03-04 12:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8384",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:00:00",
+        "estimated_time": "2026-03-04 12:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8149",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:00:00",
+        "estimated_time": "2026-03-04 12:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3099",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:05:00",
+        "estimated_time": "2026-03-04 12:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8630",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:05:00",
+        "estimated_time": "2026-03-04 12:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3685",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:10:00",
+        "estimated_time": "2026-03-04 12:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5715",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:15:00",
+        "estimated_time": "2026-03-04 12:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8690",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:15:00",
+        "estimated_time": "2026-03-04 12:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5916",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:15:00",
+        "estimated_time": "2026-03-04 12:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6800",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:25:00",
+        "estimated_time": "2026-03-04 12:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6571",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:30:00",
+        "estimated_time": "2026-03-04 12:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6565",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:35:00",
+        "estimated_time": "2026-03-04 12:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5167",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:40:00",
+        "estimated_time": "2026-03-04 12:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8662",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:40:00",
+        "estimated_time": "2026-03-04 12:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3175",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:40:00",
+        "estimated_time": "2026-03-04 12:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8200",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:45:00",
+        "estimated_time": "2026-03-04 12:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5510",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:50:00",
+        "estimated_time": "2026-03-04 12:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5680",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:50:00",
+        "estimated_time": "2026-03-04 12:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8398",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:55:00",
+        "estimated_time": "2026-03-04 12:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "HX398",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:55:00",
+        "estimated_time": "2026-03-04 12:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6232",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 12:55:00",
+        "estimated_time": "2026-03-04 12:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8165",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:00:00",
+        "estimated_time": "2026-03-04 13:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6711",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:05:00",
+        "estimated_time": "2026-03-04 13:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3121",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:10:00",
+        "estimated_time": "2026-03-04 13:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5908",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:10:00",
+        "estimated_time": "2026-03-04 13:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3733",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:10:00",
+        "estimated_time": "2026-03-04 13:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5194",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:15:00",
+        "estimated_time": "2026-03-04 13:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5602",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:25:00",
+        "estimated_time": "2026-03-04 13:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5566",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:25:00",
+        "estimated_time": "2026-03-04 13:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8026",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:25:00",
+        "estimated_time": "2026-03-04 13:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "C8135",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:30:00",
+        "estimated_time": "2026-03-04 13:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2105",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:30:00",
+        "estimated_time": "2026-03-04 13:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5330",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:35:00",
+        "estimated_time": "2026-03-04 13:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3159",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6217",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5592",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8362",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8070",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5316",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:40:00",
+        "estimated_time": "2026-03-04 13:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2821",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:45:00",
+        "estimated_time": "2026-03-04 13:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6846",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:45:00",
+        "estimated_time": "2026-03-04 13:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8805",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:45:00",
+        "estimated_time": "2026-03-04 13:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6901",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:45:00",
+        "estimated_time": "2026-03-04 13:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5578",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:50:00",
+        "estimated_time": "2026-03-04 13:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6682",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:50:00",
+        "estimated_time": "2026-03-04 13:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:55:00",
+        "estimated_time": "2026-03-04 13:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8562",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:55:00",
+        "estimated_time": "2026-03-04 13:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5756",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:55:00",
+        "estimated_time": "2026-03-04 13:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5560",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 13:55:00",
+        "estimated_time": "2026-03-04 13:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6365",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:00:00",
+        "estimated_time": "2026-03-04 14:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6187",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:00:00",
+        "estimated_time": "2026-03-04 14:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8830",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:00:00",
+        "estimated_time": "2026-03-04 14:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8918",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:00:00",
+        "estimated_time": "2026-03-04 14:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5366",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:00:00",
+        "estimated_time": "2026-03-04 14:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3137",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:05:00",
+        "estimated_time": "2026-03-04 14:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3177",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:05:00",
+        "estimated_time": "2026-03-04 14:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5312",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:10:00",
+        "estimated_time": "2026-03-04 14:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5358",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:15:00",
+        "estimated_time": "2026-03-04 14:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8856",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:15:00",
+        "estimated_time": "2026-03-04 14:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8036",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:15:00",
+        "estimated_time": "2026-03-04 14:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5962",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:20:00",
+        "estimated_time": "2026-03-04 14:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8420",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:25:00",
+        "estimated_time": "2026-03-04 14:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5866",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:25:00",
+        "estimated_time": "2026-03-04 14:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8809",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:25:00",
+        "estimated_time": "2026-03-04 14:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5920",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:25:00",
+        "estimated_time": "2026-03-04 14:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8022",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:25:00",
+        "estimated_time": "2026-03-04 14:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3127",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:30:00",
+        "estimated_time": "2026-03-04 14:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8396",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:30:00",
+        "estimated_time": "2026-03-04 14:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6644",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:30:00",
+        "estimated_time": "2026-03-04 14:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8060",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:30:00",
+        "estimated_time": "2026-03-04 14:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6104",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:30:00",
+        "estimated_time": "2026-03-04 14:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5962",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:35:00",
+        "estimated_time": "2026-03-04 14:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8058",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:35:00",
+        "estimated_time": "2026-03-04 14:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3169",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:40:00",
+        "estimated_time": "2026-03-04 14:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8902",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:40:00",
+        "estimated_time": "2026-03-04 14:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8107",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:45:00",
+        "estimated_time": "2026-03-04 14:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "QR892",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:45:00",
+        "estimated_time": "2026-03-04 14:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8288",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:45:00",
+        "estimated_time": "2026-03-04 14:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8880",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:50:00",
+        "estimated_time": "2026-03-04 14:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6304",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:50:00",
+        "estimated_time": "2026-03-04 14:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5169",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:55:00",
+        "estimated_time": "2026-03-04 14:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6121",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:55:00",
+        "estimated_time": "2026-03-04 14:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5312",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:55:00",
+        "estimated_time": "2026-03-04 14:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ318",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 14:55:00",
+        "estimated_time": "2026-03-04 14:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2109",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:00:00",
+        "estimated_time": "2026-03-04 15:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8632",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:10:00",
+        "estimated_time": "2026-03-04 15:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA9514",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:10:00",
+        "estimated_time": "2026-03-04 15:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5849",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:10:00",
+        "estimated_time": "2026-03-04 15:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8076",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:10:00",
+        "estimated_time": "2026-03-04 15:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8396",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:10:00",
+        "estimated_time": "2026-03-04 15:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8336",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:15:00",
+        "estimated_time": "2026-03-04 15:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5705",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:15:00",
+        "estimated_time": "2026-03-04 15:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3287",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:15:00",
+        "estimated_time": "2026-03-04 15:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "HO2217",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:15:00",
+        "estimated_time": "2026-03-04 15:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5938",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:15:00",
+        "estimated_time": "2026-03-04 15:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5990",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:20:00",
+        "estimated_time": "2026-03-04 15:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8898",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:25:00",
+        "estimated_time": "2026-03-04 15:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8698",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:25:00",
+        "estimated_time": "2026-03-04 15:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5898",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:30:00",
+        "estimated_time": "2026-03-04 15:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8930",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:30:00",
+        "estimated_time": "2026-03-04 15:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5316",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:30:00",
+        "estimated_time": "2026-03-04 15:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8793",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:35:00",
+        "estimated_time": "2026-03-04 15:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5162",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:35:00",
+        "estimated_time": "2026-03-04 15:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3193",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:40:00",
+        "estimated_time": "2026-03-04 15:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2111",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:40:00",
+        "estimated_time": "2026-03-04 15:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6308",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:40:00",
+        "estimated_time": "2026-03-04 15:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2559",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:45:00",
+        "estimated_time": "2026-03-04 15:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6866",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:45:00",
+        "estimated_time": "2026-03-04 15:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6642",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:45:00",
+        "estimated_time": "2026-03-04 15:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6193",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:50:00",
+        "estimated_time": "2026-03-04 15:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6599",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:55:00",
+        "estimated_time": "2026-03-04 15:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5838",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:55:00",
+        "estimated_time": "2026-03-04 15:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6074",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:55:00",
+        "estimated_time": "2026-03-04 15:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8212",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:55:00",
+        "estimated_time": "2026-03-04 15:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU9707",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 15:55:00",
+        "estimated_time": "2026-03-04 15:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "C7162",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5187",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8848",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5306",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8684",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8974",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:00:00",
+        "estimated_time": "2026-03-04 16:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6378",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:10:00",
+        "estimated_time": "2026-03-04 16:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8052",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:10:00",
+        "estimated_time": "2026-03-04 16:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8229",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6157",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5308",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5382",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3179",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8972",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8394",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:15:00",
+        "estimated_time": "2026-03-04 16:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA132",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:20:00",
+        "estimated_time": "2026-03-04 16:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5112",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:25:00",
+        "estimated_time": "2026-03-04 16:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5502",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:30:00",
+        "estimated_time": "2026-03-04 16:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5661",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:30:00",
+        "estimated_time": "2026-03-04 16:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5954",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:30:00",
+        "estimated_time": "2026-03-04 16:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8606",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:40:00",
+        "estimated_time": "2026-03-04 16:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8628",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:40:00",
+        "estimated_time": "2026-03-04 16:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3167",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:40:00",
+        "estimated_time": "2026-03-04 16:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6664",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:40:00",
+        "estimated_time": "2026-03-04 16:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2074",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:40:00",
+        "estimated_time": "2026-03-04 16:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5820",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:45:00",
+        "estimated_time": "2026-03-04 16:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3902",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:45:00",
+        "estimated_time": "2026-03-04 16:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6658",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:50:00",
+        "estimated_time": "2026-03-04 16:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6880",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:50:00",
+        "estimated_time": "2026-03-04 16:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ2003",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:50:00",
+        "estimated_time": "2026-03-04 16:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5189",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:55:00",
+        "estimated_time": "2026-03-04 16:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5654",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:55:00",
+        "estimated_time": "2026-03-04 16:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5536",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:55:00",
+        "estimated_time": "2026-03-04 16:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3737",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 16:55:00",
+        "estimated_time": "2026-03-04 16:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8614",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:00:00",
+        "estimated_time": "2026-03-04 17:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "QW6245",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:00:00",
+        "estimated_time": "2026-03-04 17:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8171",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:00:00",
+        "estimated_time": "2026-03-04 17:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2459",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:05:00",
+        "estimated_time": "2026-03-04 17:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3109",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:05:00",
+        "estimated_time": "2026-03-04 17:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "SV888",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:05:00",
+        "estimated_time": null,
+        "actual_time": null,
+        "flight_status": "DLY"
+      },
+      {
+        "flight_no": "JD5218",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:05:00",
+        "estimated_time": "2026-03-04 17:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5930",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:10:00",
+        "estimated_time": "2026-03-04 17:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5858",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:15:00",
+        "estimated_time": "2026-03-04 17:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5390",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:15:00",
+        "estimated_time": "2026-03-04 17:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8382",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:15:00",
+        "estimated_time": "2026-03-04 17:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8484",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:15:00",
+        "estimated_time": "2026-03-04 17:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU9739",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:15:00",
+        "estimated_time": "2026-03-04 17:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ356",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:25:00",
+        "estimated_time": "2026-03-04 17:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6905",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:25:00",
+        "estimated_time": "2026-03-04 17:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5179",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:30:00",
+        "estimated_time": "2026-03-04 17:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3141",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:30:00",
+        "estimated_time": "2026-03-04 17:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6684",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:30:00",
+        "estimated_time": "2026-03-04 17:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5300",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:35:00",
+        "estimated_time": "2026-03-04 17:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8931",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:35:00",
+        "estimated_time": "2026-03-04 17:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8664",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:35:00",
+        "estimated_time": "2026-03-04 17:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5536",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:40:00",
+        "estimated_time": "2026-03-04 17:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8367",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:40:00",
+        "estimated_time": "2026-03-04 17:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6149",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:45:00",
+        "estimated_time": "2026-03-04 17:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5968",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:45:00",
+        "estimated_time": "2026-03-04 17:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3153",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:45:00",
+        "estimated_time": "2026-03-04 17:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6227",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:55:00",
+        "estimated_time": "2026-03-04 17:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8858",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:55:00",
+        "estimated_time": "2026-03-04 17:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2453",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 17:55:00",
+        "estimated_time": "2026-03-04 17:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2443",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:00:00",
+        "estimated_time": "2026-03-04 18:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU9191",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:00:00",
+        "estimated_time": "2026-03-04 18:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2113",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:00:00",
+        "estimated_time": "2026-03-04 18:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6530",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:00:00",
+        "estimated_time": "2026-03-04 18:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2415",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:05:00",
+        "estimated_time": "2026-03-04 18:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6110",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8602",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8608",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5992",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2861",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3139",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3999",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:15:00",
+        "estimated_time": "2026-03-04 18:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5709",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:30:00",
+        "estimated_time": "2026-03-04 18:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5640",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:30:00",
+        "estimated_time": "2026-03-04 18:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5578",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:40:00",
+        "estimated_time": "2026-03-04 18:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3189",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:45:00",
+        "estimated_time": "2026-03-04 18:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6715",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:45:00",
+        "estimated_time": "2026-03-04 18:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "RY8867",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:50:00",
+        "estimated_time": "2026-03-04 18:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8886",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:50:00",
+        "estimated_time": "2026-03-04 18:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6138",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:55:00",
+        "estimated_time": "2026-03-04 18:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5198",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:55:00",
+        "estimated_time": "2026-03-04 18:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6112",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:55:00",
+        "estimated_time": "2026-03-04 18:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ648",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 18:55:00",
+        "estimated_time": "2026-03-04 18:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8119",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8660",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5630",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6676",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3735",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5148",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:00:00",
+        "estimated_time": "2026-03-04 19:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "C7516",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:05:00",
+        "estimated_time": "2026-03-04 19:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "GY7203",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:15:00",
+        "estimated_time": "2026-03-04 19:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6184",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:15:00",
+        "estimated_time": "2026-03-04 19:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8642",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:15:00",
+        "estimated_time": "2026-03-04 19:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3115",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:15:00",
+        "estimated_time": "2026-03-04 19:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6638",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:20:00",
+        "estimated_time": "2026-03-04 19:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6082",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:20:00",
+        "estimated_time": "2026-03-04 19:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5538",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:30:00",
+        "estimated_time": "2026-03-04 19:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8876",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:30:00",
+        "estimated_time": "2026-03-04 19:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2115",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:30:00",
+        "estimated_time": "2026-03-04 19:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8392",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:30:00",
+        "estimated_time": "2026-03-04 19:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5711",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:40:00",
+        "estimated_time": "2026-03-04 19:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6844",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:40:00",
+        "estimated_time": "2026-03-04 19:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA9608",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:45:00",
+        "estimated_time": "2026-03-04 19:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5852",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:50:00",
+        "estimated_time": "2026-03-04 19:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6283",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:50:00",
+        "estimated_time": "2026-03-04 19:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3157",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:50:00",
+        "estimated_time": "2026-03-04 19:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5396",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:50:00",
+        "estimated_time": "2026-03-04 19:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU790",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:50:00",
+        "estimated_time": "2026-03-04 19:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN878",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 19:55:00",
+        "estimated_time": "2026-03-04 19:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3147",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8816",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2455",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6650",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3861",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8169",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6234",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3725",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:00:00",
+        "estimated_time": "2026-03-04 20:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6120",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6127",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8705",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6992",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5707",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2117",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "AQ1001",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:15:00",
+        "estimated_time": "2026-03-04 20:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5064",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:20:00",
+        "estimated_time": "2026-03-04 20:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "HO1253",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:20:00",
+        "estimated_time": "2026-03-04 20:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8377",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:25:00",
+        "estimated_time": "2026-03-04 20:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8610",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:30:00",
+        "estimated_time": "2026-03-04 20:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8675",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:30:00",
+        "estimated_time": "2026-03-04 20:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5376",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:30:00",
+        "estimated_time": "2026-03-04 20:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "FM9101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:30:00",
+        "estimated_time": "2026-03-04 20:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2851",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:35:00",
+        "estimated_time": "2026-03-04 20:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3191",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:40:00",
+        "estimated_time": "2026-03-04 20:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2949",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:45:00",
+        "estimated_time": "2026-03-04 20:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8873",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:45:00",
+        "estimated_time": "2026-03-04 20:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6203",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:45:00",
+        "estimated_time": "2026-03-04 20:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2016",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:45:00",
+        "estimated_time": "2026-03-04 20:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5606",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:55:00",
+        "estimated_time": "2026-03-04 20:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5976",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:55:00",
+        "estimated_time": "2026-03-04 20:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU9968",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 20:55:00",
+        "estimated_time": "2026-03-04 20:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5656",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:00:00",
+        "estimated_time": "2026-03-04 21:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8078",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:00:00",
+        "estimated_time": "2026-03-04 21:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6758",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:00:00",
+        "estimated_time": "2026-03-04 21:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3111",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:05:00",
+        "estimated_time": "2026-03-04 21:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA764",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:05:00",
+        "estimated_time": "2026-03-04 21:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6847",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:10:00",
+        "estimated_time": "2026-03-04 21:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MR801",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:15:00",
+        "estimated_time": "2026-03-04 21:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5907",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:15:00",
+        "estimated_time": "2026-03-04 21:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5134",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:20:00",
+        "estimated_time": "2026-03-04 21:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5183",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:25:00",
+        "estimated_time": "2026-03-04 21:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2417",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:30:00",
+        "estimated_time": "2026-03-04 21:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3935",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:30:00",
+        "estimated_time": "2026-03-04 21:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6179",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:35:00",
+        "estimated_time": "2026-03-04 21:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6907",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:35:00",
+        "estimated_time": "2026-03-04 21:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8566",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:55:00",
+        "estimated_time": "2026-03-04 21:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8966",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:55:00",
+        "estimated_time": "2026-03-04 21:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU7558",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 21:55:00",
+        "estimated_time": "2026-03-04 21:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8818",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:00:00",
+        "estimated_time": "2026-03-04 22:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3653",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:00:00",
+        "estimated_time": "2026-03-04 22:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6268",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:05:00",
+        "estimated_time": "2026-03-04 22:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3105",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:05:00",
+        "estimated_time": "2026-03-04 22:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8888",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:10:00",
+        "estimated_time": "2026-03-04 22:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5195",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:15:00",
+        "estimated_time": "2026-03-04 22:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3904",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:15:00",
+        "estimated_time": "2026-03-04 22:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8364",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:15:00",
+        "estimated_time": "2026-03-04 22:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU9723",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:15:00",
+        "estimated_time": "2026-03-04 22:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8604",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8942",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8314",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3163",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6686",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8012",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:25:00",
+        "estimated_time": "2026-03-04 22:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8508",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:30:00",
+        "estimated_time": "2026-03-04 22:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5266",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:30:00",
+        "estimated_time": "2026-03-04 22:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5562",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:35:00",
+        "estimated_time": "2026-03-04 22:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5658",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:35:00",
+        "estimated_time": "2026-03-04 22:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5620",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3155",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5322",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "DZ6209",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6719",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5932",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:40:00",
+        "estimated_time": "2026-03-04 22:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5862",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:45:00",
+        "estimated_time": "2026-03-04 22:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6717",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:45:00",
+        "estimated_time": "2026-03-04 22:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5816",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:45:00",
+        "estimated_time": "2026-03-04 22:45:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5703",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:50:00",
+        "estimated_time": "2026-03-04 22:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5956",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5296",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5530",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5101",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6947",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "NS8068",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 22:55:00",
+        "estimated_time": "2026-03-04 22:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8626",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:00:00",
+        "estimated_time": "2026-03-04 23:00:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ8962",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:05:00",
+        "estimated_time": "2026-03-04 23:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2662",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:05:00",
+        "estimated_time": "2026-03-04 23:05:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6131",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:10:00",
+        "estimated_time": "2026-03-04 23:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5870",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:10:00",
+        "estimated_time": "2026-03-04 23:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5182",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:10:00",
+        "estimated_time": "2026-03-04 23:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU2135",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:10:00",
+        "estimated_time": "2026-03-04 23:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ3916",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:10:00",
+        "estimated_time": "2026-03-04 23:10:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "AK1560",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:15:00",
+        "estimated_time": "2026-03-04 23:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU6648",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:15:00",
+        "estimated_time": "2026-03-04 23:15:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MU5185",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:20:00",
+        "estimated_time": "2026-03-04 23:20:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6160",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8644",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5922",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6913",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ5866",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5572",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:25:00",
+        "estimated_time": "2026-03-04 23:25:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5298",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:30:00",
+        "estimated_time": "2026-03-04 23:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CA8638",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:30:00",
+        "estimated_time": "2026-03-04 23:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "HO1251",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:30:00",
+        "estimated_time": "2026-03-04 23:30:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ2006",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:35:00",
+        "estimated_time": "2026-03-04 23:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5910",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:35:00",
+        "estimated_time": "2026-03-04 23:35:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5626",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:40:00",
+        "estimated_time": "2026-03-04 23:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5982",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:40:00",
+        "estimated_time": "2026-03-04 23:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6605",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:40:00",
+        "estimated_time": "2026-03-04 23:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5222",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:40:00",
+        "estimated_time": "2026-03-04 23:40:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "JD5250",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:50:00",
+        "estimated_time": "2026-03-04 23:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "CZ6713",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:50:00",
+        "estimated_time": "2026-03-04 23:50:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8438",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:55:00",
+        "estimated_time": "2026-03-04 23:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "MF8350",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:55:00",
+        "estimated_time": "2026-03-04 23:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      },
+      {
+        "flight_no": "KN5628",
+        "airport_code": "PKX",
+        "arrival_terminal": null,
+        "scheduled_time": "2026-03-04 23:55:00",
+        "estimated_time": "2026-03-04 23:55:00",
+        "actual_time": null,
+        "flight_status": "SCH"
+      }
+    ]
+  }
+}
