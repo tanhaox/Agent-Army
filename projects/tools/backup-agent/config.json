@@ -29,7 +29,13 @@
   "git": {
     "auto_init": true,
     "user_name": "Backup Agent",
-    "user_email": "backup-agent@local"
+    "user_email": "backup-agent@local",
+    "github": {
+      "enabled": true,
+      "auto_push": false,
+      "remote_name": "origin",
+      "default_branch": "master"
+    }
   },
   "backup_cooldown": 60,
   "tray_icon": {

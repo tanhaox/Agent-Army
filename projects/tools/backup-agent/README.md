@@ -2,7 +2,7 @@
 
 > 🤖 全自动备份系统，保护您的代码安全
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg)](https://github.com)
+[![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)](https://github.com)
 [![Python](https://img.shields.io/badge/python-3.7+-green.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
@@ -17,6 +17,7 @@
 - ✅ **实时监控**：监控改进意见文档创建，立即触发备份
 - ✅ **定时备份**：每小时整点自动备份
 - ✅ **AI 主动备份**：AI 检测到关键词时自动触发备份（bug、修复、优化等）
+- ✅ **GitHub 远程备份**：智能管理 GitHub 远程仓库，支持一键推送和同步
 - ✅ **简单回滚**：支持按时间/关键词/ID 回滚到任意备份点
 - ✅ **全自动运行**：无需用户干预，全程无感知
 - ✅ **友好提示**：控制台输出"老板，我在备份..."等友好提示
@@ -194,6 +195,61 @@ AI: "✅ 备份完成！Commit: 291e985
 
 **详细文档**: [AI主动备份工作流程.md](AI主动备份工作流程.md)
 
+#### GitHub 远程仓库管理 ⭐ **v2.0 新增**
+
+Backup Agent v2.0 新增 GitHub 远程仓库智能管理功能，可以轻松管理代码的远程备份。
+
+**查看 GitHub 状态**：
+```bash
+python backup_agent.py --github-status
+```
+
+输出示例：
+```
+════════════════════════════════════════════════════════════
+ 🌐 GitHub 远程仓库状态
+════════════════════════════════════════════════════════════
+ ✅ 远程仓库: origin
+ 📡 远程URL: git@github.com:user/repo.git
+ 🌿 当前分支: master
+ ✅ 状态: 已同步
+════════════════════════════════════════════════════════════
+```
+
+**推送到 GitHub**：
+```bash
+python backup_agent.py --github-push
+```
+
+**设置远程仓库**：
+```bash
+# SSH 方式（推荐）
+python backup_agent.py --github-setup git@github.com:user/repo.git
+
+# HTTPS 方式
+python backup_agent.py --github-setup https://github.com/user/repo.git
+```
+
+**测试 GitHub 连接**：
+```bash
+python backup_agent.py --github-test
+```
+
+**配置自动推送**：
+编辑 `config.json`：
+```json
+{
+  "git": {
+    "github": {
+      "enabled": true,
+      "auto_push": true,  // 每次本地备份后自动推送
+      "remote_name": "origin",
+      "default_branch": "master"
+    }
+  }
+}
+```
+
 ---
 
 ## 🛠️ 配置说明
@@ -222,7 +278,13 @@ AI: "✅ 备份完成！Commit: 291e985
   "git": {
     "auto_init": true,
     "user_name": "Backup Agent",
-    "user_email": "backup-agent@local"
+    "user_email": "backup-agent@local",
+    "github": {
+      "enabled": true,
+      "auto_push": false,
+      "remote_name": "origin",
+      "default_branch": "master"
+    }
   },
   "backup_cooldown": 60
 }
@@ -239,6 +301,10 @@ AI: "✅ 备份完成！Commit: 291e985
 | `notification.backup_complete` | 备份完成提示 | `老板，我备份好了` |
 | `rollback.list_hours` | 默认查询多少小时的备份 | `12` |
 | `git.auto_init` | 是否自动初始化 Git 仓库 | `true` |
+| `git.github.enabled` | 是否启用 GitHub 管理 | `true` |
+| `git.github.auto_push` | 是否自动推送到 GitHub | `false` |
+| `git.github.remote_name` | 远程仓库名称 | `origin` |
+| `git.github.default_branch` | 默认分支名 | `master` |
 | `backup_cooldown` | 备份冷却期（秒） | `60` |
 
 ---
@@ -345,8 +411,8 @@ Backup Agent 有两种备份触发方式：
 - [ ] 增加 Web Dashboard（可视化备份历史）
 - [ ] 增加系统通知（Windows 通知）
 - [ ] 支持多个项目分别备份
-- [ ] 支持远程备份（推送到 GitHub）
-- [ ] 增加备份压缩（减少空间占用）
+- [x] 支持远程备份（推送到 GitHub）✅ **v2.0 已完成**
+- [x] 增加备份压缩（减少空间占用）✅ 已完成
 
 ---
 
@@ -361,7 +427,8 @@ MIT License
 Backup Agent
 
 **创建日期**: 2026-02-26
-**版本**: v1.0.0
+**最新版本**: v2.0.0 (2026-03-04)
+**更新内容**: 新增 GitHub 远程仓库智能管理功能
 
 ---
 

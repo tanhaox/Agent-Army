@@ -7,18 +7,20 @@ Git 管理模块 - 负责所有 Git 操作
 - 初始化 Git 仓库
 - 检测文件修改
 - 执行备份（git add + commit）
+- GitHub远程仓库同步（push/pull）
 - 获取提交历史
 - 回滚到指定提交
 
 作者：Backup Agent
 创建日期：2026-02-26
+版本：v2.0.0 - 新增GitHub远程仓库管理
 """
 
 import os
 import sys
 import git
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from utils import should_exclude_path
 
 
@@ -492,3 +494,195 @@ class GitManager:
             'untracked_files': untracked_count,
             'latest_commit': latest_commit
         }
+
+    def push_to_github(self, remote_name: str = 'origin') -> Tuple[bool, str]:
+        """
+        推送代码到GitHub远程仓库
+
+        Args:
+            remote_name: 远程仓库名称（默认为'origin'）
+
+        Returns:
+            Tuple[bool, str]: (是否成功, 消息)
+        """
+        try:
+            # 检查是否有远程仓库
+            try:
+                remote = self.repo.remote(remote_name)
+            except ValueError:
+                # 远程仓库不存在
+                return False, f"❌ 远程仓库 '{remote_name}' 不存在"
+
+            # 获取当前分支名
+            try:
+                branch = self.repo.active_branch
+                branch_name = branch.name
+            except Exception:
+                # 可能是detached HEAD状态
+                return False, "❌ 未在任何分支上（detached HEAD）"
+
+            # 检查远程仓库是否可访问
+            try:
+                # 尝试获取远程仓库信息
+                remote.fetch()
+            except git.GitCommandError as e:
+                return False, f"❌ 无法访问远程仓库: {e}"
+
+            # 执行推送
+            push_infos = remote.push(f"{branch_name}:{branch_name}")
+
+            # 检查推送结果（push_infos 是一个列表）
+            if not push_infos:
+                return False, "❌ 推送失败: 无返回信息"
+
+            push_info = push_infos[0]  # 取第一个推送信息
+            if push_info.flags & git.PushInfo.ERROR:
+                return False, f"❌ 推送失败: {push_info.summary}"
+
+            # 推送成功
+            remote_url = remote.url
+            if remote_url:
+                # 隐藏敏感信息
+                if '@' in remote_url:
+                    # SSH URL: git@github.com:user/repo.git
+                    display_url = remote_url.split('@')[-1] if '/' in remote_url else remote_url
+                else:
+                    # HTTPS URL
+                    display_url = remote_url
+            else:
+                display_url = remote_name
+
+            return True, f"✅ 成功推送到 GitHub: {display_url} ({branch_name})"
+
+        except git.GitCommandError as e:
+            return False, f"❌ Git命令失败: {e}"
+        except Exception as e:
+            return False, f"❌ 推送失败: {type(e).__name__}: {e}"
+
+    def get_github_status(self) -> dict:
+        """
+        获取GitHub远程仓库状态
+
+        Returns:
+            dict: 状态信息
+        """
+        status = {
+            'has_remote': False,
+            'remote_name': None,
+            'remote_url': None,
+            'branch': None,
+            'ahead_count': 0,
+            'behind_count': 0,
+            'has_local_commits': False,
+            'needs_push': False
+        }
+
+        try:
+            # 检查是否有远程仓库
+            if not self.repo.remotes:
+                return status
+
+            # 获取第一个远程仓库
+            try:
+                remote = self.repo.remotes[0]
+                status['has_remote'] = True
+                status['remote_name'] = remote.name
+                status['remote_url'] = remote.url
+
+                # 获取当前分支
+                try:
+                    branch = self.repo.active_branch
+                    status['branch'] = branch.name
+
+                    # 检查是否有本地提交
+                    try:
+                        _ = self.repo.head.commit
+                        status['has_local_commits'] = True
+                    except Exception:
+                        pass
+
+                    # 检查领先/落后提交数
+                    try:
+                        # 获取远程分支引用
+                        remote_ref = f"{remote.name}/{branch.name}"
+                        if remote_ref in self.repo.refs:
+                            remote_branch = self.repo.refs[remote_ref]
+                            # 计算领先/落后
+                            ahead = sum(1 for _ in self.repo.iter_commits(branch, remote_branch))
+                            behind = sum(1 for _ in self.repo.iter_commits(remote_branch, branch))
+                            status['ahead_count'] = ahead
+                            status['behind_count'] = behind
+                            status['needs_push'] = ahead > 0
+                    except Exception:
+                        # 远程分支不存在
+                        status['needs_push'] = True
+                except Exception as e:
+                    status['branch'] = f"unknown: {str(e)}"
+            except Exception as e:
+                status['error'] = str(e)
+
+        except Exception as e:
+            status['error'] = str(e)
+
+        return status
+
+    def setup_github_remote(self, repo_url: str, remote_name: str = 'origin') -> Tuple[bool, str]:
+        """
+        设置GitHub远程仓库
+
+        Args:
+            repo_url: GitHub仓库URL（支持SSH和HTTPS）
+            remote_name: 远程仓库名称（默认为'origin'）
+
+        Returns:
+            Tuple[bool, str]: (是否成功, 消息)
+        """
+        try:
+            # 验证URL格式
+            if not repo_url.startswith(('https://', 'git@')):
+                return False, "❌ 无效的仓库URL（必须以 https:// 或 git@ 开头）"
+
+            # 检查远程仓库是否已存在
+            try:
+                existing_remote = self.repo.remote(remote_name)
+                # 远程仓库已存在，更新URL
+                existing_remote.set_url(repo_url)
+                return True, f"✅ 已更新远程仓库 URL: {remote_name}"
+            except ValueError:
+                # 远程仓库不存在，创建新的
+                try:
+                    self.repo.create_remote(remote_name, repo_url)
+                    return True, f"✅ 已添加远程仓库: {remote_name}"
+                except Exception as e:
+                    return False, f"❌ 创建远程仓库失败: {e}"
+
+        except Exception as e:
+            return False, f"❌ 设置远程仓库失败: {type(e).__name__}: {e}"
+
+    def test_github_connection(self) -> Tuple[bool, str]:
+        """
+        测试GitHub连接
+
+        Returns:
+            Tuple[bool, str]: (是否成功, 消息)
+        """
+        try:
+            if not self.repo.remotes:
+                return False, "❌ 未配置远程仓库"
+
+            remote = self.repo.remotes[0]
+
+            # 尝试fetch（不实际拉取数据，只是测试连接）
+            try:
+                remote.fetch(dry_run=True)
+                return True, f"✅ GitHub连接正常: {remote.name}"
+            except git.GitCommandError as e:
+                if "Authentication failed" in str(e) or "could not read Username" in str(e):
+                    return False, "❌ 身份验证失败（请检查SSH密钥或凭据）"
+                elif "Could not resolve host" in str(e):
+                    return False, "❌ 无法解析GitHub主机（请检查网络连接）"
+                else:
+                    return False, f"❌ 连接失败: {e}"
+
+        except Exception as e:
+            return False, f"❌ 测试连接失败: {type(e).__name__}: {e}"
