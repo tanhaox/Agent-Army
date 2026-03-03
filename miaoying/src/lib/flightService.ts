@@ -14,7 +14,7 @@
 import { getPool, getAuxiliaryPool, getDrizzleDb } from '@/storage/database/connection';
 import { sql } from 'drizzle-orm';
 import { pekFlightScraper } from '@/services/flight-scrapers/pek-flight-scraper';
-import { fetchTodayPKXArrivals } from '@/lib/airport/pkxScraper';
+import { fetchTodayPKXArrivals } from '@/lib/airport/pkxScraperPython';
 
 /**
  * 检查今天是否有航班预订单
