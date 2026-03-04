@@ -1,8 +1,8 @@
 {
   "name": "projects",
-  "version": "2.6.4",
+  "version": "2.7.0",
   "private": true,
-  "description": "秒应 - 订单BUG修复与冒烟测试优化 v2.6.0",
+  "description": "秒应 - PKX航班抓取系统 v7.1 + 自动补全功能 v2.7.0",
   "scripts": {
     "dev": "next dev -p 6001",
     "dev:turbo": "next dev -p 6001 --turbo",
@@ -22,7 +22,12 @@
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
     "migration:0019": "tsx src/storage/database/migrations/run-0019-migration.ts up",
-    "migration:0019:rollback": "tsx src/storage/database/migrations/run-0019-migration.ts down"
+    "migration:0019:rollback": "tsx src/storage/database/migrations/run-0019-migration.ts down",
+    "flight:check": "tsx scripts/check-today-flights.ts",
+    "flight:fetch": "tsx scripts/auto-complete-flights.ts auto",
+    "flight:fetch:full": "tsx scripts/auto-complete-flights.ts full",
+    "flight:fetch:update": "tsx scripts/auto-complete-flights.ts update",
+    "flight:fetch:force": "tsx scripts/auto-complete-flights.ts force"
   },
   "dependencies": {
     "@alicloud/ocr-api20210707": "^3.1.3",
