@@ -1,0 +1,42 @@
+{
+  "name": "evaluation-driven-development",
+  "version": "1.0.0",
+  "description": "Automates the 4-phase evaluation-driven development workflow: Research → Implementation → Review → Evaluation. Use when developing high-quality code with built-in quality gates and automatic iteration optimization.",
+  "author": {
+    "name": "AI-Agent-Local",
+    "url": "https://github.com/your-org/AI-Agent-Local"
+  },
+  "capabilities": [
+    "code_execution",
+    "file_creation"
+  ],
+  "categories": [
+    "development",
+    "quality-assurance",
+    "workflow"
+  ],
+  "tags": [
+    "evaluation-driven",
+    "quality-gates",
+    "code-review",
+    "subagent",
+    "workflow"
+  ],
+  "activation_phrases": [
+    "使用评估驱动开发",
+    "实现高质量代码",
+    "4阶段开发流程",
+    "evaluation-driven development",
+    "quality gate",
+    "代码质量保证"
+  ],
+  "requirements": {
+    "python": ">=3.8",
+    "dependencies": []
+  },
+  "security": {
+    "audited": true,
+    "network_access": false,
+    "data_persistence": false
+  }
+}

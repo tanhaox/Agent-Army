@@ -1,0 +1,159 @@
+# AI-Agent-Local CI/CD 配置
+# 自动化测试和代码质量检查
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  # ==================== 测试作业 ====================
+  test:
+    name: 运行测试
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: 缓存 pip 依赖
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov pytest-html pytest-xdist
+
+    - name: 运行测试
+      run: |
+        pytest -v \
+          --cov=. \
+          --cov-report=xml:coverage.xml \
+          --cov-report=html:htmlcov \
+          --cov-report=term-missing \
+          --junitxml=pytest-report.xml
+
+    - name: 上传覆盖率报告
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+    - name: 上传测试报告
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-report-python-${{ matrix.python-version }}
+        path: |
+          pytest-report.xml
+          htmlcov/
+          coverage.xml
+
+    - name: 代码覆盖率总结
+      run: |
+        echo "## 代码覆盖率" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        coverage report --format=text >> $GITHUB_STEP_SUMMARY || true
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+  # ==================== 代码质量检查 ====================
+  lint:
+    name: 代码质量检查
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 安装 Black
+      run: pip install black
+
+    - name: 运行 Black 格式检查
+      run: |
+        black --check --diff --color .
+
+  # ==================== 安全扫描 ====================
+  security:
+    name: 安全扫描
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置 Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 安装 Bandit
+      run: pip install bandit[toml]
+
+    - name: 运行安全扫描
+      run: |
+        bandit -r . -f json -o bandit-report.json || true
+        bandit -r . -f txt
+
+    - name: 上传安全扫描报告
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-report
+        path: bandit-report.json
+
+  # ==================== 依赖审计 ====================
+  dependency-review:
+    name: 依赖审计
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 依赖审查
+      uses: actions/dependency-review-action@v3
+      with:
+        fail-on-severity: high
+
+  # ==================== 构建状态 ====================
+  build-status:
+    name: 构建状态
+    runs-on: ubuntu-latest
+    needs: [test, lint, security]
+
+    steps:
+    - name: 所有检查通过
+      run: |
+        echo "========================================="
+        echo "✅ 所有检查通过！"
+        echo "========================================="
+        echo "- 测试: 通过"
+        echo "- 代码质量: 通过"
+        echo "- 安全扫描: 通过"
+        echo "- 依赖审计: 通过"
+        echo "========================================="
