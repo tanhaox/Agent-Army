@@ -33,5 +33,131 @@ node_modules
 # Git备份目录（3.9GB，不需要备份）
 .git.backup/
 
+# ========== 子项目和仓库 ==========
+
 # dandanyi项目（已迁移到独立仓库）
 dandanyi/
+
+# miaoying项目（已停止维护）
+miaoying/
+
+# projects目录（各项目独立管理，避免巨大单体仓库）
+projects/
+
+# ========== 第三方下载和缓存 ==========
+
+# GitHub下载文件
+github_downloads/
+
+# 依赖和缓存
+node_modules/
+.next/
+.cache/
+*.pyc
+__pypy__/
+
+# ========== 临时和备份文件 ==========
+
+# 备份目录
+backup-*/
+*_backup_*/
+*.tar.gz
+*.zip
+
+# 临时文件
+*.tmp
+*.temp
+~*
+*.log
+
+# ========== 临时测试脚本 ==========
+
+# Windows脚本
+check-*.ps1
+check-*.bat
+check-*.sh
+clear-*.ps1
+clear-*.bat
+clear-*.sh
+fix-*.ps1
+fix-*.bat
+fix-*.sh
+edge-*.ps1
+edge-*.bat
+reset-*.ps1
+reset-*.bat
+force_*.py
+debug_*.py
+diagnose_*.py
+monitor-*.bat
+turn-off-*.bat
+robocopy_*.ps1
+
+# Python临时脚本
+*_test*.py
+*_debug*.py
+*_check*.py
+start_*.py
+
+# 临时测试文件
+test-*.txt
+test-*.py
+test-*.js
+test-*.sh
+test-*.bat
+
+# dandanyi相关临时文件
+dandanyi_*.*
+test_agents.py
+
+# 特殊命名的临时文件（编码问题文件）
+C:AI-Agent-Localmiaoyingtemp_arrival_flights.json
+C:AI-Agent-Localmiaoyingtemp_bcia_page.html
+清理报告_20260210.md
+
+# 编码异常的文件名（Windows GBK编码问题）
+Cï¿½*.*
+
+# 中文命名的临时文件
+*_报告_*.md
+*缓存*.ps1
+*缓存*.bat
+
+# ========== 临时目录和文件 ==========
+
+# 临时目录
+temp/
+trash/
+logs/
+
+# 临时文件（数字或特殊字符开头的文件）
+[0-9]*
+=*.*
+nul
+
+# 启动脚本（本地使用，不提交）
+启动*.bat
+启动*.sh
+清除*.ps1
+清除*.bat
+清除*.sh
+
+# ========== Python测试配置 ==========
+
+# 如果不需要提交测试配置，取消下面的注释
+# pytest.ini
+# requirements-dev.txt
+# run_tests.*
+
+# ========== 操作系统文件 ==========
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========== IDE配置 ==========
+
+.vscode/
+.idea/
+*.swp
+*.swo

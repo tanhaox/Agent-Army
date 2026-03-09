@@ -1,0 +1,12 @@
+{
+  "claw": {
+    "type": "stdio",
+    "command": "node",
+    "args": [
+      "C:/AI-Agent-Local/examples/mcp-server-claw-bridge.js"
+    ],
+    "env": {
+      "CLAW_API_BASE": "http://localhost:3000/api"
+    }
+  }
+}

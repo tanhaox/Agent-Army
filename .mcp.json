@@ -1,0 +1,194 @@
+{
+  "git": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-git"
+    ]
+  },
+  "sqlite": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@pollinations/mcp-server-sqlite",
+      "C:/AI-Agent-Local/data/mcp.db"
+    ]
+  },
+  "ddg-search": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "duckduckgo-mcp-server"
+    ]
+  },
+  "firecrawl": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "firecrawl-mcp"
+    ],
+    "env": {
+      "FIRECRAWL_API_KEY": "fc-8cb4737b63914bcaa96f311d691c1616"
+    }
+  },
+  "context7": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@upstash/context7-mcp"
+    ]
+  },
+  "deepwiki": {
+    "type": "sse",
+    "url": "https://mcp.deepwiki.com/sse"
+  },
+  "deepwiki-local": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "mcp-deepwiki@latest"
+    ]
+  },
+  "filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "C:/AI-Agent-Local"
+    ]
+  },
+  "postgres": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-postgres"
+    ],
+    "env": {
+      "POSTGRES_URL": "postgresql://postgres:postgres@localhost:15432/postgres"
+    }
+  },
+  "redis": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "mcp-server-redis"
+    ],
+    "env": {
+      "REDIS_HOST": "localhost",
+      "REDIS_PORT": "6379"
+    }
+  },
+  "code-search": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "ai-rule-mcp-server@latest"
+    ]
+  },
+  "time": {
+    "type": "stdio",
+    "command": "python",
+    "args": [
+      "-m",
+      "mcp_server_time",
+      "--local-timezone",
+      "Asia/Shanghai"
+    ]
+  },
+  "chroma": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": [
+      "chroma-mcp-server",
+      "--client-type",
+      "persistent",
+      "--data-dir",
+      "C:/AI-Agent-Local/data/chroma"
+    ]
+  },
+  "stackoverflow": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@notalk/stackoverflow-mcp"
+    ]
+  },
+  "kg-memory": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@anthropic/kg-memory-mcp",
+      "serve"
+    ]
+  },
+  "exa": {
+    "type": "http",
+    "url": "https://mcp.exa.ai/mcp",
+    "headers": {
+      "Authorization": "Bearer 5280d9d8-a768-4817-bf80-d00933d9f613"
+    }
+  },
+  "sequential-thinking": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-sequential-thinking"
+    ]
+  },
+  "github": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-github"
+    ],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "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"
+    }
+  },
+  "memory": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-memory"
+    ]
+  },
+  "fetch": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@kazuph/mcp-fetch"
+    ]
+  },
+  "playwright": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "@playwright/mcp@latest"
+    ]
+  },
+  "chrome-devtools": {
+    "type": "stdio",
+    "command": "npx",
+    "args": [
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--browser-url=http://127.0.0.1:9222"
+    ]
+  }
+}
