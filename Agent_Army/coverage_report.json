@@ -1,0 +1,74 @@
+{
+  "timestamp": "2026-03-15",
+  "total_agents": 16,
+  "passed": 15,
+  "failed": 1,
+  "no_tests": 0,
+  "errors": 0,
+  "agents": {
+    "market_sentiment": {
+      "status": "PASSED",
+      "tests": 24
+    },
+    "capital_flow": {
+      "status": "FAILED",
+      "tests": 10
+    },
+    "dragon_tiger": {
+      "status": "PASSED",
+      "tests": 10
+    },
+    "competition_pattern": {
+      "status": "PASSED",
+      "tests": 8
+    },
+    "policy_impact": {
+      "status": "PASSED",
+      "tests": 2
+    },
+    "valuation_model": {
+      "status": "PASSED",
+      "tests": 2
+    },
+    "profit_forecast": {
+      "status": "PASSED",
+      "tests": 2
+    },
+    "position_management": {
+      "status": "PASSED",
+      "tests": 20
+    },
+    "stop_loss": {
+      "status": "PASSED",
+      "tests": 60
+    },
+    "risk_control": {
+      "status": "PASSED",
+      "tests": 55
+    },
+    "backanalysis": {
+      "status": "PASSED",
+      "tests": 10
+    },
+    "realtime_tracking": {
+      "status": "PASSED",
+      "tests": 38
+    },
+    "strategy_optimization": {
+      "status": "PASSED",
+      "tests": 48
+    },
+    "asset_allocation": {
+      "status": "PASSED",
+      "tests": 55
+    },
+    "buy_timing": {
+      "status": "PASSED",
+      "tests": 2
+    },
+    "target_pricing": {
+      "status": "PASSED",
+      "tests": 2
+    }
+  }
+}

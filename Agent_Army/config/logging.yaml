@@ -1,0 +1,180 @@
+# Agent Army - 日志配置
+# Phase 0: 基础设施配置
+
+# ============================================
+# 日志系统配置 (使用structlog)
+# ============================================
+
+# 默认日志级别
+log_level: INFO
+
+# 日志格式
+format:
+  # 控制台输出(开发环境)
+  console:
+    format: "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+    date_format: "%Y-%m-%d %H:%M:%S"
+    colors: True
+
+  # 文件输出(生产环境)
+  file:
+    format: '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": %(message)s}'
+    date_format: "%Y-%m-%d %H:%M:%S"
+    colors: False
+
+# ============================================
+# 日志文件配置
+# ============================================
+handlers:
+  # 控制台处理器
+  console:
+    enabled: True
+    level: INFO
+    stream: stdout
+
+  # 文件处理器 - 主日志
+  main_file:
+    enabled: True
+    level: INFO
+    filename: ./logs/agent-army.log
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+    encoding: utf-8
+
+  # 文件处理器 - 错误日志
+  error_file:
+    enabled: True
+    level: ERROR
+    filename: ./logs/error.log
+    max_bytes: 10485760  # 10MB
+    backup_count: 10
+    encoding: utf-8
+
+  # 文件处理器 - Agent专用日志
+  agent_file:
+    enabled: True
+    level: DEBUG
+    filename: ./logs/agents.log
+    max_bytes: 52428800  # 50MB
+    backup_count: 3
+    encoding: utf-8
+
+  # 文件处理器 - API调用日志
+  api_file:
+    enabled: True
+    level: INFO
+    filename: ./logs/api.log
+    max_bytes: 52428800  # 50MB
+    backup_count: 3
+    encoding: utf-8
+
+# ============================================
+# 日志器配置
+# ============================================
+loggers:
+  # 根日志器
+  root:
+    level: INFO
+    handlers:
+      - console
+      - main_file
+      - error_file
+
+  # Agent日志器
+  agents:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # API调用日志器
+  api:
+    level: INFO
+    handlers:
+      - api_file
+    propagate: False
+
+  # 军团协调官
+  corps_coordinator:
+    level: INFO
+    handlers:
+      - agent_file
+    propagate: False
+
+  # Agent能力管理官
+  capability_manager:
+    level: INFO
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 热点捕捉军团
+  hotspot_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 产业分析军团
+  industry_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 个股挖掘军团
+  stock_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 目标预测军团
+  target_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 策略执行军团
+  strategy_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+  # 结果验证军团
+  validation_corps:
+    level: DEBUG
+    handlers:
+      - agent_file
+    propagate: False
+
+# ============================================
+# 特殊日志配置
+# ============================================
+special:
+  # 敏感信息过滤
+  sensitive_filter:
+    enabled: True
+    patterns:
+      - api_key
+      - password
+      - token
+      - secret
+    replacement: "***REDACTED***"
+
+  # 性能日志
+  performance:
+    enabled: True
+    slow_query_threshold: 1.0  # 秒
+    slow_api_threshold: 5.0  # 秒
+
+  # 审计日志
+  audit:
+    enabled: True
+    filename: ./logs/audit.log
+    max_bytes: 10485760  # 10MB
+    backup_count: 20
+    include_user_actions: True
+    include_system_events: True

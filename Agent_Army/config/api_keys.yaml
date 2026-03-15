@@ -1,0 +1,107 @@
+deepseek:
+  api_key: ${DEEPSEEK_API_KEY}
+  base_url: https://api.deepseek.com/v1
+  cost_control:
+    monthly_budget: 20.0
+    warning_threshold: 0.7
+  models:
+  - cost_input_cache_hit: 0.2
+    cost_input_cache_miss: 2.0
+    cost_output: 3.0
+    max_tokens: 64000
+    name: deepseek-chat
+    temperature: 0.7
+    type: chat
+model_selection:
+  default_model: glm-5
+  default_provider: zhipu
+  fallback_chain:
+  - model: glm-5
+    provider: zhipu
+  - model: glm-4-flash
+    provider: zhipu
+  - model: deepseek-chat
+    provider: deepseek
+  task_mapping:
+    benchmark:
+      model: glm-5
+      provider: zhipu
+    critical_decision:
+      model: glm-5
+      provider: zhipu
+      require_approval: true
+    daily_monitoring:
+      model: glm-4-flash
+      provider: zhipu
+    deep_analysis:
+      model: glm-5
+      provider: zhipu
+openai:
+  api_key: ${OPENAI_API_KEY}
+  base_url: https://api.openai.com/v1
+  cost_control:
+    critical_threshold: 0.8
+    monthly_budget: 100.0
+    usage_limit: 0.05
+    warning_threshold: 0.5
+  models:
+  - cost_input: 150.0
+    cost_output: 600.0
+    max_tokens: 128000
+    name: gpt-4o
+    temperature: 0.7
+    type: chat
+  - cost_input: 10.5
+    cost_output: 42.0
+    max_tokens: 128000
+    name: gpt-4o-mini
+    temperature: 0.7
+    type: chat
+quota_management:
+  cost_control:
+    alert_on_budget_exceed: true
+    auto_throttle_on_critical: true
+    track_daily: true
+    track_monthly: true
+  zhipu:
+    max_burst: 500
+    refill_rate: 320
+    strategy: token_bucket
+tushare:
+  api_key: ${TUSHARE_API_KEY}
+zhipu:
+  api_key: ${ZHIPU_API_KEY}
+  base_url: https://open.bigmodel.cn/api/paas/v4/
+  models:
+  - cost_per_token: 0.0
+    max_tokens: 128000
+    name: glm-5
+    temperature: 0.7
+    type: chat
+  - cost_per_token: 0.0
+    max_tokens: 128000
+    name: glm-4
+    temperature: 0.7
+    type: chat
+  - cost_per_token: 0.0
+    max_tokens: 128000
+    name: glm-4-flash
+    temperature: 0.7
+    type: chat
+  quota:
+    critical_threshold: 0.95
+    max_calls_per_5h: 1600
+    warning_threshold: 0.8
+  web_search:
+  - cost_per_call: 0.0
+    name: web-search-pro
+    quota_per_minute: 30
+  - cost_per_call: 0.0
+    name: search_std
+    quota_total: 4962
+  - cost_per_call: 0.0
+    name: search_pro
+    quota_total: 2492
+  - cost_per_call: 0.0
+    name: search_pro_quark
+    quota_total: 2500
