@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>OpenClaw Control UI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 18px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #5568d3;
+        }
+        #frame {
+            width: 100vw;
+            height: 100vh;
+            border: none;
+            display: none;
+        }
+        .info {
+            margin-top: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="login">
+        <h1>🦞 OpenClaw Control UI (本地)</h1>
+        <button class="btn" onclick="loadControlUI()">打开控制面板</button>
+        <p class="info">本地端口 18790 - 点击按钮手动连接</p>
+    </div>
+    <iframe id="frame"></iframe>
+
+    <script>
+        const PASSWORD = 'openclaw123';
+        const CONTROL_UI_URL = 'http://localhost:18790/';
+
+        function loadControlUI() {
+            // 方法1：使用 fetch 获取页面内容
+            fetch(CONTROL_UI_URL, {
+                headers: {
+                    'Authorization': 'Basic ' + btoa(':' + PASSWORD)
+                }
+            })
+            .then(response => response.text())
+            .then(html => {
+                // 创建一个 blob URL 来加载页面
+                const blob = new Blob([html], { type: 'text/html' });
+                const url = URL.createObjectURL(blob);
+
+                // 直接打开新窗口
+                const win = window.open('', '_blank');
+                win.document.write(html);
+                win.document.close();
+
+                // 隐藏登录界面
+                document.getElementById('login').style.display = 'none';
+                document.getElementById('frame').style.display = 'block';
+                document.getElementById('frame').srcdoc = html;
+            })
+            .catch(err => {
+                alert('加载失败: ' + err.message);
+                console.error(err);
+            });
+
+            // 方法2：尝试直接在 iframe 中加载（带认证）
+            // 注意：这需要服务器支持 CORS
+        }
+
+        // 自动打开方法 - 创建代理
+        function createProxy() {
+            const frame = document.getElementById('frame');
+            frame.style.display = 'block';
+            document.getElementById('login').style.display = 'none';
+
+            // 使用 XMLHttpRequest 获取内容
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', CONTROL_UI_URL, true, '', PASSWORD);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200) {
+                        frame.srcdoc = xhr.responseText;
+                    } else {
+                        document.body.innerHTML = '<h1 style="color:white;">加载失败: ' + xhr.status + '</h1>';
+                    }
+                }
+            };
+            xhr.send();
+        }
+
+        // 尝试直接加载
+        // 已禁用自动加载，避免每次打开就自动连接
+        // createProxy();
+    </script>
+</body>
+</html>
