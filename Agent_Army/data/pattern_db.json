@@ -1,0 +1,87 @@
+{
+  "success_low_pb_high_roe_20260315": {
+    "pattern_id": "success_low_pb_high_roe_20260315",
+    "pattern_name": "低PB高ROE盈利模式",
+    "pattern_type": "success",
+    "description": "PB<1.0 且 ROE>10% 的股票表现优异",
+    "conditions": {
+      "pb_max": 1.0,
+      "roe_min": 10
+    },
+    "support": 3,
+    "confidence": 0.9166666666666666,
+    "examples": [
+      "601669_20260315_success1",
+      "600519_20260310_success2",
+      "000858_20260312_success3"
+    ],
+    "discovered_at": "2026-03-15 05:28:13"
+  },
+  "success_policy_supported_20260315": {
+    "pattern_id": "success_policy_supported_20260315",
+    "pattern_name": "政策支持盈利模式",
+    "pattern_type": "success",
+    "description": "有政策支持的股票表现更好",
+    "conditions": {
+      "policy_support": true
+    },
+    "support": 2,
+    "confidence": 0.935,
+    "examples": [
+      "601669_20260315_success1",
+      "000858_20260312_success3"
+    ],
+    "discovered_at": "2026-03-15 05:28:13"
+  },
+  "success_technical_breakthrough_20260315": {
+    "pattern_id": "success_technical_breakthrough_20260315",
+    "pattern_name": "技术面突破盈利模式",
+    "pattern_type": "success",
+    "description": "趋势向上的股票更容易成功",
+    "conditions": {
+      "trend": "up"
+    },
+    "support": 3,
+    "confidence": 0.9166666666666666,
+    "examples": [
+      "601669_20260315_success1",
+      "600519_20260310_success2",
+      "000858_20260312_success3"
+    ],
+    "discovered_at": "2026-03-15 05:28:13"
+  },
+  "failure_high_pb_low_roe_20260315": {
+    "pattern_id": "failure_high_pb_low_roe_20260315",
+    "pattern_name": "高PB低ROE风险模式",
+    "pattern_type": "failure",
+    "description": "PB>2.0 且 ROE<8% 的股票风险较高",
+    "conditions": {
+      "pb_min": 2.0,
+      "roe_max": 8
+    },
+    "support": 2,
+    "risk_level": 0.575,
+    "examples": [
+      "601318_20260308_failure1",
+      "601398_20260305_failure2"
+    ],
+    "discovered_at": "2026-03-15 05:28:13"
+  },
+  "failure_capital_outflow_20260315": {
+    "pattern_id": "failure_capital_outflow_20260315",
+    "pattern_name": "资金流出风险模式",
+    "pattern_type": "failure",
+    "description": "资金流出的股票风险较高",
+    "conditions": {
+      "capital_flow": "out"
+    },
+    "support": 3,
+    "risk_level": 0.5166666666666667,
+    "examples": [
+      "601318_20260308_failure1",
+      "601398_20260305_failure2",
+      "601888_20260301_failure3"
+    ],
+    "discovered_at": "2026-03-15 05:28:13"
+  }
+}

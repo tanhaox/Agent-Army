@@ -1,0 +1,218 @@
+# Agent Army - 测试配置
+# Phase 0: 本地测试环境配置
+
+# ============================================
+# 测试环境配置
+# ============================================
+test_environment:
+  name: "本地测试环境"
+  description: "无瓶颈限制,可充分验证"
+
+  # 资源配置
+  resources:
+    cpu: "无限制"
+    memory: "无限制"
+    api_quota: "无限制"
+    network: "本地网络"
+
+  # 测试模式
+  mode: "development"
+
+# ============================================
+# 单元测试配置
+# ============================================
+unit_tests:
+  # 测试框架
+  framework: pytest
+
+  # 测试目录
+  test_dir: ./tests/unit
+
+  # 覆盖率要求
+  coverage:
+    minimum: 80  # 最低覆盖率80%
+    report_format: html  # html, xml, json
+
+  # 并行执行
+  parallel:
+    enabled: True
+    workers: 4
+
+  # 超时设置
+  timeout: 60  # 秒
+
+# ============================================
+# 集成测试配置
+# ============================================
+integration_tests:
+  # 测试框架
+  framework: pytest
+
+  # 测试目录
+  test_dir: ./tests/integration
+
+  # 数据库配置
+  database:
+    use_test_db: True
+    test_db_name: agent_army_test
+    cleanup_after_test: True
+
+  # API Mock
+  api_mock:
+    enabled: True
+    mock_providers:
+      - zhipu
+      - deepseek
+      - openai
+
+  # 超时设置
+  timeout: 300  # 秒
+
+# ============================================
+# 性能测试配置
+# ============================================
+performance_tests:
+  # 基准测试
+  benchmark:
+    enabled: True
+    iterations: 100
+    warmup_iterations: 10
+
+  # 压力测试
+  stress:
+    enabled: True
+    concurrent_users: [1, 5, 10, 20, 50]
+    duration: 60  # 秒
+    ramp_up: 10  # 秒
+
+  # 资源监控
+  monitoring:
+    track_cpu: True
+    track_memory: True
+    track_network: True
+    sample_interval: 1  # 秒
+
+# ============================================
+# Agent测试配置
+# ============================================
+agent_tests:
+  # 管理层Agent测试
+  management:
+    - name: corps_coordinator
+      test_tasks:
+        - "分析今日市场热点"
+        - "深度分析贵州茅台"
+        - "生成每日投资简报"
+      expected_response_time: 5  # 秒
+
+    - name: capability_manager
+      test_tasks:
+        - "创建新Agent"
+        - "优化Agent Prompt"
+        - "分析Agent性能"
+      expected_response_time: 5  # 秒
+
+  # 业务层Agent测试
+  business:
+    - name: hotspot_corps
+      test_tasks:
+        - "监控财经新闻"
+        - "分析市场情绪"
+      expected_response_time: 10  # 秒
+
+    - name: stock_corps
+      test_tasks:
+        - "基本面分析"
+        - "技术面分析"
+        - "估值计算"
+      expected_response_time: 15  # 秒
+
+# ============================================
+# 质量检查配置
+# ============================================
+quality_checks:
+  # 代码质量
+  code_quality:
+    linter: ruff
+    formatter: black
+    type_checker: mypy
+
+    # 检查规则
+    rules:
+      max_line_length: 100
+      max_complexity: 10
+      min_coverage: 80
+
+  # 输出质量
+  output_quality:
+    # Agent输出检查
+    agent_output:
+      check_completeness: True
+      check_accuracy: True
+      check_relevance: True
+
+    # 质量阈值
+    thresholds:
+      completeness: 0.9  # 90%完整性
+      accuracy: 0.85  # 85%准确性
+      relevance: 0.9  # 90%相关性
+
+# ============================================
+# 测试报告配置
+# ============================================
+reports:
+  # 报告目录
+  output_dir: ./tests/reports
+
+  # 报告格式
+  formats:
+    - html
+    - json
+    - junit_xml
+
+  # 报告内容
+  include:
+    - test_results
+    - coverage_report
+    - performance_metrics
+    - quality_scores
+
+  # 自动生成
+  auto_generate: True
+  timestamp_format: "%Y%m%d_%H%M%S"
+
+# ============================================
+# 持续集成配置
+# ============================================
+ci:
+  # 触发条件
+  triggers:
+    - push
+    - pull_request
+
+  # 测试阶段
+  stages:
+    - name: lint
+      commands:
+        - ruff check src/
+        - black --check src/
+        - mypy src/
+
+    - name: unit_tests
+      commands:
+        - pytest tests/unit -v --cov=src --cov-report=html
+
+    - name: integration_tests
+      commands:
+        - pytest tests/integration -v
+
+    - name: performance_tests
+      commands:
+        - pytest tests/performance -v
+      allow_failure: True  # 性能测试失败不阻塞
+
+  # 失败处理
+  on_failure:
+    save_logs: True
+    save_artifacts: True
+    notify: True

@@ -1,0 +1,210 @@
+# Agent Army - Agent配置
+# Phase 0: 管理层Agent配置
+
+# ============================================
+# 管理层Agent
+# ============================================
+
+# 🎖️ 军团协调官 (Corps Coordinator)
+corps_coordinator:
+  name: "军团协调官"
+  role: "协调6大军团的任务执行"
+
+  # 能力配置
+  capabilities:
+    - task_decomposition  # 任务分解
+    - resource_allocation  # 资源分配
+    - quality_control  # 质量把控
+    - progress_monitoring  # 进度监控
+    - conflict_resolution  # 冲突解决
+
+  # 工具配置
+  tools:
+    - task_scheduler  # 任务调度器
+    - resource_manager  # 资源管理器
+    - quality_checker  # 质量检查器
+    - report_generator  # 报告生成器
+
+  # 模型配置
+  model:
+    provider: zhipu
+    model_name: glm-5
+    temperature: 0.7
+    max_tokens: 4000
+
+  # 行为配置
+  behavior:
+    max_concurrent_tasks: 10  # 最多同时处理10个任务
+    quality_threshold: 0.85  # 质量阈值85%
+    report_interval: 3600  # 每小时汇报一次
+
+  # 权限配置
+  permissions:
+    - assign_tasks  # 分配任务
+    - manage_resources  # 管理资源
+    - request_reports  # 请求报告
+    - escalate_issues  # 上报问题
+
+# 🔧 Agent能力管理官 (Agent Capability Manager)
+capability_manager:
+  name: "Agent能力管理官"
+  role: "动态创建、调整、优化Agent"
+
+  # 能力配置
+  capabilities:
+    - agent_creation  # Agent创建
+    - prompt_optimization  # Prompt优化
+    - performance_analysis  # 性能分析
+    - knowledge_management  # 知识管理
+    - best_practice_extraction  # 最佳实践提取
+
+  # 工具配置
+  tools:
+    - agent_factory  # Agent工厂
+    - prompt_editor  # Prompt编辑器
+    - performance_monitor  # 性能监控
+    - knowledge_base_manager  # 知识库管理
+
+  # 模型配置
+  model:
+    provider: zhipu
+    model_name: glm-5
+    temperature: 0.7
+    max_tokens: 8000
+
+  # 行为配置
+  behavior:
+    optimization_interval: 86400  # 每天优化一次
+    performance_threshold: 0.7  # 性能阈值70%
+    max_retry_attempts: 3  # 最大重试次数
+
+  # 权限配置
+  permissions:
+    - create_agents  # 创建Agent
+    - modify_agents  # 修改Agent
+    - deprecate_agents  # 废弃Agent
+    - update_prompts  # 更新Prompt
+
+# ============================================
+# Agent通用配置
+# ============================================
+agent_common:
+  # 基础配置
+  base_config:
+    max_iterations: 10  # 最大迭代次数
+    timeout: 300  # 超时时间5分钟
+    retry_on_failure: True
+    max_retries: 3
+
+  # 记忆配置
+  memory:
+    enabled: True
+    max_history: 100  # 最多保留100条历史
+    summary_threshold: 50  # 超过50条时自动摘要
+
+  # 协作配置
+  collaboration:
+    allow_delegation: True  # 允许委托任务
+    allow_consultation: True  # 允许咨询其他Agent
+    max_consultations: 5  # 最多咨询5个Agent
+
+  # 知识库配置
+  knowledge_base:
+    enabled: True
+    update_interval: 86400  # 每天更新一次
+    max_documents: 1000  # 最多保留1000个文档
+
+# ============================================
+# 军团配置模板
+# ============================================
+corps_templates:
+  # 热点捕捉军团
+  hotspot_corps:
+    name: "热点捕捉军团"
+    agents:
+      - news_analyzer
+      - sentiment_analyzer
+      - trend_predictor
+      - hotspot_propagator
+    priority: 1  # 高优先级
+    max_concurrent: 4
+
+  # 产业分析军团
+  industry_corps:
+    name: "产业分析军团"
+    agents:
+      - chain_analyzer
+      - competition_analyzer
+      - policy_analyzer
+      - value_evaluator
+    priority: 2
+    max_concurrent: 4
+
+  # 个股挖掘军团
+  stock_corps:
+    name: "个股挖掘军团"
+    agents:
+      - fundamental_analyzer
+      - technical_analyzer
+      - valuation_calculator
+      - opportunity_screener
+    priority: 3  # 核心军团
+    max_concurrent: 4
+
+  # 目标预测军团
+  target_corps:
+    name: "目标预测军团"
+    agents:
+      - price_predictor
+      - time_window_analyzer
+      - risk_assessor
+      - probability_analyzer
+    priority: 4
+    max_concurrent: 4
+
+  # 策略执行军团
+  strategy_corps:
+    name: "策略执行军团"
+    agents:
+      - position_planner
+      - capital_manager
+      - risk_controller
+      - execution_monitor
+    priority: 5
+    max_concurrent: 4
+
+  # 结果验证军团
+  validation_corps:
+    name: "结果验证军团"
+    agents:
+      - backtest_analyzer
+      - effect_evaluator
+      - optimization_advisor
+      - learning_improver
+    priority: 6
+    max_concurrent: 4
+
+# ============================================
+# 工作流配置
+# ============================================
+workflow:
+  # 默认工作流
+  default_flow:
+    - hotspot_capture  # 热点捕捉
+    - industry_analysis  # 产业分析
+    - stock_mining  # 个股挖掘
+    - target_prediction  # 目标预测
+    - strategy_execution  # 策略执行
+    - result_validation  # 结果验证
+
+  # 并行执行配置
+  parallel_execution:
+    enabled: True
+    max_parallel_agents: 5
+    timeout_per_agent: 60
+
+  # 串行执行配置
+  sequential_execution:
+    enabled: True
+    dependency_check: True
+    rollback_on_failure: True

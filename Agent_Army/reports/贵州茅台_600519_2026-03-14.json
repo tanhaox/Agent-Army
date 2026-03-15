@@ -1,0 +1,77 @@
+{
+  "stock_code": "600519",
+  "stock_name": "贵州茅台",
+  "report_date": "2026-03-14 08:58:49.206819",
+  "fundamental": {
+    "stock_code": "600519",
+    "stock_name": "贵州茅台",
+    "analysis_type": "fundamental",
+    "timestamp": "2026-03-14 08:58:49.206696",
+    "score": 19.3,
+    "confidence": 0.85,
+    "summary": "综合评分19.3分，评级：建议卖出，盈利能力16.6分，成长能力0分，偿债能力40.0分",
+    "details": {},
+    "warnings": [],
+    "financial_score": 25.2,
+    "profitability": 16.6,
+    "growth_ability": 0.0,
+    "solvency": 40.0,
+    "roe_trend": "偏低",
+    "revenue_growth": -6.6,
+    "profit_growth": -6.6,
+    "rating": "卖出",
+    "investment_value": "投资价值有限"
+  },
+  "technical": null,
+  "valuation": null,
+  "industry": {
+    "stock_code": "600519",
+    "stock_name": "示例",
+    "analysis_type": "industry",
+    "timestamp": "2026-03-14 08:58:48.732263",
+    "score": 75.0,
+    "confidence": 0.8,
+    "summary": "产业链位置优越",
+    "details": {},
+    "warnings": [],
+    "industry_name": "示例行业",
+    "industry_size": 1000.0,
+    "industry_growth": 10.0,
+    "market_share": 5.0,
+    "industry_rank": 3,
+    "industry_cycle": "成长期",
+    "growth_driver": [
+      "技术创新",
+      "需求增长"
+    ],
+    "risk_factors": [
+      "竞争加剧"
+    ]
+  },
+  "overall_score": 41.58,
+  "overall_rating": "卖出",
+  "risk_level": "高风险",
+  "investment_advice": "该股票基本面较差,不建议投资。 所属示例行业行业处于成长期。 投资价值有限 综合评级: 建议卖出。",
+  "target_price": 0.0,
+  "stop_loss_price": 0.0,
+  "position_suggestion": "建议仓位: 0% (不建仓)",
+  "key_risks": [
+    "竞争加剧",
+    "⚠️ 营收增长为负，需关注业务发展",
+    "⚠️ ROE偏低，盈利能力需提升"
+  ],
+  "investment_horizon": "长期(1-3年)",
+  "commander_review": {
+    "status": "rejected",
+    "quality_score": 5,
+    "review_time": "2026-03-14 08:58:49",
+    "reviewer": "Commander Agent",
+    "issues": [
+      "缺少必要字段：analysis",
+      "缺少必要字段：recommendation",
+      "缺少必要字段：timestamp",
+      "分析内容过短，不够详细",
+      "投资建议不合规：None"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "pb_min": 0.84,
+  "pb_max": 2.0,
+  "pe_min": 10,
+  "pe_max": 50,
+  "roe_min": 10,
+  "debt_max": 60,
+  "time_window_min": 3,
+  "time_window_max": 12,
+  "weights": {
+    "fundamental": 0.32,
+    "technical": 0.2,
+    "capital": 0.15,
+    "policy": 0.15,
+    "historical": 0.1,
+    "industry": 0.1
+  }
+}

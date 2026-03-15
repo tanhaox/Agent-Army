@@ -1,0 +1,88 @@
+# Python dependencies for Agent Army
+# Phase 0: Platform Dependencies
+
+# ============================================
+# Agent Orchestration Framework
+# ============================================
+# LangGraph - Workflow orchestration
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.3.0
+langchain-community>=0.3.0
+
+# AutoGen - Multi-agent dialogue
+pyautogen>=0.2.0
+
+# CrewAI - Task collaboration
+crewai>=0.28.0
+crewai-tools>=0.1.0
+
+# ============================================
+# AI Model Providers
+# ============================================
+# OpenAI (high-quality scenarios)
+openai>=1.10.0
+
+# Zhipu AI (主力模型)
+zhipuai>=2.0.0
+
+# DeepSeek (基准测试)
+# Note: DeepSeek uses OpenAI-compatible API
+
+# ============================================
+# Infrastructure
+# ============================================
+# PostgreSQL - Business data storage
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+
+# Redis - Cache + Quota management
+redis>=5.0.0
+
+# SQLite - Knowledge graph (lightweight)
+# Note: SQLite is built-in, no need to install
+
+# ============================================
+# Logging System (Professional)
+# ============================================
+# Winston alternative for Python
+loguru>=0.7.0
+structlog>=24.1.0
+
+# ============================================
+# Testing Framework
+# ============================================
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+
+# ============================================
+# Data Processing
+# ============================================
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ============================================
+# Utilities
+# ============================================
+python-dotenv>=1.0.0
+pyyaml>=6.0
+requests>=2.31.0
+aiohttp>=3.9.0
+pydantic>=2.5.0
+tenacity>=8.2.0  # Retry mechanism
+
+# ============================================
+# Web Interface
+# ============================================
+# Streamlit - Simple web UI
+streamlit>=1.30.0
+
+# ============================================
+# Code Quality
+# ============================================
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.8.0

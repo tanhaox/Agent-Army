@@ -1,0 +1,152 @@
+{
+  "601669_20260315": {
+    "record_id": "601669_20260315",
+    "stock_code": "601669",
+    "analysis_date": "2026-03-15",
+    "created_at": "2026-03-15 05:26:01",
+    "dimensions": {
+      "fundamental": {
+        "pb": 0.6,
+        "roe": 12.5
+      },
+      "technical": {
+        "trend": "up",
+        "resistance": 8.0
+      },
+      "capital": {
+        "flow": "in"
+      },
+      "policy": {
+        "support": true
+      },
+      "historical": {
+        "cycle": "12个月"
+      },
+      "industry": {
+        "growth": true
+      }
+    },
+    "prediction": {
+      "stop_loss": 5.2,
+      "buy_price": 5.6,
+      "cost_price": 5.6,
+      "resistance": [
+        6.5,
+        7.8
+      ],
+      "time_window": "2026年7-8月",
+      "target_price": 7.5,
+      "confidence": 0.75
+    },
+    "actual_result": {
+      "actual_stop_loss": null,
+      "actual_buy_price": null,
+      "actual_target_price": 7.8,
+      "actual_time_window": null,
+      "accuracy": 1.0,
+      "deviation": 0.03999999999999997,
+      "verified_date": "2026-03-15"
+    },
+    "status": "verified",
+    "case_type": "success",
+    "verification_summary": "Predict: Target 7.50 | Buy 5.60 | Stop 5.20 | Actual 7.80 | [OK] Accurate"
+  },
+  "600519_20260310": {
+    "record_id": "600519_20260310",
+    "stock_code": "600519",
+    "analysis_date": "2026-03-10",
+    "created_at": "2026-03-15 05:26:01",
+    "dimensions": {
+      "fundamental": {
+        "pb": 0.6,
+        "roe": 12.5
+      },
+      "technical": {
+        "trend": "up",
+        "resistance": 8.0
+      },
+      "capital": {
+        "flow": "in"
+      },
+      "policy": {
+        "support": true
+      },
+      "historical": {
+        "cycle": "12个月"
+      },
+      "industry": {
+        "growth": true
+      }
+    },
+    "prediction": {
+      "stop_loss": 5.2,
+      "buy_price": 5.6,
+      "cost_price": 5.6,
+      "resistance": [
+        6.5,
+        7.8
+      ],
+      "time_window": "2026年7-8月",
+      "target_price": 7.5,
+      "confidence": 0.75
+    },
+    "actual_result": {
+      "actual_stop_loss": null,
+      "actual_buy_price": null,
+      "actual_target_price": 5.0,
+      "actual_time_window": null,
+      "accuracy": 0.7,
+      "deviation": 0.3333333333333333,
+      "verified_date": "2026-03-15"
+    },
+    "status": "verified",
+    "case_type": "pending",
+    "verification_summary": "Predict: Target 7.50 | Buy 5.60 | Stop 5.20 | Actual 5.00 | [WARN] Partial"
+  },
+  "300750_20260315": {
+    "record_id": "300750_20260315",
+    "stock_code": "300750",
+    "analysis_date": "2026-03-15",
+    "created_at": "2026-03-15 05:50:44",
+    "dimensions": {
+      "fundamental": {
+        "pb": 0.8,
+        "roe": 15.0
+      },
+      "technical": {
+        "trend": "up"
+      },
+      "capital": {
+        "flow": "in"
+      },
+      "policy": {
+        "support": true
+      },
+      "historical": {},
+      "industry": {
+        "name": "新能源"
+      }
+    },
+    "prediction": {
+      "stop_loss": 10.0,
+      "buy_price": 10.8,
+      "cost_price": 0.0,
+      "resistance": [],
+      "time_window": "3个月",
+      "target_price": 13.5,
+      "confidence": 0.75
+    },
+    "actual_result": {
+      "actual_stop_loss": null,
+      "actual_buy_price": null,
+      "actual_target_price": 14.0,
+      "actual_time_window": null,
+      "accuracy": 1.0,
+      "deviation": 0.037037037037037035,
+      "verified_date": "2026-03-15"
+    },
+    "status": "verified",
+    "case_type": "success",
+    "verification_summary": "Predict: Target 13.50 | Buy 10.80 | Stop 10.00 | Actual 14.00 | [OK] Accurate"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "1",
+  "subject": "根据C:/AI-Agent-Local/Agent_Army/docs/design/PHASE2_DASHBOARD_DESIGN_TASK.md中的设计任务",
+  "description": "根据C:/AI-Agent-Local/Agent_Army/docs/design/PHASE2_DASHBOARD_DESIGN_TASK.md中的设计任务，完成仪表板Dashboard重构设计。\n\n目标：\n1. 使用Phase 1建立的设计系统（Design Tokens、全局样式、组件库）\n2. 统一卡片布局和指标展示\n3. 设计实时数据刷新交互\n4. 优化加载状态和错误处理\n\n具体任务：\n1. 阅读设计任务文档\n2. 分析当前Dashboard的问题（C:/AI-Agent-Local/Agent_Army/src/core/pages_v2/dashboard.py）\n3. 设计新的Dashboard布局和组件\n4. 创建设计规范文档\n5. 创建实现指南\n6. 生成代码模板\n\n输出要求：\n- docs/dashboard_design_spec.md - 设计规范\n- docs/dashboard_implementation_guide.md - 实现指南\n- src/core/pages_v2/dashboard_template.py - 代码模板\n\n重点关注：\n1. 风格统一（使用Design Tokens）\n2. 用户体验优秀（加载状态、错误处理、即时反馈）\n3. 无隐藏功能（清晰的信息架构）\n\n请开始设计工作。",
+  "status": "pending",
+  "owner": null,
+  "result": null,
+  "created_at": "2026-03-15T00:12:18.822Z"
+}
