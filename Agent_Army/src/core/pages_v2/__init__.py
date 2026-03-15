@@ -13,7 +13,8 @@ from .task_management import render_task_management
 from .analysis_reports import render_analysis_reports
 from .portfolio import render_portfolio
 from .market_monitor import render_market_monitor
-from .data_center import render_data_center
+# data_center 暂未实现，已注释
+# from .data_center import render_data_center
 from .system_config import render_system_config
 
 __all__ = [
@@ -25,6 +26,6 @@ __all__ = [
     'render_analysis_reports',
     'render_portfolio',
     'render_market_monitor',
-    'render_data_center',
+    # 'render_data_center',  # 暂未实现
     'render_system_config'
 ]

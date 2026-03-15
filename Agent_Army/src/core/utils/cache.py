@@ -317,42 +317,68 @@ class MultiCacheManager:
         import threading
 
         def monitor_loop():
+            """监控循环"""
             while self._monitor_running:
                 try:
-                    # 每60秒执行一次
-                    time.sleep(60)
+                    # 每60秒执行一次（使用可中断的sleep）
+                    for _ in range(60):
+                        if not self._monitor_running:
+                            break
+                        time.sleep(1)
+
+                    if not self._monitor_running:
+                        break
 
                     # 清理所有过期缓存
                     self.cleanup_all_expired()
 
-                    # 检查容量告警
-                    stats = self.get_all_stats()
-                    for name, stat in stats.items():
-                        usage_rate = stat['current_size'] / stat['max_size']
-                        if usage_rate > 0.9:
-                            self.logger.warning(
-                                f"⚠️ 缓存 '{name}' 容量告警: "
-                                f"{stat['current_size']}/{stat['max_size']} "
-                                f"({usage_rate*100:.1f}%)"
-                            )
+                    # 检查容量告警（增加安全检查）
+                    try:
+                        stats = self.get_all_stats()
+                        for name, stat in stats.items():
+                            # 安全检查：确保必要的字段存在
+                            if 'current_size' not in stat or 'max_size' not in stat:
+                                self.logger.warning(f"⚠️ 缓存 '{name}' 统计数据不完整，跳过检查")
+                                continue
 
-                        # 记录缓存统计（每10分钟一次）
-                        if int(time.time()) % 600 == 0:
-                            self.logger.info(
-                                f"📊 缓存统计 '{name}': "
-                                f"大小={stat['current_size']}, "
-                                f"命中率={stat['hit_rate']:.1f}%, "
-                                f"淘汰={stat['evictions']}, "
-                                f"过期={stat['expirations']}"
-                            )
+                            current_size = stat.get('current_size', 0)
+                            max_size = stat.get('max_size', 1)
+
+                            if max_size > 0:
+                                usage_rate = current_size / max_size
+                                if usage_rate > 0.9:
+                                    self.logger.warning(
+                                        f"⚠️ 缓存 '{name}' 容量告警: "
+                                        f"{current_size}/{max_size} "
+                                        f"({usage_rate*100:.1f}%)"
+                                    )
+
+                            # 记录缓存统计（每10分钟一次）
+                            if int(time.time()) % 600 == 0:
+                                hit_rate = stat.get('hit_rate', 0)
+                                evictions = stat.get('evictions', 0)
+                                expirations = stat.get('expirations', 0)
+
+                                self.logger.info(
+                                    f"📊 缓存统计 '{name}': "
+                                    f"大小={current_size}, "
+                                    f"命中率={hit_rate:.1f}%, "
+                                    f"淘汰={evictions}, "
+                                    f"过期={expirations}"
+                                )
+                    except Exception as stats_error:
+                        self.logger.error(f"获取缓存统计失败: {stats_error}")
 
                 except Exception as e:
                     self.logger.error(f"缓存监控线程异常: {e}")
+                    # 如果发生异常，等待一段时间再重试
+                    time.sleep(10)
 
+        # 在线程创建之前设置标志（防止竞态条件）
         self._monitor_running = True
         self._monitor_thread = threading.Thread(
             target=monitor_loop,
-            daemon=True,  # 守护线程，主进程退出时自动结束
+            daemon=False,  # 改为非守护线程，确保能正确关闭
             name="CacheMonitor"
         )
         self._monitor_thread.start()

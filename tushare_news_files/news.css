@@ -1,0 +1,141 @@
+#news {
+    width: 100%;
+    overflow: hidden;
+    padding-top: 90px;
+}
+
+#data_source_head{
+    font-size: 14px;
+    width: 100%;
+    float: left;
+    border-bottom: 3px solid #DDD;
+}
+
+#data_source_head .source_name, #data_source_head .search{
+    padding: 10px 0px;
+    margin: 10px 20px;
+}
+
+#data_source_head .source_name{
+    float: left;
+}
+
+#data_source_head .search{
+    float: right;
+}
+
+#data_source_head .search #search-input, #data_source_head .search #search-button{
+    background: none;
+    outline: none;
+    border: #BBB solid 1px;
+    line-height: 16px;
+}
+
+#data_source_head .search #search-input{
+    border-radius: 10px 0px 0px 10px;
+    padding: 2px 5px;
+}
+
+#data_source_head .search #search-button{
+    border-radius: 0px 10px 10px 0px;
+    background-color: #BBB;
+    padding: 2px 10px 2px 5px;
+}
+
+#data_source_head .search #search-button:hover{
+    cursor: pointer;
+}
+
+#data_source_head .source_name.cur{
+    border-bottom: 3px solid #1677d9;
+    font-weight: bold;
+}
+
+#data_source_head .source_name a{
+    text-decoration:none;
+    color: #333;
+}
+
+#data_source_head .source_name a:hover{
+    font-weight: bold;
+}
+
+#main_content{
+    width: 100%;
+}
+
+#channel_head{
+    float: left;
+    margin: 10px 0;
+}
+
+#channel_head .channel_name{
+    padding: 10px 30px;
+    float: left;
+    cursor: pointer;
+}
+
+#channel_head .channel_name:hover{
+    color: #1677d9;
+}
+
+#channel_head .channel_name{
+    border-bottom: 3px solid #FFF;
+}
+
+#channel_head .channel_name.cur{
+    color: #1677d9;
+    border-bottom: 3px solid #1677d9;
+}
+
+.news_data{
+    width: 100%;
+    display: none;
+}
+
+.news_data.cur{
+    display: block;
+}
+
+.news_data, div.news_datetime, div.news_content{
+    float: left;
+}
+
+.news_data div.news_item{
+    width: 100%;
+    float:left;
+    padding: 10px 0;
+    border-bottom: 1px solid #EEE;
+}
+
+.news_data div.news_item.news_day{
+    background-color: #EEE;
+    font-weight: bold;
+    font-size: 16px;
+    line-height: 18px;
+}
+
+.news_data div.news_item.news_day img{
+    margin: 2px 10px 0px;
+}
+
+.news_data div.news_item.key_news{
+    color: #e61e1e
+}
+
+.news_data div.news_datetime{
+    width: 7%;
+    margin-left: 1%;
+}
+
+.news_data div.news_content{
+    width: 90%;
+    margin-right: 2%;
+}
+
+.key_words {
+    padding: 0px 2px;
+    margin: 0px 5px;
+    font-weight: bold;
+    border: #e61e1e solid 2px;
+}

@@ -1,10 +1,10 @@
 # Agent Army - AI价值投资分析系统
 
-**版本**: 2.0.0 ⭐ **业务层Agent 100%完成**
+**版本**: 1.0.0 ⭐ **Web端真实数据集成完成**（首个稳定发布版）
 **创建日期**: 2026-03-14
-**最后更新**: 2026-03-15 16:00
-**项目状态**: 🟢 生产就绪
-**当前阶段**: Phase 3 ✅ 完成（所有核心Agent已实现）
+**最后更新**: 2026-03-15 23:45
+**项目状态**: 🟢 生产就绪（v1.0正式版）
+**当前阶段**: Web真实数据集成 ✅ 完成
 **总体进度**: 100%
 
 > 💡 **最简单启动**: 双击桌面上的 **"Agent Army Web"** 图标 | [快速启动指南](00-快速开始.md)
@@ -12,9 +12,43 @@
 
 ---
 
-## 🎉 最新进展（2026-03-15 16:00）
+## 🎉 最新进展（2026-03-15 23:45）
 
-### 🎊 重大里程碑：业务层Agent 100%完成
+### 🎊 v1.0 重大里程碑：Web端真实数据集成完成
+
+**核心成果**:
+- ✅ **WebAgentAdapter**: 桥接Streamlit Web UI和Agent异步执行
+- ✅ **Agent实例管理**: AgentManager管理真实Agent实例
+- ✅ **真实数据执行**: TaskManagementV3连接真实Agent分析
+- ✅ **股票代码智能识别**: 支持代码/名称/拼音缩写
+- ✅ **实时进度反馈**: Streamlit进度条和状态更新
+
+**集成的真实数据源**:
+- Tushare Pro（财务数据）
+- AKShare（A股实时数据）
+- EastMoney（产业链数据）
+- Yahoo Finance（国际市场数据）
+
+**新增文件**:
+- `src/core/agents/web_agent_adapter.py` - Web异步执行适配器
+
+**修改文件**:
+- `src/core/agents/agent_manager.py` - 添加Agent实例注册表
+- `src/core/pages_v2/task_management_v3.py` - 真实执行逻辑集成
+- `src/core/pages_v2/dashboard_v2.py` - 修复datetime导入问题
+
+**用户可用功能**:
+1. 在Web界面创建分析任务
+2. 输入股票代码（支持6位代码/中文/拼音）
+3. 点击"开始"执行真实Agent分析
+4. 实时查看执行进度
+5. 查看来自真实API的分析结果
+
+**不再使用模拟数据！所有数据来自真实API！**
+
+---
+
+## 🎯 v1.0之前的重要成果（2026-03-15）
 
 **完成情况**:
 - ✅ **业务层Agent**: 42/42个Agent全部完成（100%）
@@ -102,6 +136,32 @@ streamlit run web_app.py
 ```
 
 **访问地址**: http://localhost:8501
+
+---
+
+### 🐳 Docker 部署（推荐）⭐ 新增
+
+**一键启动（Windows）**:
+```bash
+📁 C:\AI-Agent-Local\Agent_Army\start-docker.bat  ← 双击启动
+```
+
+**手动启动**:
+```bash
+cd C:\AI-Agent-Local\Agent_Army
+docker-compose up -d
+```
+
+**访问地址**: http://localhost:8501
+
+**优势**:
+- ✅ 环境隔离（不影响本地Python环境）
+- ✅ 一键启动（所有依赖自动配置）
+- ✅ 数据持久化（PostgreSQL + Redis）
+- ✅ 监控集成（Prometheus + Grafana）
+- ✅ 跨平台支持（Windows/Linux/macOS）
+
+**文档**: [Docker部署指南](docs/DOCKER_DESKTOP_DEPLOYMENT.md)
 
 </div>
 

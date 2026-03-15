@@ -56,9 +56,17 @@ class AgentManager:
 
     def __init__(self):
         """初始化Agent管理器"""
+        # ⭐ 初始化logger
+        from src.core.logger import get_logger
+        self.logger = get_logger("agent_manager")
+
         self.agents = self._init_agents()
         self.task_queue = Queue()
         self.active_tasks: Dict[str, AgentTask] = {}
+
+        # ⭐ 新增：Agent实例注册表
+        self._agent_instances: Dict[str, Any] = {}
+        self._init_agent_instances()
 
     def _init_agents(self) -> Dict[str, Dict]:
         """
@@ -396,6 +404,45 @@ class AgentManager:
             "confidence": 0.85,
             "timestamp": datetime.now().isoformat()
         }
+
+    def _init_agent_instances(self):
+        """
+        初始化所有Agent实例
+
+        ⭐ 新增：创建真实Agent实例供WebAgentAdapter调用
+        """
+        # Phase 1: 只导入核心Agent进行测试
+        try:
+            from src.agents.business.industry_analyzers import IndustryChainAnalyzer
+            from src.agents.business.fundamental_analyzer import FundamentalAnalyzer
+
+            self._agent_instances = {
+                # 产业分析军团（1个）
+                "industry_chain": IndustryChainAnalyzer(),
+
+                # 个股挖掘军团（1个）
+                "fundamental": FundamentalAnalyzer(),
+            }
+
+            self.logger.info(f"初始化了 {len(self._agent_instances)} 个Agent实例（Phase 1测试）")
+
+        except Exception as e:
+            self.logger.error(f"初始化Agent实例失败: {e}", exc_info=True)
+            self._agent_instances = {}
+
+    def get_agent_instance(self, agent_id: str):
+        """
+        获取Agent实例
+
+        ⭐ 新增：供WebAgentAdapter调用真实Agent
+
+        Args:
+            agent_id: Agent ID
+
+        Returns:
+            Agent实例或None
+        """
+        return self._agent_instances.get(agent_id)
 
 
 # 全局Agent管理器实例

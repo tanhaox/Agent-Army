@@ -354,11 +354,56 @@ def render_dashboard():
         # 显示加载状态
         with show_loading_overlay("正在创建分析任务...", "spinner"):
             import time
-            time.sleep(1)  # 模拟创建任务
+
+            # 真正创建任务到session_state
+            if 'task_history' not in st.session_state:
+                st.session_state.task_history = []
+
+            # 创建新任务
+            new_task = {
+                "id": len(st.session_state.task_history) + 1,
+                "type": "个股分析",
+                "stock_code": stock_code,
+                "depth": "标准",
+                "status": "pending",
+                "progress": 0,
+                "created_at": datetime.now().isoformat()
+            }
+
+            # 添加到任务历史
+            st.session_state.task_history.append(new_task)
+
+            # 保存股票代码到session_state，供任务管理页面使用
+            st.session_state.auto_stock_code = stock_code
+            st.session_state.auto_jump_to_tab = 1  # 跳转到第2个标签页（投资分析）
+
+            time.sleep(0.5)  # 短暂等待
 
         # 显示成功提示
         toast_success(f"分析任务已创建！正在分析 {stock_code}")
-        st.info(f"✅ 任务已创建，请前往【📋 任务管理】查看 {stock_code} 的分析进度")
+
+        # 自动跳转提示
+        st.success(f"✅ 任务已创建！正在跳转到任务管理页面...")
+
+        # 使用JavaScript自动跳转
+        import streamlit.components.v1 as components
+        components.html("""
+        <script>
+            // 自动点击"任务管理"导航项
+            setTimeout(function() {
+                // 查找包含"任务管理"文本的导航项
+                var navItems = window.parent.document.querySelectorAll('label');
+                for (var i = 0; i < navItems.length; i++) {
+                    if (navItems[i].textContent.includes('任务管理')) {
+                        navItems[i].click();
+                        break;
+                    }
+                }
+            }, 500);
+        </script>
+        """, height=0)
+
+        st.info(f"💡 如果没有自动跳转，请点击左侧【📋 任务管理】查看 {stock_code} 的分析进度")
 
     st.markdown("")  # 间距
 

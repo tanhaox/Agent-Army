@@ -1,0 +1,188 @@
+# Agent Army - Docker Compose 配置
+# 适用于 Docker Desktop
+
+version: '3.8'
+
+services:
+  # ========================================
+  # Agent Army 主服务
+  # ========================================
+  agent-army:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agent-army
+    restart: unless-stopped
+    ports:
+      - "8501:8501"  # Web UI
+    environment:
+      # 数据库连接
+      - DATABASE_URL=postgresql://postgres:agent_army_password@db:5432/agent_army
+
+      # Redis连接
+      - REDIS_URL=redis://redis:6379
+
+      # AI 模型 API 密钥（从 .env 文件读取）
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TUSHARE_API_KEY=${TUSHARE_API_KEY}
+
+      # 日志级别
+      - LOG_LEVEL=INFO
+
+      # 时区设置
+      - TZ=Asia/Shanghai
+
+    volumes:
+      # 数据持久化
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+    networks:
+      - agent-army-network
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========================================
+  # PostgreSQL 数据库
+  # ========================================
+  db:
+    image: postgres:15-alpine
+    container_name: agent-army-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=agent_army
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=agent_army_password
+      - PGDATA=/var/lib/postgresql/data
+      - TZ=Asia/Shanghai
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    ports:
+      - "5433:5432"  # 数据库端口（可选，用于外部连接，改为5433避免冲突）
+
+    networks:
+      - agent-army-network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================================
+  # Redis 缓存
+  # ========================================
+  redis:
+    image: redis:7-alpine
+    container_name: agent-army-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --save 60 1
+      --save 300 10
+      --save 60 10000
+
+    volumes:
+      - redis_data:/data
+
+    ports:
+      - "6380:6379"  # Redis端口（可选，用于外部连接，改为6380避免冲突）
+
+    networks:
+      - agent-army-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ========================================
+  # Prometheus 监控（可选）
+  # ========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: agent-army-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    ports:
+      - "9090:9090"  # Prometheus UI
+
+    networks:
+      - agent-army-network
+
+  # ========================================
+  # Grafana 可视化（可选）
+  # ========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: agent-army-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=redis-datasource
+
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./monitoring/grafana-dashboard.json:/etc/grafana/provisioning/dashboards/default.json:ro
+
+    ports:
+      - "3000:3000"  # Grafana UI
+
+    depends_on:
+      - prometheus
+
+    networks:
+      - agent-army-network
+
+# ========================================
+# 数据卷
+# ========================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# ========================================
+# 网络
+# ========================================
+networks:
+  agent-army-network:
+    driver: bridge
