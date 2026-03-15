@@ -1,0 +1,23 @@
+{
+  "dashboard": {
+    "title": "Agent Army 监控",
+    "panels": [
+      {
+        "title": "Agent 执行时间",
+        "targets": [{"expr": "agent_execution_seconds"}]
+      },
+      {
+        "title": "API 调用次数",
+        "targets": [{"expr": "api_calls_total"}]
+      },
+      {
+        "title": "缓存命中率",
+        "targets": [{"expr": "cache_hit_rate"}]
+      },
+      {
+        "title": "错误率",
+        "targets": [{"expr": "error_rate"}]
+      }
+    ]
+  }
+}

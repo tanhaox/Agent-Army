@@ -56,19 +56,58 @@ def render_analysis_reports_v3():
     # 顶部操作栏
     col1, col2, col3, col4 = st.columns(4)
 
-    with col1:
-        stock_code = st.text_input(
-            "股票代码",
-            placeholder="例如：000001",
-            label_visibility="collapsed"
-        )
-
     with col2:
         report_type = st.selectbox(
             "报告类型",
             ["📈 股票分析", "🏗️ 产业分析", "🎯 策略建议", "📋 归因分析"],
             label_visibility="collapsed"
         )
+
+    # 根据报告类型显示不同的输入框
+    with col1:
+        if report_type == "📈 股票分析":
+            # 股票分析需要股票代码
+            from src.core.utils.stock_code_resolver import resolve_stock_code, get_stock_name
+
+            stock_input = st.text_input(
+                "股票代码/名称",
+                placeholder="例如: 600519 或 贵州茅台",
+                label_visibility="collapsed"
+            )
+
+            # 实时解析
+            if stock_input:
+                resolved_code = resolve_stock_code(stock_input)
+                if resolved_code:
+                    stock_name = get_stock_name(resolved_code)
+                    st.success(f"✅ {resolved_code} - {stock_name or '已知股票'}")
+                    target_input = resolved_code
+                else:
+                    target_input = stock_input
+
+        elif report_type == "🏗️ 产业分析":
+            # 产业分析需要行业名称
+            target_input = st.text_input(
+                "行业名称",
+                placeholder="例如: 新能源汽车、半导体、白酒",
+                label_visibility="collapsed"
+            )
+
+        elif report_type == "🎯 策略建议":
+            # 策略建议可以留空（分析整体市场）
+            target_input = st.text_input(
+                "关注领域（可选）",
+                placeholder="例如: 科技股、消费股、或留空分析整体",
+                label_visibility="collapsed"
+            )
+
+        elif report_type == "📋 归因分析":
+            # 归因分析需要报告ID或股票代码
+            target_input = st.text_input(
+                "报告ID或股票代码",
+                placeholder="例如: RPT-001 或 600519",
+                label_visibility="collapsed"
+            )
 
     with col3:
         date_range = st.selectbox(
@@ -80,8 +119,30 @@ def render_analysis_reports_v3():
 
     with col4:
         if st.button("🔍 生成报告", type="primary", use_container_width=True):
-            if stock_code:
-                st.success(f"✅ 正在生成 {stock_code} 的分析报告...")
+            # 根据报告类型验证输入
+            if report_type == "📈 股票分析":
+                if target_input:
+                    st.success(f"✅ 正在生成 {target_input} 的股票分析报告...")
+                else:
+                    st.error("❌ 请输入股票代码或名称")
+
+            elif report_type == "🏗️ 产业分析":
+                if target_input:
+                    st.success(f"✅ 正在生成「{target_input}」的产业分析报告...")
+                else:
+                    st.error("❌ 请输入行业名称")
+
+            elif report_type == "🎯 策略建议":
+                if target_input:
+                    st.success(f"✅ 正在生成「{target_input}」的策略建议报告...")
+                else:
+                    st.success("✅ 正在生成整体市场策略建议报告...")
+
+            elif report_type == "📋 归因分析":
+                if target_input:
+                    st.success(f"✅ 正在生成 {target_input} 的归因分析...")
+                else:
+                    st.error("❌ 请输入报告ID或股票代码")
 
     st.markdown(f"<div style='margin-bottom: {DesignTokens.Spacing.M_LG};'></div>", unsafe_allow_html=True)
 
@@ -448,7 +509,7 @@ def render_analysis_reports_v3():
             ))
 
             # 转换BORDER颜色为RGB
-            border_rgb = tuple(int(DesignTokens.Colors.BORDER[i:i+2], 16) for i in (1, 3, 5))
+            border_rgb = tuple(int(DesignTokens.Colors.BORDER_DEFAULT[i:i+2], 16) for i in (1, 3, 5))
 
             fig_trend.update_layout(
                 title='近30天评分趋势',
@@ -579,24 +640,3 @@ def render_analysis_reports_v3():
             </div>
             """, unsafe_allow_html=True)
 
-    # 错误提示示例（使用 Colors.ERROR 和 Spacing.P_LG）
-    if stock_code and len(stock_code) != 6:
-        st.markdown(f"""
-        <div style="
-            background: {rgba(DesignTokens.Colors.ERROR, 0.1)};
-            border-left: 4px solid {DesignTokens.Colors.ERROR};
-            border-radius: {DesignTokens.Radius.MD};
-            padding: {DesignTokens.Spacing.P_LG};
-            margin-top: {DesignTokens.Spacing.M_MD};
-        ">
-            <div style="color: {DesignTokens.Colors.TEXT_PRIMARY};
-                     font-size: {DesignTokens.Typography.BODY};">
-                ⚠️ 股票代码格式错误，请输入6位数字代码（例如：000001）
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-# 如果直接运行此文件
-if __name__ == "__main__":
-    render_analysis_reports_v3()

@@ -11,6 +11,7 @@ import streamlit as st
 from datetime import datetime
 from pathlib import Path
 import sys
+from typing import Dict, List, Any
 
 # 添加项目根目录
 project_root = Path(__file__).parent.parent.parent.parent
@@ -248,7 +249,7 @@ def render_task_management_v3():
                 padding: {DesignTokens.Spacing.P_LG};
                 background: {DesignTokens.Colors.BG_CARD};
                 border-radius: {DesignTokens.Radius.LG};
-                border: 2px dashed {DesignTokens.Colors.BORDER};
+                border: 2px dashed {DesignTokens.Colors.BORDER_DEFAULT};
             ">
                 <div style="font-size: {DesignTokens.Typography.H4};
                          color: {DesignTokens.Colors.TEXT_SECONDARY};
@@ -343,9 +344,48 @@ def render_task_management_v3():
                     # 操作按钮
                     if task['status'] == "pending":
                         if st.button("▶️ 开始", key=f"start_{task['id']}", use_container_width=True):
-                            task['status'] = "running"
-                            st.success(f"任务 #{task['id']} 已开始执行")
-                            st.rerun()
+                            # ⭐ 调用真实Agent执行
+                            try:
+                                # 创建AgentTask对象
+                                agent_task = _create_agent_task_from_ui(task)
+
+                                # 使用WebAgentAdapter执行
+                                with st.spinner(f"正在执行任务 #{task['id']}..."):
+                                    # 创建进度条
+                                    progress_bar = st.progress(0)
+                                    status_text = st.empty()
+
+                                    # 导入并执行
+                                    from src.core.agents.web_agent_adapter import WebAgentAdapter
+                                    adapter = WebAgentAdapter()
+                                    result = adapter.execute_task_sync(
+                                        agent_task,
+                                        progress_bar,
+                                        status_text
+                                    )
+
+                                    # 清除进度显示
+                                    progress_bar.empty()
+                                    status_text.empty()
+
+                                    # 更新任务状态
+                                    task['status'] = "completed"
+                                    task['result'] = result
+
+                                    # 显示结果
+                                    if result.get('status') == 'failed':
+                                        st.error(f"任务 #{task['id']} 执行失败: {result.get('error')}")
+                                    else:
+                                        st.success(f"✅ 任务 #{task['id']} 执行完成！")
+                                        st.info(f"📊 分析了 {len(result)} 个Agent")
+
+                                st.rerun()
+
+                            except Exception as e:
+                                st.error(f"❌ 任务执行异常: {str(e)}")
+                                task['status'] = "failed"
+                                task['error'] = str(e)
+                                st.rerun()
                     elif task['status'] == "completed":
                         if st.button("📊 查看", key=f"view_{task['id']}", use_container_width=True):
                             st.markdown(f"""
@@ -402,7 +442,7 @@ def render_task_management_v3():
                             执行进度
                         </div>
                         <div style="
-                            background: {rgba(DesignTokens.Colors.BORDER, 0.3)};
+                            background: {rgba(DesignTokens.Colors.BORDER_DEFAULT, 0.3)};
                             border-radius: {DesignTokens.Radius.SM};
                             height: 8px;
                             overflow: hidden;
@@ -480,16 +520,62 @@ def render_task_management_v3():
         <div style="font-size: {DesignTokens.Typography.SMALL};
                  color: {DesignTokens.Colors.TEXT_SECONDARY};
                  margin-bottom: {DesignTokens.Spacing.M_XS};">
-            股票代码 *
+            股票代码/名称 *
         </div>
         """, unsafe_allow_html=True)
 
         stock_code = st.text_input(
             "",
-            placeholder="例如: 000001",
+            placeholder="例如: 600519 或 贵州茅台 或 GZMT",
             label_visibility="collapsed",
             key="create_stock_code"
         )
+
+        # 智能解析股票代码/名称
+        if stock_code:
+            try:
+                from src.core.utils.stock_code_resolver import resolve_stock_code, get_stock_name
+
+                resolved_code = resolve_stock_code(stock_code)
+                if resolved_code:
+                    stock_name = get_stock_name(resolved_code)
+                    # 显示识别成功提示
+                    st.markdown(f"""
+                    <div style="
+                        background: {rgba(DesignTokens.Colors.SUCCESS, 0.1)};
+                        border-left: 4px solid {DesignTokens.Colors.SUCCESS};
+                        border-radius: {DesignTokens.Radius.MD};
+                        padding: {DesignTokens.Spacing.SM};
+                        margin-top: {DesignTokens.Spacing.XS};
+                    ">
+                        <div style="color: {DesignTokens.Colors.SUCCESS};
+                                 font-size: {DesignTokens.Typography.SMALL};
+                                 font-weight: {DesignTokens.Typography.WEIGHT_SEMIBOLD};">
+                            ✅ 已识别: {resolved_code} - {stock_name or '已知股票'}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    # 更新stock_code为解析后的代码
+                    stock_code = resolved_code
+                else:
+                    # 未识别，但允许用户继续（可能是用户想输入的新代码）
+                    st.markdown(f"""
+                    <div style="
+                        background: {rgba(DesignTokens.Colors.INFO, 0.1)};
+                        border-left: 4px solid {DesignTokens.Colors.INFO};
+                        border-radius: {DesignTokens.Radius.MD};
+                        padding: {DesignTokens.Spacing.SM};
+                        margin-top: {DesignTokens.Spacing.XS};
+                    ">
+                        <div style="color: {DesignTokens.Colors.INFO};
+                                 font-size: {DesignTokens.Typography.SMALL};">
+                            ℹ️ 未在常用库中找到，将按原输入处理
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            except Exception as e:
+                # 如果解析器出错，静默失败，允许用户继续
+                pass
 
         # 分析深度
         st.markdown(f"<div style='margin-top: {DesignTokens.Spacing.M_SM};'></div>", unsafe_allow_html=True)
@@ -658,6 +744,71 @@ def render_task_management_v3():
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+
+# ========== 辅助函数 ==========
+
+def _create_agent_task_from_ui(ui_task: Dict) -> 'AgentTask':
+    """
+    从UI任务创建AgentTask对象
+
+    Args:
+        ui_task: UI中的任务字典
+
+    Returns:
+        AgentTask对象
+    """
+    from src.core.agents.agent_manager import AgentTask, TaskStatus
+
+    # 确定需要执行的Agent
+    agents_to_execute = _determine_agents_for_task(ui_task)
+
+    # 创建AgentTask
+    task = AgentTask(
+        task_id=f"task_{ui_task['id']}",
+        task_type=ui_task['type'],
+        stock_code=ui_task['stock_code'],
+        agents=agents_to_execute,
+        status=TaskStatus.PENDING,
+        progress=0.0
+    )
+
+    return task
+
+
+def _determine_agents_for_task(ui_task: Dict) -> List[str]:
+    """
+    根据任务类型确定需要执行的Agent
+
+    Args:
+        ui_task: UI中的任务字典
+
+    Returns:
+        Agent ID列表
+    """
+    task_type = ui_task.get('type', 'custom')
+
+    # 预定义的Agent组合
+    agent_presets = {
+        "full_analysis": [
+            "industry_chain",
+            "fundamental",
+        ],
+        "industry": [
+            "industry_chain",
+            "competitive_landscape",
+        ],
+        "fundamental": [
+            "fundamental",
+        ]
+    }
+
+    # 根据任务类型返回Agent列表
+    if task_type in agent_presets:
+        return agent_presets[task_type]
+
+    # 自定义任务：从task['agents']获取
+    return ui_task.get('agents', ['fundamental'])
 
 
 # 如果直接运行此文件

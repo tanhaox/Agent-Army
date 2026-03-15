@@ -48,12 +48,22 @@ class CacheManager:
 
         return cache_data.get('data')
 
-    def set(self, key: str, data: Any):
-        """设置缓存"""
+    def set(self, key: str, data: Any, ttl_seconds: Optional[int] = None):
+        """
+        设置缓存
+
+        Args:
+            key: 缓存键
+            data: 缓存数据
+            ttl_seconds: 可选的生存时间（覆盖默认值）
+        """
         st.session_state[key] = {
             'data': data,
             'timestamp': datetime.now()
         }
+        # 如果提供了自定义TTL，保存它
+        if ttl_seconds is not None:
+            st.session_state[key]['ttl'] = ttl_seconds
 
     def clear(self, key: str = None):
         """清除缓存"""
@@ -158,6 +168,9 @@ class LazyLoader:
 class PerformanceMonitor:
     """性能监控器"""
 
+    # 类级别的指标存储
+    _metrics = {}
+
     @staticmethod
     def measure_time(func_name: str = None):
         """
@@ -179,11 +192,26 @@ class PerformanceMonitor:
                 name = func_name or func.__name__
                 print(f"[性能监控] {name} 执行时间: {elapsed_time:.2f}秒")
 
+                # 保存到指标字典
+                if name not in PerformanceMonitor._metrics:
+                    PerformanceMonitor._metrics[name] = []
+                PerformanceMonitor._metrics[name].append(elapsed_time)
+
                 return result
 
             return wrapper
 
         return decorator
+
+    @staticmethod
+    def get_metrics() -> dict:
+        """
+        获取所有性能指标
+
+        Returns:
+            指标字典，格式为 {操作名: [执行时间列表]}
+        """
+        return PerformanceMonitor._metrics.copy()
 
     @staticmethod
     def show_performance_metrics():

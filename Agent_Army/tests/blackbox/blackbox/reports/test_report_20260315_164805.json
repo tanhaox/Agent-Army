@@ -1,0 +1,346 @@
+{
+  "run_id": "20260315_164805",
+  "start_time": "2026-03-15T16:48:05.528635",
+  "test_cases": [
+    {
+      "test_name": "Agent 管理器测试",
+      "description": "测试 Agent 管理器的初始化、查询、配置等功能",
+      "start_time": "2026-03-15T16:48:05.529992",
+      "steps": [
+        {
+          "time": "16:48:05",
+          "step": "导入 AgentManager 模块",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:05",
+          "step": "模块导入成功",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "初始化 AgentManager",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:05",
+          "step": "AgentManager 创建成功",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "查询所有 Agent",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:05",
+          "step": "Agent 列表不为空",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "至少有一个 Agent",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "找到 28 个 Agent",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "获取单个 Agent 信息",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:05",
+          "step": "获取失败: 0",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:05",
+          "step": "创建测试任务",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:05",
+          "step": "任务创建成功",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:05",
+          "step": "任务创建失败: argument of type 'AgentTask' is not iterable",
+          "status": "FAIL"
+        }
+      ],
+      "passed": 4,
+      "failed": 0,
+      "errors": [
+        {
+          "type": "GetAgentError",
+          "message": "0"
+        },
+        {
+          "type": "TaskCreationError",
+          "message": "argument of type 'AgentTask' is not iterable"
+        }
+      ],
+      "end_time": "2026-03-15T16:48:05.977721",
+      "success": true
+    },
+    {
+      "test_name": "Agent 初始化测试",
+      "description": "测试单个 Agent 的初始化和基本功能",
+      "start_time": "2026-03-15T16:48:05.977767",
+      "steps": [
+        {
+          "time": "16:48:05",
+          "step": "导入 Agent 基类",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "BaseAgent 导入成功",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "检查 Agent 必需方法",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "方法存在: execute",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "方法缺失: get_info",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "方法缺失: validate_input",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "检查 Agent 配置系统",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "配置不为空",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "配置系统正常",
+          "status": "PASS"
+        }
+      ],
+      "passed": 1,
+      "failed": 0,
+      "errors": [
+        {
+          "type": "MethodMissing",
+          "message": "BaseAgent 缺少方法: get_info"
+        },
+        {
+          "type": "MethodMissing",
+          "message": "BaseAgent 缺少方法: validate_input"
+        }
+      ],
+      "end_time": "2026-03-15T16:48:06.134276",
+      "success": true
+    },
+    {
+      "test_name": "Agent 数量测试",
+      "description": "验证 Agent 数量符合预期（至少20个）",
+      "start_time": "2026-03-15T16:48:06.134329",
+      "steps": [
+        {
+          "time": "16:48:06",
+          "step": "查询 Agent 总数",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "Agent 总数: 28",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "Agent 数量 >= 20 (实际: 28)",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "Agent 列表:",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "测试失败: 'str' object has no attribute 'get'",
+          "status": "FAIL"
+        }
+      ],
+      "passed": 1,
+      "failed": 0,
+      "errors": [
+        {
+          "type": "TestError",
+          "message": "'str' object has no attribute 'get'"
+        }
+      ],
+      "end_time": "2026-03-15T16:48:06.134530",
+      "success": true
+    },
+    {
+      "test_name": "配置系统测试",
+      "description": "测试配置文件的加载、验证和获取功能",
+      "start_time": "2026-03-15T16:48:06.134567",
+      "steps": [
+        {
+          "time": "16:48:06",
+          "step": "导入配置模块",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "配置模块导入失败: cannot import name 'list_model_configs' from 'src.core.config' (C:\\AI-Agent-Local\\Agent_Army\\src\\core\\config\\__init__.py)",
+          "status": "FAIL"
+        }
+      ],
+      "passed": 0,
+      "failed": 0,
+      "errors": [
+        {
+          "type": "ImportError",
+          "message": "cannot import name 'list_model_configs' from 'src.core.config' (C:\\AI-Agent-Local\\Agent_Army\\src\\core\\config\\__init__.py)"
+        }
+      ],
+      "end_time": "2026-03-15T16:48:06.134776",
+      "success": true
+    },
+    {
+      "test_name": "Design Tokens 测试",
+      "description": "测试设计令牌系统的颜色、字体、间距等配置",
+      "start_time": "2026-03-15T16:48:06.134819",
+      "steps": [
+        {
+          "time": "16:48:06",
+          "step": "导入 DesignTokens",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "DesignTokens 导入成功",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "检查颜色配置",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 PRIMARY 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 SECONDARY 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 SUCCESS 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 WARNING 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 ERROR 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 TEXT_PRIMARY 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 TEXT_SECONDARY 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "缺少颜色定义: BACKGROUND",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "颜色 BORDER_DEFAULT 格式正确",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "检查字体配置",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "字体属性存在: FONT_FAMILY",
+          "status": "PASS"
+        },
+        {
+          "time": "16:48:06",
+          "step": "字体属性缺失: FONT_SIZE_BASE",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "字体属性缺失: FONT_WEIGHT",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "检查间距配置",
+          "status": "INFO"
+        },
+        {
+          "time": "16:48:06",
+          "step": "间距定义缺失: SPACING_SM",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "间距定义缺失: SPACING_MD",
+          "status": "FAIL"
+        },
+        {
+          "time": "16:48:06",
+          "step": "间距定义缺失: SPACING_LG",
+          "status": "FAIL"
+        }
+      ],
+      "passed": 8,
+      "failed": 0,
+      "errors": [],
+      "end_time": "2026-03-15T16:48:06.136265",
+      "success": true
+    }
+  ],
+  "summary": {
+    "total": 14,
+    "passed": 14,
+    "failed": 0,
+    "success_rate": 100.0
+  },
+  "end_time": "2026-03-15T16:48:06.136317"
+}

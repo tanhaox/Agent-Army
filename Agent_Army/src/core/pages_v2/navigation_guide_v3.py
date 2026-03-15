@@ -16,6 +16,13 @@ from src.core.design_tokens import DesignTokens
 from src.core.global_styles import apply_global_styles
 
 
+def rgba(hex_color: str, alpha: float) -> str:
+    """将hex颜色转换为rgba格式"""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
 def render_navigation_guide_v3():
     """渲染导航指南页面（v3.0版）"""
 

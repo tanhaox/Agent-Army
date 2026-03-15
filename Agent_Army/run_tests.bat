@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 > nul
 REM Agent Army - Integration Test Runner
 
 echo ============================================================
