@@ -35,7 +35,7 @@ if errorlevel 1 (
 echo.
 echo 第4步：启动Streamlit...
 echo ========================================
-python -m streamlit run web_app_v2.py --server.port 8501
+python -m streamlit run web_app.py --server.port 8501
 
 echo.
 echo ========================================
