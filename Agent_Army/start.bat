@@ -17,7 +17,7 @@ timeout /t 1 /nobreak >nul 2>&1
 echo 正在启动...
 echo.
 
-python -m streamlit run web_app_v2.py --server.port 8501
+python -m streamlit run web_app.py --server.port 8501
 
 if errorlevel 1 (
     echo.
