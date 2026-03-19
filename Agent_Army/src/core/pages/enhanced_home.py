@@ -31,6 +31,46 @@ def render_enhanced_home():
         subtitle="股票价值投资AI军团 - Phase 3 性能优化版本"
     )
 
+    # ========== 新手引导区域 ⭐ v2.0 新增 ==========
+    st.markdown("---")
+
+    # 欢迎信息
+    st.markdown("### 🎉 欢迎使用 Agent Army")
+    st.markdown("**AI驱动的价值投资分析系统**")
+    st.markdown("""
+    - • 47个专业AI Agent
+    - • 6大军团覆盖投资全流程
+    - • 完整的分析+决策+验证闭环
+    """)
+
+    # 大号开始按钮
+    col1, col2, col1 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🚀 开始第一次分析", type="primary", key="start_first_analysis"):
+            # 设置自动填充的股票代码
+            st.session_state.auto_stock_code = "600519"  # 贵州茅台
+            # 跳转到投资分析页面
+            st.switch_page("web_app.py")  # Streamlit 原生跳转
+
+    st.markdown("")
+
+    # 快速开始指南
+    with st.expander("📋 快速开始（只需3步）", expanded=True):
+        st.markdown("""
+        **步骤1️⃣ : 配置API密钥**
+        > 点击顶部"⚙️ 系统配置" → 配置智谱AI和Tushare
+
+        **步骤2️⃣ : 开始分析**
+        > 点击上方"🚀 开始第一次分析"按钮
+
+        **步骤3️⃣ : 查看报告**
+        > 等待分析完成，报告自动展示
+
+        ⏱️  **预计耗时**：2-3分钟
+        """)
+
+    st.markdown("---")
+
     # ========== Phase 3 性能监控仪表盘 ==========
     st.markdown("### 📊 Phase 3 性能监控仪表盘")
     st.markdown("---")
