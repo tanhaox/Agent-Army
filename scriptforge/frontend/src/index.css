@@ -1,0 +1,96 @@
+@import "tailwindcss";
+
+@theme {
+  /* 背景 */
+  --color-bg-primary: #0A0A0A;
+  --color-bg-sidebar: #111111;
+  --color-bg-card: #1A1A1A;
+  --color-bg-hover: #242424;
+  --color-border-default: #2A2A2A;
+  --color-border-focus: #3A3A3A;
+
+  /* 文字 */
+  --color-text-primary: #ECECEC;
+  --color-text-secondary: #888888;
+  --color-text-muted: #555555;
+
+  /* 品牌 */
+  --color-brand: #6366F1;
+  --color-brand-hover: #818CF8;
+  --color-brand-active: #4F46E5;
+
+  /* 功能 */
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-error: #EF4444;
+
+  /* 字体 */
+  --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 1280px;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Transitions */
+.transition-fast {
+  transition-duration: 150ms;
+}
+
+.transition-normal {
+  transition-duration: 300ms;
+}
+
+.transition-slow {
+  transition-duration: 500ms;
+}
+
+.transition-base {
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
