@@ -126,7 +126,197 @@ if 'initialized' not in st.session_state:
 
 
 # ==================== 顶部导航 ⭐ v2.0 核心改进 ====================
-from src.core.ui_components.top_nav import render_top_nav, close_main_content
+
+def render_top_nav() -> str:
+    """
+    渲染顶部导航栏
+
+    Returns:
+        str: 当前页面标识 (home/analysis/monitor/settings)
+    """
+
+    # ========== 自定义 CSS 样式 ==========
+    st.markdown("""
+    <style>
+    /* 隐藏默认侧边栏 */
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+
+    /* 隐藏 Streamlit 默认的菜单和页脚 */
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+
+    /* 隐藏 Streamlit 默认的菜单 */
+    [data-testid="stHeader"] {
+        display: none !important;
+    }
+
+    /* 顶部导航栏样式 */
+    .top-nav {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 60px !important;
+        background: linear-gradient(90deg, #1E88E5 0%, #43A047 100%) !important;
+        display: flex !important;
+        align-items: center !important;
+        padding: 0 20px !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        z-index: 999999 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+    }
+
+    .top-nav .logo {
+        font-size: 20px;
+        font-weight: bold;
+        color: white;
+        margin-right: 50px;
+        white-space: nowrap;
+    }
+
+    .top-nav .nav-item {
+        color: white;
+        text-decoration: none;
+        padding: 10px 20px;
+        margin: 0 5px;
+        border-radius: 5px;
+        transition: background 0.3s;
+        font-size: 16px;
+        display: inline-block;
+    }
+
+    .top-nav .nav-item:hover {
+        background: rgba(255,255,255,0.2);
+        text-decoration: none;
+    }
+
+    .top-nav .nav-item.active {
+        background: rgba(255,255,255,0.3);
+        font-weight: bold;
+    }
+
+    /* 内容区域 padding（为固定顶部导航留出空间）*/
+    .main-content {
+        padding-top: 80px !important;
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+    }
+
+    /* 移动端适配 */
+    @media (max-width: 768px) {
+        .top-nav {
+            padding: 0 10px !important;
+        }
+
+        .top-nav .logo {
+            font-size: 16px;
+            margin-right: 20px;
+        }
+
+        .top-nav .nav-item {
+            padding: 8px 12px;
+            font-size: 14px;
+            margin: 0 2px;
+        }
+
+        .main-content {
+            padding-top: 70px !important;
+            padding-left: 10px !important;
+            padding-right: 10px !important;
+        }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ========== 获取当前页面 ==========
+    query_params = st.query_params
+
+    # 优先级 1: 检查 session_state 中的当前页面（最高优先级）
+    if st.session_state.get("current_page"):
+        current_page = st.session_state.current_page
+    # 优先级 2: 检查是否有跳转请求
+    elif st.session_state.get("jump_to_analysis", False):
+        current_page = "analysis"
+        st.session_state.jump_to_analysis = False  # 清除标志
+    # 优先级 3: 检查是否正在分析
+    elif st.session_state.get("analyzing", False):
+        current_page = "analysis"
+    # 优先级 4: 从 URL 参数获取页面
+    else:
+        page_param = query_params.get("page", None)
+        if page_param:
+            # Streamlit 1.28+ 返回 FrozenDictNotification 或列表
+            if isinstance(page_param, list):
+                current_page = page_param[0] if page_param else "home"
+            else:
+                current_page = page_param
+        else:
+            current_page = "home"
+
+        # 同步到 session_state
+        st.session_state.current_page = current_page
+
+    # 允许的页面列表
+    valid_pages = ["home", "analysis", "monitor", "settings"]
+
+    # 验证页面参数，如果无效则使用默认值
+    if current_page not in valid_pages:
+        current_page = "home"
+
+    # ========== 设置激活状态 ==========
+    active_states = {
+        "home": "active" if current_page == "home" else "",
+        "analysis": "active" if current_page == "analysis" else "",
+        "monitor": "active" if current_page == "monitor" else "",
+        "settings": "active" if current_page == "settings" else ""
+    }
+
+    # ========== 顶部导航（使用 Streamlit 组件）==========
+    # 使用 container 在页面顶部创建导航栏
+    nav_container = st.container()
+
+    with nav_container:
+        # 使用列布局创建导航栏
+        col_logo, col_home, col_analysis, col_monitor, col_settings = st.columns([2, 1.5, 1.5, 1.5, 1.5])
+
+        with col_logo:
+            st.markdown("🎖️ **Agent Army**")
+
+        with col_home:
+            if st.button("🏠 首页", key="nav_home", use_container_width=True):
+                st.session_state.current_page = "home"
+                st.rerun()
+
+        with col_analysis:
+            if st.button("📊 投资分析", key="nav_analysis", use_container_width=True):
+                st.session_state.current_page = "analysis"
+                st.rerun()
+
+        with col_monitor:
+            if st.button("🤖 系统监控", key="nav_monitor", use_container_width=True):
+                st.session_state.current_page = "monitor"
+                st.rerun()
+
+        with col_settings:
+            if st.button("⚙️ 系统配置", key="nav_settings", use_container_width=True):
+                st.session_state.current_page = "settings"
+                st.rerun()
+
+        st.markdown("---")
+
+    # ========== 开始主内容区域 ==========
+    st.markdown('<div class="main-content">', unsafe_allow_html=True)
+
+    return current_page
+
+
+def close_main_content():
+    """闭合主内容区域的 div 标签"""
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 # 渲染顶部导航
 current_page = render_top_nav()

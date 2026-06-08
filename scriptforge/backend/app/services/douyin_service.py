@@ -3,6 +3,7 @@ import logging
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -89,7 +90,7 @@ def _extract_audio(video_path: str, output_path: str, ffmpeg_path: str | None) -
     return video_path
 
 
-def _download_with_playwright(url: str, output_dir: Path) -> str:
+def _download_with_playwright(url: str, output_dir: Path, on_progress=None) -> str:
     from playwright.sync_api import sync_playwright
 
     cookie_config = _load_cookie_config()
@@ -142,28 +143,62 @@ def _download_with_playwright(url: str, output_dir: Path) -> str:
 
     headers = {
         "User-Agent": _MOBILE_UA,
-        "Referer": "https://m.douyin.com/",
+        "Referer": "https://www.douyin.com/",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
     }
-    with httpx.Client(timeout=60, follow_redirects=True, headers=headers) as client:
-        resp = client.get(video_url)
-        if resp.status_code != 200 or len(resp.content) < 10000:
-            raise RuntimeError(
-                f"视频下载失败: HTTP {resp.status_code}, 大小 {len(resp.content)} bytes"
-            )
+
+    # Connection pool for faster downloads
+    limits = httpx.Limits(max_connections=5, max_keepalive_connections=2)
+    timeout = httpx.Timeout(120.0, connect=15.0)
+
+    with httpx.Client(timeout=timeout, follow_redirects=True, headers=headers,
+                      limits=limits, http2=True) as client:
+        with client.stream("GET", video_url) as resp:
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"视频下载失败: HTTP {resp.status_code}"
+                )
+            total = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+            chunks: list[bytes] = []
+            t_start = time.monotonic()
+
+            for chunk in resp.iter_bytes(chunk_size=1024 * 1024):
+                chunks.append(chunk)
+                downloaded += len(chunk)
+                if on_progress and total > 0:
+                    pct = round(downloaded / total * 100, 1)
+                    elapsed = time.monotonic() - t_start
+                    speed_mbps = downloaded / (elapsed + 0.001) / 1048576
+                    on_progress({
+                        "status": "downloading",
+                        "downloaded_bytes": downloaded,
+                        "total_bytes": total,
+                        "percent": pct,
+                        "speed_mbps": round(speed_mbps, 2),
+                    })
+
+            content = b"".join(chunks)
+            if len(content) < 10000:
+                raise RuntimeError(
+                    f"视频下载失败: HTTP {resp.status_code}, 大小 {len(content)} bytes"
+                )
 
         aweme_id = _extract_aweme_id(url) or "unknown"
         video_file = output_dir / f"dy_{aweme_id}.mp4"
-        video_file.write_bytes(resp.content)
-        logger.info("Downloaded %s -> %s (%.1f MB)", url, video_file, len(resp.content) / 1048576)
+        video_file.write_bytes(content)
+        logger.info("Downloaded %s -> %s (%.1f MB)", url, video_file, len(content) / 1048576)
 
     return str(video_file)
 
 
 class DouyinDownloader:
-    def __init__(self, output_dir: str = "uploads/videos"):
+    def __init__(self, output_dir: str = "uploads/videos", on_progress=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ffmpeg_path = _find_ffmpeg()
+        self.on_progress = on_progress
 
     def download_video(self, url: str) -> str:
         aweme_id = _extract_aweme_id(url)
@@ -176,11 +211,30 @@ class DouyinDownloader:
         video_url = f"https://www.douyin.com/video/{aweme_id}"
         logger.info("Downloading douyin video: %s (id=%s)", url, aweme_id)
 
-        mp4_path = _download_with_playwright(video_url, self.output_dir)
+        MAX_RETRIES = 3
+        RETRY_DELAYS = [5, 10, 20]
+        last_error = None
 
-        wav_path = str(Path(mp4_path).with_suffix(".wav"))
-        final_path = _extract_audio(mp4_path, wav_path, self.ffmpeg_path)
-        return final_path
+        for attempt in range(MAX_RETRIES):
+            try:
+                mp4_path = _download_with_playwright(video_url, self.output_dir, on_progress=self.on_progress)
+                wav_path = str(Path(mp4_path).with_suffix(".wav"))
+                final_path = _extract_audio(mp4_path, wav_path, self.ffmpeg_path)
+                if attempt > 0:
+                    logger.info("Download succeeded on attempt %d/%d: %s", attempt + 1, MAX_RETRIES, aweme_id)
+                return final_path
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_DELAYS[attempt]
+                    logger.warning("下载失败 (尝试 %d/%d)，%d秒后重试: %s, 错误: %s",
+                                   attempt + 1, MAX_RETRIES, delay, aweme_id, e)
+                    time.sleep(delay)
+                else:
+                    logger.error("下载失败，已达最大重试次数 (%d): %s, 错误: %s",
+                                 MAX_RETRIES, aweme_id, e)
+
+        raise RuntimeError(f"下载失败（已重试 {MAX_RETRIES} 次）: {last_error}") from last_error
 
     def download_user_top_videos(self, url: str, count: int = 5) -> list[dict]:
         sec_uid = _extract_sec_uid(url)
@@ -196,33 +250,50 @@ class DouyinDownloader:
         if not video_ids:
             raise ValueError("该用户暂无公开视频或 cookies 已过期")
 
+        BATCH_SIZE = 3
+        BATCH_PAUSE = 30  # seconds between batches to avoid anti-scraping
         results = []
-        for i, vid in enumerate(video_ids):
-            logger.info("Downloading %d/%d: %s", i + 1, len(video_ids), vid.get("desc", "")[:50])
-            try:
-                audio_path = self.download_video(vid["url"])
-                results.append({
-                    "index": i + 1,
-                    "aweme_id": vid["aweme_id"],
-                    "desc": vid["desc"],
-                    "source_url": vid["url"],
-                    "author": vid.get("author", ""),
-                    "duration": vid.get("duration", 0),
-                    "audio_path": audio_path,
-                    "status": "downloaded",
-                })
-            except Exception as e:
-                logger.error("Failed to download video %s: %s", vid["aweme_id"], e)
-                results.append({
-                    "index": i + 1,
-                    "aweme_id": vid["aweme_id"],
-                    "desc": vid["desc"],
-                    "source_url": vid["url"],
-                    "author": vid.get("author", ""),
-                    "duration": vid.get("duration", 0),
-                    "status": "failed",
-                    "error": str(e),
-                })
+
+        for batch_start in range(0, len(video_ids), BATCH_SIZE):
+            batch = video_ids[batch_start:batch_start + BATCH_SIZE]
+            batch_num = batch_start // BATCH_SIZE + 1
+
+            if batch_start > 0:
+                logger.info("Batch %d: pausing %ds before downloading next batch to avoid anti-scraping",
+                            batch_num, BATCH_PAUSE)
+                time.sleep(BATCH_PAUSE)
+
+            logger.info("Batch %d: downloading %d videos (video %d-%d of %d)",
+                        batch_num, len(batch), batch_start + 1,
+                        batch_start + len(batch), len(video_ids))
+
+            for i, vid in enumerate(batch):
+                global_idx = batch_start + i
+                logger.info("Downloading %d/%d: %s", global_idx + 1, len(video_ids), vid.get("desc", "")[:50])
+                try:
+                    audio_path = self.download_video(vid["url"])
+                    results.append({
+                        "index": global_idx + 1,
+                        "aweme_id": vid["aweme_id"],
+                        "desc": vid["desc"],
+                        "source_url": vid["url"],
+                        "author": vid.get("author", ""),
+                        "duration": vid.get("duration", 0),
+                        "audio_path": audio_path,
+                        "status": "downloaded",
+                    })
+                except Exception as e:
+                    logger.error("Failed to download video %s: %s", vid["aweme_id"], e)
+                    results.append({
+                        "index": global_idx + 1,
+                        "aweme_id": vid["aweme_id"],
+                        "desc": vid["desc"],
+                        "source_url": vid["url"],
+                        "author": vid.get("author", ""),
+                        "duration": vid.get("duration", 0),
+                        "status": "failed",
+                        "error": str(e),
+                    })
 
         return results
 

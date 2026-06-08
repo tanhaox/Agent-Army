@@ -1,11 +1,12 @@
 import { NavLink } from 'react-router-dom';
-import { BookOpen, Users, FileText, Settings, Sparkles, Wand2 } from 'lucide-react';
+import { BookOpen, Users, Film, Settings, Sparkles, FolderOpen, Bot } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/learn', label: '学习中心', icon: BookOpen },
+  { to: '/ai-anchors', label: 'AI仿生主播', icon: Bot },
   { to: '/personas', label: '人设工坊', icon: Users },
-  { to: '/creator', label: '角色工坊', icon: Wand2 },
-  { to: '/scripts', label: '脚本工作室', icon: FileText },
+  { to: '/assets', label: '素材资产', icon: FolderOpen },
+  { to: '/scripts', label: '剧情车间', icon: Film },
   { to: '/settings', label: '系统设置', icon: Settings },
 ];
 

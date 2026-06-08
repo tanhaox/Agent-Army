@@ -48,7 +48,7 @@ class DatabaseError(ScriptForgeError):
 
 
 class RedisError(ScriptForgeError):
-    """Redis/Celery broker failures."""
+    """Redis/connection failures."""
     status_code = 503
     detail = "Task queue service unavailable"
 

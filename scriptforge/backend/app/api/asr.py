@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -6,6 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/asr", tags=["ASR"])
 
@@ -44,10 +47,59 @@ async def transcribe_file(file: UploadFile = File(...), language: str | None = N
     }
 
 
+async def _batch_transcribe_background(task_id: str, file_paths: list[str], language: str | None):
+    """Background task for batch transcription."""
+    from app.core.database import async_session_factory
+    from app.models.task_record import TaskRecord
+    from sqlalchemy import select
+
+    results = []
+    for i, path in enumerate(file_paths):
+        try:
+            from app.services.asr import asr_engine
+            result = await asyncio.to_thread(asr_engine.transcribe, path, language=language)
+            results.append({
+                "file": path,
+                "text": result.text,
+                "segments": result.segments,
+                "duration": result.duration,
+            })
+        except Exception as e:
+            logger.error("Failed to transcribe %s: %s", path, e)
+            results.append({"file": path, "error": str(e)})
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+        # Update progress
+        try:
+            async with async_session_factory() as session:
+                row = (await session.execute(
+                    select(TaskRecord).where(TaskRecord.task_id == task_id)
+                )).scalar_one_or_none()
+                if row:
+                    row.result_summary = {"current": i + 1, "total": len(file_paths)}
+                    await session.commit()
+        except Exception:
+            pass
+
+    # Mark completed
+    try:
+        async with async_session_factory() as session:
+            row = (await session.execute(
+                select(TaskRecord).where(TaskRecord.task_id == task_id)
+            )).scalar_one_or_none()
+            if row:
+                row.status = "completed"
+                row.result_summary = {"results": results}
+                await session.commit()
+    except Exception:
+        pass
+
+
 @router.post("/batch")
 async def batch_transcribe(files: list[UploadFile] = File(...), language: str | None = None):
-    from app.core.celery import celery_app
-    from app.tasks.asr_tasks import batch_transcribe_task
+    from app.core.database import async_session_factory
+    from app.models.task_record import TaskRecord
 
     file_paths: list[str] = []
     saved_files: list[Path] = []
@@ -61,23 +113,52 @@ async def batch_transcribe(files: list[UploadFile] = File(...), language: str | 
         file_paths.append(str(save_path))
         saved_files.append(save_path)
 
-    task = batch_transcribe_task.delay(file_paths, language=language)
+    task_id = str(uuid.uuid4())
 
-    return {"task_id": task.id, "status": "pending", "file_count": len(files)}
+    # Create TaskRecord
+    async with async_session_factory() as session:
+        record = TaskRecord(task_id=task_id, trigger="batch_transcribe", url="", status="running")
+        session.add(record)
+        await session.commit()
+
+    asyncio.create_task(_batch_transcribe_background(task_id, file_paths, language))
+
+    return {"task_id": task_id, "status": "pending", "file_count": len(files)}
 
 
 @router.get("/task/{task_id}")
 async def get_task_status(task_id: str):
-    from app.core.celery import celery_app
+    from sqlalchemy import select
+    from app.core.database import get_db
+    from app.models.task_record import TaskRecord
 
-    result = celery_app.AsyncResult(task_id)
-    response = {
-        "task_id": task_id,
-        "status": result.status,
-    }
-    if result.ready():
-        if result.successful():
-            response["result"] = result.result
-        else:
-            response["error"] = str(result.result)
-    return response
+    async for db in get_db():
+        row = (await db.execute(
+            select(TaskRecord).where(TaskRecord.task_id == task_id)
+        )).scalar_one_or_none()
+        break
+
+    if not row:
+        return {"task_id": task_id, "status": "not_found"}
+
+    if row.status == "running":
+        rs = row.result_summary or {}
+        return {
+            "task_id": task_id,
+            "status": "PROCESSING",
+            "current": rs.get("current"),
+            "total": rs.get("total"),
+        }
+    elif row.status == "completed":
+        rs = row.result_summary or {}
+        return {
+            "task_id": task_id,
+            "status": "SUCCESS",
+            "result": rs.get("results", []),
+        }
+    else:
+        return {
+            "task_id": task_id,
+            "status": "FAILURE",
+            "error": row.error_message or "任务失败",
+        }

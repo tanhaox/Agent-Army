@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import {
   BookOpen, Link, Users, Upload, ChevronDown, ChevronRight,
-  Zap, Sparkles, ArrowRight, Lock, CheckCircle,
+  Zap, Sparkles, ArrowRight, Lock, CheckCircle, Clock, FolderOpen,
 } from 'lucide-react';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Spinner from '../components/ui/Spinner';
 import { toast } from '../components/ui/Toast';
+import DegradedBanner from '../components/ui/DegradedBanner';
 import TxtUploader from './learn/TxtUploader';
 import RadarChart from './learn/RadarChart';
 import Card from '../components/ui/Card';
@@ -19,12 +20,15 @@ import ProgressPanel from './learn/ProgressPanel';
 import type { ProgressEvent } from './learn/ProgressPanel';
 import { batchTranscribe, getTaskStatus } from '../services/asr';
 import { importFromUrl, getImportTaskStatus } from '../services/importer';
-import { importDouyinUser, getUserProfile } from '../services/douyin';
+import { importDouyinUser, getUserProfile, submitDouyinUserTask, type DouyinTaskStatus } from '../services/douyin';
+import { getTaskRecord } from '../services/taskRecords';
 import { analyzePersona, getPersona } from '../services/persona';
 import { batchExtractStrategies } from '../services/strategies';
 import type { PersonaDetail } from '../types';
 import type { AnchorProfile } from '../types';
 import type { ExtractResult } from '../services/strategies';
+import { saveDraft, loadDraft, clearDraft, type LineData } from '../lib/autoSave';
+import TaskListPanel from './learn/TaskListPanel';
 
 const VIDEO_EXTS = ['.mp4', '.avi', '.mov', '.mkv', '.mp3', '.wav', '.flac'];
 const ACCEPT_VIDEO = VIDEO_EXTS.join(',');
@@ -55,11 +59,16 @@ function formatCount(n: number): string {
 
 export default function LearnPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const supplementMode = searchParams.get('mode') === 'supplement';
+  const supplementPersonaId = searchParams.get('persona_id') || '';
+  const supplementUrl = searchParams.get('url') || '';
 
   // ---- Core state ----
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [isVerified, setIsVerified] = useState(false);
   const [verifiedText, setVerifiedText] = useState('');
+  const [savedLineData, setSavedLineData] = useState<LineData[] | null>(null);
 
   // ---- Zone 4 results ----
   const [personaId, setPersonaId] = useState<string | null>(null);
@@ -69,6 +78,18 @@ export default function LearnPage() {
   // ---- SSE streaming progress ----
   const [progressEvents, setProgressEvents] = useState<ProgressEvent[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [streamTaskId, setStreamTaskId] = useState<string | null>(null);
+  const [connState, setConnState] = useState<'connected' | 'reconnecting' | 'polling'>('connected');
+  const streamPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ---- Async task list ----
+  const [asyncTasks, setAsyncTasks] = useState<Array<{
+    id: string;
+    url: string;
+    count: number;
+    submittedAt: number;
+    status: DouyinTaskStatus | null;
+  }>>([]);
 
   // ---- Anchor Profile ----
   const [anchorProfile, setAnchorProfile] = useState<AnchorProfile | null>(null);
@@ -80,7 +101,7 @@ export default function LearnPage() {
   });
 
   // ---- Zone 1: Method A — Douyin User ----
-  const [dyUserUrl, setDyUserUrl] = useState('');
+  const [dyUserUrl, setDyUserUrl] = useState(supplementUrl);
   const [dyUserCount, setDyUserCount] = useState(5);
 
   const handleDyUrlBlur = useCallback(() => {
@@ -306,7 +327,40 @@ export default function LearnPage() {
     return () => {
       if (singleTimer.current) clearInterval(singleTimer.current);
       if (videoTimer.current) clearInterval(videoTimer.current);
+      if (streamPollRef.current) clearInterval(streamPollRef.current);
     };
+  }, []);
+
+  // ---- Auto-save draft (debounced) ----
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (isVerified) return;
+    const doneItems = materials.filter((m) => m.status === 'done' && m.editedText);
+    if (doneItems.length === 0) return;
+
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveDraft({
+        timestamp: Date.now(),
+        materials: doneItems.map((m) => ({ id: m.id, editedText: m.editedText, selected: m.selected })),
+        lineData: savedLineData ?? [],
+        anchorName: anchorProfile?.anchor_name,
+      });
+    }, 2000);
+    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
+  }, [materials, savedLineData, isVerified, anchorProfile]);
+
+  // ---- Restore draft on mount ----
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const draft = loadDraft();
+    if (!draft) return;
+    if (draft.materials.length > 0) {
+      setSavedLineData(draft.lineData);
+      toast('success', '检测到未完成的编辑，已自动恢复');
+    }
   }, []);
 
   // ---- Material updates ----
@@ -336,6 +390,7 @@ export default function LearnPage() {
       return { personaRes, strategyRes };
     },
     onSuccess: async ({ personaRes, strategyRes }) => {
+      clearDraft();
       setPersonaId(personaRes.persona_id);
       setStrategyResult(strategyRes.results[0] || null);
       try {
@@ -359,11 +414,26 @@ export default function LearnPage() {
       <div className="flex items-center gap-3">
         <BookOpen className="w-6 h-6 text-brand" />
         <h1 className="text-2xl font-semibold">学习中心</h1>
+        <div className="flex-1" />
+        <Button variant="ghost" onClick={() => navigate('/settings?tab=assets')}>
+          <FolderOpen className="w-4 h-4" />
+          素材资产
+        </Button>
       </div>
 
       {/* ===== Zone 1: Material Import ===== */}
       <section>
         <h2 className="text-lg font-semibold text-text-primary mb-4">素材导入</h2>
+
+        {supplementMode && (
+          <div className="mb-4 p-3 bg-brand/10 border border-brand/30 rounded-lg flex items-start gap-2">
+            <BookOpen className="w-4 h-4 text-brand mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-brand">补充素材模式</p>
+              <p className="text-xs text-text-secondary mt-0.5">已排除已学习的视频，新素材将追加到现有人设进行增量学习</p>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-4">
           {/* Method A: Douyin User */}
@@ -402,16 +472,121 @@ export default function LearnPage() {
                   setPersonaId(null);
                   setPersonaDetail(null);
                   setStrategyResult(null);
+                  setConnState('connected');
+                  setStreamTaskId(null);
+
+                  const handleSSEEvent = (data: any) => {
+                    setProgressEvents((prev) => [...prev, data]);
+                    if (data.task_id && !data.step) {
+                      setStreamTaskId(data.task_id);
+                    }
+                    if (data.step === 'task_init' && data.task_id) {
+                      setStreamTaskId(data.task_id);
+                    }
+                    if (data.step === 'profile_done' && data.profile) {
+                      setAnchorProfile(data.profile);
+                    }
+                    if (data.step === 'done' && data.result) {
+                      const r = data.result;
+                      if (r.profile) setAnchorProfile(r.profile);
+                      if (r.analysis) setPersonaId(r.analysis.persona_id || 'stream');
+                      if (r.strategies?.results?.[0]) setStrategyResult(r.strategies.results[0]);
+                      if (r.analysis) {
+                        setPersonaDetail({
+                          id: r.analysis.persona_id || 'stream',
+                          name: r.analysis.name || '',
+                          global_style: r.analysis.global_style || '',
+                          catchphrases: r.analysis.catchphrases || null,
+                          reaction_patterns: r.analysis.reaction_patterns || null,
+                          sentence_templates: r.analysis.sentence_templates || null,
+                          core_values: r.analysis.core_values || null,
+                          language_style: r.analysis.language_style || null,
+                          tone_adaptation: r.analysis.tone_adaptation || null,
+                          narrative_style: r.narrative || null,
+                          version: 1,
+                          is_active: true,
+                          created_at: new Date().toISOString(),
+                          slice_count: r.materials?.length || 0,
+                          version_notes: null,
+                        });
+                      }
+                      toast('success', '处理完成');
+                      setIsStreaming(false);
+                      if (streamPollRef.current) clearInterval(streamPollRef.current);
+                    }
+                    if (data.step === 'error') {
+                      toast('error', data.message);
+                      setIsStreaming(false);
+                    }
+                  };
+
+                  const fallbackToPolling = (tid: string) => {
+                    setConnState('polling');
+                    setProgressEvents((prev) => [...prev, {
+                      step: 'connection_polling',
+                      message: '实时连接中断，已切换到轮询模式更新进度...',
+                    } as any]);
+                    streamPollRef.current = setInterval(async () => {
+                      try {
+                        const tr = await getTaskRecord(tid);
+                        if (tr.status === 'completed') {
+                          if (streamPollRef.current) clearInterval(streamPollRef.current);
+                          setConnState('connected');
+                          if (tr.persona_id) {
+                            setPersonaId(tr.persona_id);
+                            getPersona(tr.persona_id).then((detail) => {
+                              setPersonaDetail(detail);
+                              setAnchorProfile((prev) => prev ? prev : {
+                                anchor_name: tr.persona_name || '',
+                                follower_count: tr.follower_count || 0,
+                                video_count: tr.video_count || 0,
+                              });
+                            }).catch(() => {});
+                          }
+                          toast('success', '处理完成（轮询恢复）');
+                          setIsStreaming(false);
+                        } else if (tr.status === 'failed') {
+                          if (streamPollRef.current) clearInterval(streamPollRef.current);
+                          toast('error', tr.error_message || '任务失败');
+                          setIsStreaming(false);
+                        } else {
+                          const rs = tr.result_summary as Record<string, unknown> | null;
+                          if (rs?.current_step) {
+                            setProgressEvents((prev) => {
+                              const last = prev[prev.length - 1];
+                              if (last && (last as any).step === rs.current_step) return prev;
+                              return [...prev, {
+                                step: rs.current_step,
+                                message: rs.message || '',
+                              } as any];
+                            });
+                          }
+                        }
+                      } catch { /* ignore poll errors */ }
+                    }, 3000);
+                  };
+
+                  const onStreamError = () => {
+                    const tid = streamTaskId;
+                    if (tid) {
+                      fallbackToPolling(tid);
+                    } else {
+                      toast('error', '流式处理失败，且未获取到任务 ID，无法恢复');
+                      setIsStreaming(false);
+                    }
+                  };
 
                   fetch('/api/import/douyin-user/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, count: dyUserCount }),
+                    body: JSON.stringify({
+                      url,
+                      count: dyUserCount,
+                      ...(supplementMode && supplementPersonaId ? { exclude_persona_id: supplementPersonaId } : {}),
+                    }),
                   })
                     .then(async (response) => {
-                      if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                      }
+                      if (!response.ok) throw new Error(`HTTP ${response.status}`);
                       const reader = response.body?.getReader();
                       if (!reader) return;
                       const decoder = new TextDecoder();
@@ -419,73 +594,60 @@ export default function LearnPage() {
 
                       while (true) {
                         const { done, value } = await reader.read();
-                        if (done) break;
+                        if (done) {
+                          // Check if stream ended unexpectedly (not done/error)
+                          const lastEvent = progressEvents[progressEvents.length - 1];
+                          if (lastEvent?.step !== 'done' && lastEvent?.step !== 'error') {
+                            onStreamError();
+                          }
+                          break;
+                        }
                         buffer += decoder.decode(value, { stream: true });
                         const lines = buffer.split('\n');
                         buffer = lines.pop() || '';
 
                         for (const line of lines) {
                           if (line.startsWith('data: ')) {
-                            try {
-                              const data = JSON.parse(line.slice(6));
-                              setProgressEvents((prev) => [...prev, data]);
-
-                              // Early profile display
-                              if (data.step === 'profile_done' && data.profile) {
-                                setAnchorProfile(data.profile);
-                              }
-
-                              if (data.step === 'done' && data.result) {
-                                const r = data.result;
-                                if (r.profile) setAnchorProfile(r.profile);
-                                if (r.analysis) {
-                                  setPersonaId(r.analysis.persona_id || 'stream');
-                                }
-                                if (r.narrative) {
-                                  // narrative data will be in persona detail
-                                }
-                                if (r.strategies?.results?.[0]) {
-                                  setStrategyResult(r.strategies.results[0]);
-                                }
-                                if (r.analysis) {
-                                  setPersonaDetail({
-                                    id: r.analysis.persona_id || 'stream',
-                                    name: r.analysis.name || '',
-                                    global_style: r.analysis.global_style || '',
-                                    catchphrases: r.analysis.catchphrases || null,
-                                    reaction_patterns: r.analysis.reaction_patterns || null,
-                                    sentence_templates: r.analysis.sentence_templates || null,
-                                    core_values: r.analysis.core_values || null,
-                                    language_style: r.analysis.language_style || null,
-                                    tone_adaptation: r.analysis.tone_adaptation || null,
-                                    narrative_style: r.narrative || null,
-                                    version: 1,
-                                    is_active: true,
-                                    created_at: new Date().toISOString(),
-                                    slice_count: r.materials?.length || 0,
-                                    version_notes: null,
-                                  });
-                                }
-                                toast('success', '处理完成');
-                              }
-                              if (data.step === 'error') {
-                                toast('error', data.message);
-                              }
-                            } catch { /* ignore parse errors */ }
+                            try { handleSSEEvent(JSON.parse(line.slice(6))); }
+                            catch { /* ignore parse errors */ }
                           }
                         }
                       }
                     })
-                    .catch((err) => {
-                      toast('error', `流式处理失败: ${err.message}`);
-                    })
-                    .finally(() => {
-                      setIsStreaming(false);
-                    });
+                    .catch(() => { onStreamError(); });
                 }}
               >
                 <Sparkles className="w-4 h-4" />
                 {isStreaming ? '处理中...' : '一键处理'}
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={!dyUserUrl.trim() || isStreaming}
+                title="提交后台任务，无需等待完成即可继续添加下一个博主"
+                onClick={async () => {
+                  const url = dyUserUrl.trim();
+                  if (!url || isStreaming) return;
+                  try {
+                    const res = await submitDouyinUserTask(url, dyUserCount);
+                    setAsyncTasks((prev) => [...prev, {
+                      id: res.task_id,
+                      url,
+                      count: dyUserCount,
+                      submittedAt: Date.now(),
+                      status: {
+                        task_id: res.task_id,
+                        status: 'queued',
+                        message: res.message,
+                      },
+                    }]);
+                    toast('success', res.message);
+                  } catch (err: any) {
+                    toast('error', err?.response?.data?.detail || '任务提交失败');
+                  }
+                }}
+              >
+                <Clock className="w-4 h-4" />
+                后台处理
               </Button>
             </div>
 
@@ -644,9 +806,11 @@ export default function LearnPage() {
           </h2>
           <VerificationPanel
             materials={selectedMaterials}
-            onLock={(text) => { setVerifiedText(text); setIsVerified(true); }}
+            onLock={(text) => { setVerifiedText(text); setIsVerified(true); clearDraft(); }}
             locked={isVerified}
             anchorProfile={anchorProfile}
+            onLineDataChange={setSavedLineData}
+            initialLineData={savedLineData ?? undefined}
           />
         </section>
       )}
@@ -654,6 +818,44 @@ export default function LearnPage() {
       {/* ===== Zone 4: Processing & Results ===== */}
       <section>
         <h2 className="text-lg font-semibold text-text-primary mb-4">处理与结果</h2>
+
+        {/* Async task list */}
+        {asyncTasks.length > 0 && (
+          <div className="mb-4">
+            <TaskListPanel
+              tasks={asyncTasks}
+              onRemove={(id) => setAsyncTasks((prev) => prev.filter((t) => t.id !== id))}
+              onViewResult={(taskId, result) => {
+                if (result) {
+                  if (result.profile) setAnchorProfile(result.profile);
+                  if (result.analysis) {
+                    setPersonaId(result.analysis.persona_id || taskId);
+                    setPersonaDetail({
+                      id: result.analysis.persona_id || taskId,
+                      name: result.analysis.name || '',
+                      global_style: result.analysis.global_style || '',
+                      catchphrases: result.analysis.catchphrases || null,
+                      reaction_patterns: result.analysis.reaction_patterns || null,
+                      sentence_templates: result.analysis.sentence_templates || null,
+                      core_values: result.analysis.core_values || null,
+                      language_style: result.analysis.language_style || null,
+                      tone_adaptation: result.analysis.tone_adaptation || null,
+                      narrative_style: result.narrative || null,
+                      version: 1,
+                      is_active: true,
+                      created_at: new Date().toISOString(),
+                      slice_count: result.materials?.length || 0,
+                      version_notes: null,
+                    });
+                  }
+                  if (result.strategies?.results?.[0]) {
+                    setStrategyResult(result.strategies.results[0]);
+                  }
+                }
+              }}
+            />
+          </div>
+        )}
 
         {anchorProfile && (
           <div className="mb-4 p-3 bg-brand/5 border border-brand/20 rounded-lg flex items-center gap-3">
@@ -674,7 +876,7 @@ export default function LearnPage() {
 
         {/* SSE streaming progress — always visible when streaming from "一键处理" */}
         {(isStreaming || progressEvents.length > 0) && !personaDetail && (
-          <ProgressPanel events={progressEvents} />
+          <ProgressPanel events={progressEvents} connState={connState} />
         )}
 
         {/* SSE Results — always visible when done via "一键处理" */}
@@ -803,6 +1005,7 @@ export default function LearnPage() {
                 {/* Left: Persona Report */}
                 {personaDetail && (
                   <div className="space-y-4">
+                    {(personaDetail as any).degraded && <DegradedBanner />}
                     <div className="flex items-center gap-2 text-text-primary">
                       <Sparkles className="w-5 h-5 text-brand" />
                       <h3 className="text-base font-semibold">人设分析报告</h3>

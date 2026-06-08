@@ -1,94 +1,77 @@
 """
 仓位管理AI - Position Management AI
 
-策略执行军团成员
+策略部成员 (2/4)
 
 职责：
-1. 仓位配置建议（初始仓位、加仓、减仓）
-2. 风险预算管理（单股风险、总风险控制）
-3. 动态仓位调整（市场环境、个股表现）
-4. 分批建仓策略（分批买入、卖出）
-5. 止盈止损策略（动态止盈、止损）
-6. 仓位优化建议
+1. 仓位大小建议 - 根据市场状况确定建仓比例
+2. 仓位分配策略 - 多个标的之间的资金分配
 
 使用工具：
-- FinancialTool（财务数据）
-- LLMTool（智能分析）
-- FormulaTool（财务指标计算）
+- RiskModel（风险模型）
+- PortfolioTool（组合管理）
+- MarketTool（市场数据）
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
-import asyncio
 
-from src.core.base_agent import BaseAgent, AgentCapability, AgentTool
-from src.core.logger import LoggerMixin
-from src.core.tools import FinancialTool, LLMTool
+from src.agents.business.base_business_agent import BusinessAgent, AnalysisResult
+from src.core.base_agent import AgentCapability, AgentTool
+from src.core.logger import get_logger
 
 
-class PositionManagementAI(BaseAgent, LoggerMixin):
+class PositionManagementAI(BusinessAgent):
     """
-    仓位管理AI - 策略执行军团成员
+    仓位管理AI - 策略部成员 (2/4)
 
     核心能力:
-    1. 仓位配置建议（初始仓位、加仓、减仓）
-    2. 风险预算管理（单股风险、总风险控制）
-    3. 动态仓位调整（市场环境、个股表现）
-    4. 分批建仓策略（分批买入、卖出）
-    5. 止盈止损策略（动态止盈、止损）
-    6. 仓位优化建议
+    1. 仓位大小建议 - 根据市场环境和个股确定性
+    2. 仓位分配策略 - 多标的资金优化配置
 
     使用工具:
-    - FinancialTool (财务数据)
-    - LLMTool (智能分析)
-    - FormulaTool (财务指标计算)
+    - RiskModel (风险模型)
+    - PortfolioTool (组合管理)
+    - MarketTool (市场数据)
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        # 初始化工具
-        self.financial_tool = FinancialTool()
-        self.llm_tool = LLMTool()
-
         super().__init__(
             name="仓位管理AI",
-            role="优化仓位配置，控制投资风险",
+            role="制定仓位大小和分配策略",
+            corps="strategy",
+            analysis_type="position_management",
             capabilities=[
                 AgentCapability(
                     name="position_sizing",
-                    description="仓位配置",
+                    description="仓位大小建议",
                     input_type="stock_code",
                     output_type="position_size"
                 ),
                 AgentCapability(
-                    name="risk_budgeting",
-                    description="风险预算管理",
-                    input_type="stock_code",
-                    output_type="risk_budget"
-                ),
-                AgentCapability(
-                    name="dynamic_adjustment",
-                    description="动态仓位调整",
-                    input_type="stock_code",
-                    output_type="position_adjustment"
-                ),
-                AgentCapability(
-                    name="stop_loss_take_profit",
-                    description="止盈止损策略",
-                    input_type="stock_code",
-                    output_type="stop_strategy"
+                    name="position_allocation",
+                    description="仓位分配策略",
+                    input_type="multiple_stocks",
+                    output_type="allocation_plan"
                 )
             ],
             tools=[
                 AgentTool(
-                    name="financial_tool",
-                    description="财务数据工具",
+                    name="risk_model",
+                    description="风险模型工具",
                     tool_type="data_source",
                     config={}
                 ),
                 AgentTool(
-                    name="llm_tool",
-                    description="智能分析工具",
-                    tool_type="ai_service",
+                    name="portfolio_tool",
+                    description="组合管理工具",
+                    tool_type="data_source",
+                    config={}
+                ),
+                AgentTool(
+                    name="market_tool",
+                    description="市场数据工具",
+                    tool_type="data_source",
                     config={}
                 )
             ],
@@ -97,27 +80,7 @@ class PositionManagementAI(BaseAgent, LoggerMixin):
 
         self.logger.info("仓位管理AI初始化完成")
 
-    async def execute(self, task: str, **kwargs) -> Any:
-        """执行任务"""
-        if task == "analyze":
-            return await self.analyze(**kwargs)
-        elif task == "position_sizing":
-            return await self._position_sizing(**kwargs)
-        elif task == "risk_budgeting":
-            return await self._risk_budgeting(**kwargs)
-        else:
-            raise ValueError(f"未知任务: {task}")
-
-    # ========== 主入口方法 ==========
-
-    async def analyze(
-        self,
-        stock_code: str,
-        current_price: float,
-        total_capital: float,
-        risk_tolerance: str = "中等",
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def analyze(self, stock_code: str, **kwargs) -> AnalysisResult:
         """
         仓位管理综合分析
 
@@ -130,6 +93,11 @@ class PositionManagementAI(BaseAgent, LoggerMixin):
         Returns:
             仓位管理综合建议
         """
+        # 从kwargs中提取参数
+        current_price = kwargs.get('current_price')
+        total_capital = kwargs.get('total_capital', 1000000)
+        risk_tolerance = kwargs.get('risk_tolerance', '中等')
+
         self.logger.info(
             f"开始仓位管理综合分析",
             extra={
@@ -220,7 +188,33 @@ class PositionManagementAI(BaseAgent, LoggerMixin):
             }
         )
 
-        return result
+        # 构建AnalysisResult对象
+        return AnalysisResult(
+            agent_name=self.name,
+            analysis_type=self.analysis_type,
+            conclusion=f"建议仓位{position_sizing['position_percentage']:.1%}，"
+                      f"对应金额{position_sizing['position_value']:.0f}元",
+            confidence=0.75,
+            details={
+                "position_size": position_sizing,
+                "allocation_strategy": batch_strategy,  # 添加allocation_strategy键
+                "risk_budget": risk_budgeting,
+                "risk_assessment": {
+                    "risk_level": risk_tolerance,
+                    "risk_description": f"风险偏好等级{risk_tolerance}"
+                },
+                "dynamic_adjustment": dynamic_adjustment,
+                "batch_strategy": batch_strategy,
+                "stop_strategy": stop_strategy,
+                "optimization_suggestion": optimization_suggestion
+            },
+            risks=["市场波动可能导致仓位调整", "需要根据实际情况动态调整"],
+            recommendations=[
+                f"建议总仓位{position_sizing['position_percentage']:.1%}",
+                "分批建仓降低风险",
+                "严格执行止损策略"
+            ]
+        )
 
     # ========== 核心分析方法 ==========
 
@@ -243,8 +237,16 @@ class PositionManagementAI(BaseAgent, LoggerMixin):
         Returns:
             仓位配置建议
         """
-        # 获取财务数据
-        financial_data = await self.financial_tool.fetch_financial_data(stock_code)
+        # TODO: 接入真实财务数据API
+        # 模拟财务数据
+        financial_data = {
+            "quality_metrics": {
+                "roe": 0.18,
+                "gross_margin": 0.45,
+                "debt_ratio": 0.35
+            },
+            "volatility": 0.25
+        }
 
         # 评估股票质量
         quality_score = self._assess_stock_quality(financial_data)
@@ -648,3 +650,34 @@ class PositionManagementAI(BaseAgent, LoggerMixin):
             return f"建议标准配置（{position_pct:.1f}%），适合{risk_tolerance}型投资者"
         else:
             return f"建议较大配置（{position_pct:.1f}%），注意风险控制"
+
+
+# 便捷函数
+async def analyze_position_management(
+    stock_code: str,
+    current_price: float,
+    total_capital: float,
+    existing_positions: Optional[Dict[str, Any]] = None,
+    risk_tolerance: int = 3
+) -> AnalysisResult:
+    """
+    仓位管理分析（便捷函数）
+
+    Args:
+        stock_code: 股票代码
+        current_price: 当前股价
+        total_capital: 总资金
+        existing_positions: 现有持仓
+        risk_tolerance: 风险偏好（1-5）
+
+    Returns:
+        分析结果
+    """
+    ai = PositionManagementAI()
+    return await ai.analyze(
+        stock_code,
+        current_price=current_price,
+        total_capital=total_capital,
+        existing_positions=existing_positions or {},
+        risk_tolerance=risk_tolerance
+    )

@@ -1,0 +1,184 @@
+================================================================================
+Holdings.db 完整探索报告
+================================================================================
+
+[table_list]
+                    name
+               blacklist
+        cleared_holdings
+          cleared_stocks
+        current_holdings
+                holdings
+        holdings_history
+              operations
+position_monitor_history
+position_monitor_summary
+   stock_recommendations
+       successful_trades
+               watchlist
+
+
+[current_holdings_schema]
+    column_name column_type null key           default extra
+             id     INTEGER   NO PRI               NaN  None
+           code     VARCHAR   NO UNI               NaN  None
+           name     VARCHAR  YES NaN               NaN  None
+         shares     INTEGER  YES NaN               NaN  None
+      available     INTEGER  YES NaN               NaN  None
+     cost_price      DOUBLE  YES NaN               NaN  None
+  current_price      DOUBLE  YES NaN               NaN  None
+    profit_loss      DOUBLE  YES NaN               NaN  None
+profit_loss_pct      DOUBLE  YES NaN               NaN  None
+   market_value      DOUBLE  YES NaN               NaN  None
+   position_pct      DOUBLE  YES NaN               NaN  None
+   holding_days     INTEGER  YES NaN               NaN  None
+    last_update   TIMESTAMP  YES NaN CURRENT_TIMESTAMP  None
+
+
+[current_holdings_count]
+ count_star()
+            5
+
+
+[current_holdings_data]
+ id      code name  shares  available  cost_price  current_price  profit_loss  profit_loss_pct  market_value  position_pct  holding_days                last_update
+  1 000651.SZ 格力电器    1200       1200      37.587          37.34      -297.04            -0.66       44808.0         22.90             7 2026-04-10 20:44:09.172180
+  2 000725.SZ 京东方A    8400       8400       3.913           4.04      1065.03             3.24       33936.0         17.34             8 2026-04-10 20:44:09.172180
+  3 002340.SZ  格林美     700        700       7.941           8.09       103.94             1.87        5663.0          2.89             2 2026-04-10 20:44:09.172180
+  4 600728.SH 佳都科技    7400       7400       5.691           5.68       -80.80            -0.19       42032.0         21.48             2 2026-04-10 20:44:09.172180
+  5 600887.SH 伊利股份    2000       2000      26.279          26.14      -277.46            -0.53       52280.0         26.72             9 2026-04-10 20:44:09.172180
+
+
+[cleared_holdings_schema]
+        column_name column_type null key           default extra
+                 id     INTEGER   NO PRI               NaN  None
+               code     VARCHAR  YES NaN               NaN  None
+               name     VARCHAR  YES NaN               NaN  None
+       cleared_date        DATE  YES NaN               NaN  None
+             shares     INTEGER  YES NaN               NaN  None
+         cost_price      DOUBLE  YES NaN               NaN  None
+        final_price      DOUBLE  YES NaN               NaN  None
+        profit_loss      DOUBLE  YES NaN               NaN  None
+    profit_loss_pct      DOUBLE  YES NaN               NaN  None
+       holding_days     INTEGER  YES NaN               NaN  None
+        trade_count     INTEGER  YES NaN               NaN  None
+         created_at   TIMESTAMP  YES NaN CURRENT_TIMESTAMP  None
+       clear_reason     VARCHAR  YES NaN               NaN  None
+system_score_at_buy      DOUBLE  YES NaN               NaN  None
+     max_profit_pct      DOUBLE  YES NaN               NaN  None
+       max_loss_pct      DOUBLE  YES NaN               NaN  None
+             source     VARCHAR  YES NaN            'user'  None
+
+
+[cleared_holdings_count]
+ count_star()
+           17
+
+
+[cleared_holdings_data]
+ id      code name cleared_date  shares  cost_price  final_price  profit_loss  profit_loss_pct  holding_days  trade_count                 created_at clear_reason  system_score_at_buy  max_profit_pct  max_loss_pct    source
+  1 600893.SS 航发动力   2026-04-03   12190        10.0        9.903     -1182.50            -0.97             5            1 2026-04-08 06:46:50.628905       manual                  NaN             NaN           NaN USER.md迁移
+  2 601669.SS 中国电建   2026-03-31    7737        10.0       10.109       843.37             1.09            40            1 2026-04-08 06:46:50.637202   target_hit                  NaN             NaN           NaN USER.md迁移
+  3 601868.SS 中国能建   2026-03-31   10573        10.0        9.487     -5424.00            -5.13             9            1 2026-04-08 06:46:50.642706    stop_loss                  NaN             NaN           NaN USER.md迁移
+  4 002340.SZ  格林美   2026-03-25    8241        10.0       10.152      1252.77             1.52             5            1 2026-04-08 06:46:50.647809  take_profit                  NaN             NaN           NaN USER.md迁移
+  5 600887.SS 伊利股份   2026-03-25    5764        10.0       10.005        28.82             0.05            10            1 2026-04-08 06:46:50.654189   target_hit                  NaN             NaN           NaN USER.md迁移
+
+
+[holdings_history_schema]
+column_name column_type null key           default extra
+         id     INTEGER   NO PRI               NaN  None
+  timestamp   TIMESTAMP  YES NaN               NaN  None
+ stock_code     VARCHAR  YES NaN               NaN  None
+ stock_name     VARCHAR  YES NaN               NaN  None
+     action     VARCHAR  YES NaN               NaN  None
+     shares     INTEGER  YES NaN               NaN  None
+      price      DOUBLE  YES NaN               NaN  None
+     amount      DOUBLE  YES NaN               NaN  None
+ cost_price      DOUBLE  YES NaN               NaN  None
+     reason     VARCHAR  YES NaN               NaN  None
+ created_at   TIMESTAMP  YES NaN CURRENT_TIMESTAMP  None
+
+
+[holdings_history_count]
+ count_star()
+            0
+
+
+[holdings_history_data]
+Empty DataFrame
+Columns: [id, timestamp, stock_code, stock_name, action, shares, price, amount, cost_price, reason, created_at]
+Index: []
+
+
+[watchlist_schema]
+ column_name column_type null key           default extra
+          id     INTEGER   NO PRI               NaN  None
+  stock_code     VARCHAR   NO UNI               NaN  None
+  stock_name     VARCHAR  YES NaN               NaN  None
+target_price      DOUBLE  YES NaN               NaN  None
+      reason     VARCHAR  YES NaN               NaN  None
+  added_date        DATE  YES NaN               NaN  None
+    priority     INTEGER  YES NaN                 5  None
+       notes     VARCHAR  YES NaN               NaN  None
+  updated_at   TIMESTAMP  YES NaN CURRENT_TIMESTAMP  None
+
+
+[watchlist_count]
+ count_star()
+           49
+
+
+[watchlist_data]
+ id stock_code stock_name  target_price                                               reason added_date  priority notes                 updated_at
+  1  002222.SZ       福晶科技           NaN 自动扫描机会股 (得分3, 触发:突破20日高点,20日涨18.8%,主力买入(涨7.3%量比2.0)) 2026-04-05         5  None 2026-04-05 02:32:03.648025
+  3  002869.SZ       金溢科技           NaN 自动扫描机会股 (得分3, 触发:突破20日高点,20日涨19.5%,主力买入(涨8.1%量比2.4)) 2026-04-05         5  None 2026-04-05 02:32:03.685306
+  4  000720.SZ       新能泰山           NaN 自动扫描机会股 (得分3, 触发:突破20日高点,20日涨35.0%,主力买入(涨5.7%量比2.5)) 2026-04-05         5  None 2026-04-05 02:32:03.700235
+  5  002328.SZ       新朋股份           NaN 自动扫描机会股 (得分3, 触发:突破20日高点,20日涨12.6%,主力买入(涨4.7%量比2.2)) 2026-04-05         5  None 2026-04-05 02:32:03.714685
+  6  002038.SZ       双鹭药业           NaN         自动扫描机会股 (得分3, 触发:突破20日高点,20日涨43.5%,连续3日阳线放量) 2026-04-05         5  None 2026-04-05 02:32:03.730309
+  8  600869.SH       远东股份           NaN 自动扫描机会股 (得分3, 触发:突破20日高点,20日涨16.6%,主力买入(涨8.0%量比1.8)) 2026-04-05         5  None 2026-04-05 02:32:03.760738
+  9  002238.SZ       手动添加           NaN                                               用户要求分析 2026-04-05         5  None 2026-04-05 15:42:32.250983
+ 10  600851.SH       手动添加           NaN                                               用户要求分析 2026-04-05         5  None 2026-04-05 15:42:32.271417
+ 11  000651.SZ       手动添加           NaN                                               用户要求分析 2026-04-05         5  None 2026-04-05 15:42:32.284662
+ 12  600031.SH       手动添加           NaN                                               用户要求分析 2026-04-05         5  None 2026-04-05 15:42:32.295546
+
+
+[operations_schema]
+column_name column_type null key           default extra
+         id     INTEGER   NO PRI               NaN  None
+       code     VARCHAR  YES NaN               NaN  None
+    op_date        DATE  YES NaN               NaN  None
+    op_type     VARCHAR  YES NaN               NaN  None
+     shares     INTEGER  YES NaN               NaN  None
+      price      DOUBLE  YES NaN               NaN  None
+ cost_after      DOUBLE  YES NaN               NaN  None
+      notes     VARCHAR  YES NaN               NaN  None
+ created_at   TIMESTAMP  YES NaN CURRENT_TIMESTAMP  None
+
+
+[operations_count]
+ count_star()
+           15
+
+
+[operations_data]
+ id      code    op_date op_type  shares  price  cost_after notes                 created_at
+ 11    000725 2026-04-09   t_buy    5800  3.963       3.963   T操作 2026-04-09 10:24:17.577111
+ 12    000725 2026-04-09   t_buy    5800  3.963       3.963   T操作 2026-04-09 10:24:56.746190
+ 13    002340 2026-04-09     buy     300  7.953       7.953   新买入 2026-04-09 10:24:56.760018
+ 14    600728 2026-04-09     buy    7000  5.691       5.691   新买入 2026-04-09 10:24:56.769174
+ 15    600887 2026-04-09     buy     500 26.279      26.279  仓位变化 2026-04-09 10:24:56.777164
+  8    000651 2026-04-08     buy    1100 37.602      37.602   新买入 2026-04-08 15:53:14.263603
+  9    000725 2026-04-08     buy    8900  3.967       3.967   新买入 2026-04-08 15:53:14.280282
+ 10    600887 2026-04-08     buy    1500 26.320      26.320   新买入 2026-04-08 15:53:14.289302
+  7 600887.SS 2026-04-03     buy    1500 26.320      26.320   新买入 2026-04-03 01:47:45.530711
+  4    000725 2026-04-02 new_buy    4900  3.929       3.929       2026-04-03 00:32:28.792352
+
+
+[global_config_schema]
+
+
+[global_config_count]
+
+
+[global_config_data]
+

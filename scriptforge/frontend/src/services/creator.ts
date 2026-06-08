@@ -11,6 +11,7 @@ export interface CreatorPersonaResult {
   tone_adaptation: Record<string, number>;
   style_summary: string;
   recommended_scenarios?: string[];
+  degraded?: boolean;
 }
 
 export interface GuestCard {
@@ -22,6 +23,7 @@ export interface GuestCard {
   speaking_style: string;
   tags: string[];
   expected_reaction: string;
+  degraded?: boolean;
 }
 
 export async function createPersona(requirements: string): Promise<{ status: string; persona: CreatorPersonaResult }> {

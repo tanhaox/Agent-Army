@@ -96,6 +96,44 @@ AI-Agent-Local/
 
 ---
 
+## 🪟 Windows 环境特定配置 ⚠️ **2026-05-07 新增**
+
+### 路径双轨映射规则
+
+Bash 工具使用 `/tmp/` 和 `~/`，但 Read/Edit/Write/Glob/Grep 工具需要 Windows 绝对路径。
+
+| Bash 路径 | Read/Edit/Write 路径 |
+|-----------|---------------------|
+| `/tmp/xxx` | `C:/Users/tanha/AppData/Local/Temp/xxx` |
+| `~/.claude/xxx` | `C:/Users/tanha/.claude/xxx` |
+| 项目相对路径 | `C:/AI-Agent-Local/xxx` |
+
+**强制规则**：
+- Bash 命令可用 `/tmp/` 或 `~/`，Read/Edit/Write/Glob/Grep **必须**用 `C:/Users/tanha/...`
+- 从 Bash 输出拿到路径后先转换为 Windows 格式再传给 Read 工具
+- 不确定路径时用 `pwd` 或 `ls` 确认
+
+### GitHub 访问策略 ⚠️
+
+HTTPS (443) 被墙，仅 SSH (22) 可用：
+
+**不可用**：
+- ❌ `git clone https://github.com/...` — 超时
+- ❌ `gh` CLI — API 走 HTTPS 全挂
+- ❌ WebFetch 访问 `github.com` — 被屏蔽
+
+**可用**：
+- ✅ `git clone git@github.com:owner/repo.git`
+- ✅ `ssh -T git@github.com`（已验证通过）
+
+**强制规则**：
+1. 所有 git 远程操作**强制 SSH**：`git@github.com:owner/repo.git`
+2. 需要 repo 信息时：先 SSH clone → 读本地文件；其次 WebSearch
+3. `gh` CLI 不可用，用 WebSearch 替代 `gh repo view`，用 git 命令替代 `gh pr/issue`
+4. `GH_TOKEN` 待用户配置 PAT 后 `gh` 可能恢复
+
+---
+
 ## 🚀 标准开发工作流程（v2.6.0）
 
 > **重要**：AI-AGENT-LOCAL项目文件夹下所有项目开发必须遵守此工作流程
@@ -609,6 +647,35 @@ create_project.bat
    - 敏感信息使用环境变量
    - 统一配置管理
 
+6. **Karpathy 编码四原则** ⭐ **每次编码自动遵守**
+
+   来源：[Andrej Karpathy 对 LLM 编码行为的观察](https://x.com/karpathy/status/2015883857489522876)，120K+ Stars 验证有效。
+
+   **原则 1：先想后写 (Think Before Coding)**
+   - 不确定时先问，列出假设让用户选，该反驳就反驳
+   - 有多个方案时全列出来，不要自己悄悄选
+   - 有更简单的方案时直接说出来
+   - 代码不清楚时停下来，说清楚哪里不清楚
+
+   **原则 2：简洁至上 (Simplicity First)**
+   - 不添加用户没要求的功能/抽象/灵活性
+   - 不为单次使用创建抽象层
+   - 不为不可能发生的场景写错误处理
+   - 写了 200 行能缩成 50 行？重写
+
+   **原则 3：精准修改 (Surgical Changes)**
+   - 只改任务相关的代码，不动附近的代码、注释、格式
+   - 匹配已有代码风格，即使不是你惯用的
+   - 发现无关的死代码？说出来，但不要删除
+   - 你引入的无用 import/变量，必须自己清理
+   - 每行改动都能追溯到用户的需求
+
+   **原则 4：目标驱动 (Goal-Driven Execution)**
+   - "修好这个 bug" → "先写复现测试，让它通过"
+   - "加个验证" → "写出无效输入的测试，然后让它们通过"
+   - 多步骤任务给出验证计划：每步做什么 → 怎么验证成功
+   - 强验证标准让 AI 可以独立循环，弱标准需要反复确认
+
 ---
 
 ## 🧪 测试要求
@@ -910,3 +977,201 @@ python projects/tools/backup-agent/backup_agent.py --rollback 1
 - 日志必须持久化到文件
 
 如有需要，用户可以随时修改本文件的配置。
+
+---
+
+## 🌐 ScriptForge 网络资源规则
+
+> **详见**: `scriptforge/MIRROR_RULES.md` — 禁止自动下载境外资源、模型本地化、网络超时降级等 5 条强制规则。
+
+---
+
+## 🤖 Skill 自动加载注册表 ⚠️ **2026-05-07 新增**
+
+> **58 个 skill 全部注册在此，每次新会话自动加载。优先级体系: P:5=关键基础设施 > P:4=安全守卫 > P:3=领域专家 > P:2=过程增强 > P:1=后台支撑**
+
+### P:5 — 关键基础设施（3 个）
+
+| Skill | 来源 | 触发场景 |
+|-------|------|---------|
+| `self-improvement` | user | 操作失败/用户纠错/AI 知识过时/外部 API 失败 → 记录学习 |
+| `clawcn-windows-setup` | user | Windows 命令兼容性/路径错误/网关令牌/中文编码 → 修复环境 |
+| `claudeception` | user | 自动提取对话知识→ docs/knowledge/，无需用户命令 |
+
+### P:4 — 安全守卫（3 个）
+
+| Skill | 来源 | 触发场景 |
+|-------|------|---------|
+| `cancel` | user | 用户说"取消/停止/退出模式/stop" → 退出 OMC 模式 |
+| `git-guardrails-claude-code` | user | git push/reset --hard/clean -f/branch -D → 强制确认 |
+| `omc-reference` | user | 委派子代理/OMC 工具/多代理编排/提交协议 |
+
+### P:3 — 领域专家（20 个）
+
+| Skill | 来源 | 触发场景 |
+|-------|------|---------|
+| `frontend-design` | user | "做网页/创建页面/设计组件/登录页/仪表盘/UI不好看" → 前端设计 |
+| `ui-ux-pro-max-skill` | project | "设计 UI/美化界面/配色方案/毛玻璃/新拟态/暗黑模式/字体搭配" |
+| `web-design-guidelines` | user | "审查 UI/检查无障碍/审计设计/UX 审查" → Vercel 规范审查 |
+| `playwright-skill` | user | "测试页面/自动化测试/E2E/截图/检查死链" → Playwright 测试 |
+| `github` | omc | "PR 状态/CI 结果/创建 issue/查看 CI 日志" → GitHub 操作 |
+| `local_ocr` | project | "读图/提取文字/OCR/图片转文字" → 本地 PaddleOCR |
+| `ollama_ai` | project | "用本地AI/跑Ollama/本地模型/离线 AI" → Ollama 助手 |
+| `multi-search-engine` | user | "搜索/查一下/找找/隐私搜索/WolframAlpha 计算" → 17 引擎 |
+| `xinpi-disclosure` | omc | "搜索公告/查找披露/A 股公告/年报下载" → 中国资本市场 |
+| `weather` | omc | "天气怎么样/今天会下雨吗/北京温度/周末预报" → 天气预报 |
+| `summarize` | omc | "总结这个/提取文稿/转录音频/概括文章" → URL/播客/文件总结 |
+| `openai-whisper` | omc | "转录/听写/语音转文字/whisper" → 本地音频转文字 |
+| `openai-image-gen` | omc | "生成一张图/画一个/创建插图/DALL-E" → AI 图片生成 |
+| `video-frames` | omc | "提取视频帧/截图/生成缩略图" → ffmpeg 帧提取 |
+| `discord` | omc | "发到 Discord/查 Discord 消息/Discord 频道" → Discord 操作 |
+| `notion` | omc | "创建 Notion 页面/加到数据库/搜 Notion/存到 Notion" |
+| `react-native-best-practices` | user | "RN 性能优化/React Native 卡顿/FlatList 优化/bundle 太大" |
+| `diffs` | extension | "生成 diff/对比差异/分享代码变更/查看版本差异" |
+| `feishu-doc` | extension | "在飞书写文档/读取飞书/更新飞书文档" → 飞书操作 |
+| `lobster` | extension | 多步骤工作流自动化，关键操作前人工批准 |
+| `skill-creator` | omc | "创建 skill/写个 skill/做个技能/审查 skill" → Skill 开发 |
+| `grill-with-docs` | user | "审查方案/审问设计/grill with docs/领域建模/统一术语" → 文档驱动设计 |
+
+### P:2 — 过程增强（23 个）
+
+| Skill | 来源 | 触发场景 |
+|-------|------|---------|
+| `omc-plan` | user | "做个计划/规划一下/设计方案/怎么入手" → 战略规划 |
+| `ultrawork` | user | "并行处理/一起做/同时处理/批量处理" → 并行执行引擎 |
+| `team` | user | "team/组队/多代理/分给多个代理" → 多代理协作 |
+| `tdd` | user | "TDD/测试驱动/先写测试/red-green-refactor" → 测试驱动开发 |
+| `triage` | user | "分诊/triage/创建 issue/分类 bug/manage issue workflow" |
+| `grill-me` | user | "审查方案/审问设计/grill me/挑战方案" → 设计压力测试 |
+| `diagnose` | user | "诊断 bug/调试错误/排查问题/性能回退" → 6 阶段调试流水线 |
+| `to-prd` | user | "生成 PRD/写需求文档/创建产品需求/总结讨论" → 对话→PRD |
+| `to-issues` | user | "拆成 issue/创建工单/分解任务/拆分工作" → 垂直切片 |
+| `ai-slop-cleaner` | user | "清理代码/去冗余/简化代码/deslop" → AI 冗余清理 |
+| `ai-slop-cleaner` | user | "清理代码/去冗余/简化代码/deslop" → AI 冗余清理 |
+| `clawdhub` | user | "搜索 skill/安装 skill/从 clawdhub 下载" → Skill 市场 |
+| `service_manager` | project | "服务面板/状态面板/skill 清单/启动服务/有哪些服务" → 统一管理 |
+| `project-auditor` | project | "自检/审计项目/全面检查/project audit" → 6 维度全量审计 |
+| `project-fixer` | user | "修复问题/自动修复/fix issues" → 读取审计报告 6 agent 并行修复 |
+| `code-splitter` | user | "拆分文件/大文件重构/提取模块" → 按行范围安全拆分 |
+| `py-security` | user | "安全检查/扫描安全漏洞/密钥泄露" → Python OWASP 检测修复 |
+| `py-code-health` | user | "清理死代码/移除未使用代码" → Python 死代码检测 |
+| `py-complexity` | user | "降低复杂度/简化函数" → Python 圈复杂度优化 |
+| `py-refactor` | user | "全面重构/Python 重构/代码现代化" → 5 子 skill 编排 |
+| `upgrading-react-native` | user | "升级 RN/RN 版本更新/升级 Expo SDK" → RN 升级 |
+| `react-native-brownfield-migration` | user | "迁移到 RN/原生转 React Native/brownfield 集成" → RN 迁移 |
+
+### P:1 — 后台支撑（9 个）
+
+| Skill | 来源 | 触发场景 |
+|-------|------|---------|
+| `debug` | user | "调试/哪里出错了/诊断一下" → OMC 诊断 |
+| `verify` | user | "验证一下/确认能用/验证修复" → 修改验证 |
+| `deepinit` | user | "初始化项目/生成项目文档/分析代码库结构" → 项目初始化 |
+| `setup` | user | "设置环境/安装配置/诊断环境/环境准备好了吗" → 环境管理 |
+| `skill` | user | "管理 skill/列出 skill/删除 skill/有哪些 skill" → Skill 管理 |
+| `hud` | user | "配置 HUD/改显示/切换显示模式" → HUD 配置 |
+| `project-session-manager` | user | "创建隔离环境/开 worktree/管理会话" → 隔离环境 |
+| `api_manager` | project | "API key/管理 API/查 API 用量/有哪些 API" → API 管理 |
+| `ww` | project | 秒应/miaoying/dandanyi 项目管家/代理协调/备份管理 |
+
+### 自动加载机制
+
+```
+新对话启动 → CLAUDE.md 加载 → Skill 注册表进入上下文
+  → 58 个 skill 全部可见 → 用户消息匹配 Use when 条件
+  → 对应 skill 自动激活 → 按 P:N 优先级裁决竞争
+```
+
+**关键规则**：
+1. 所有 58 个 skill 均已写入此注册表，新会话自动知晓全部能力
+2. 每个 skill 的 SKILL.md `description` 中包含具体 "Use when:" 触发条件
+3. 多个 skill 竞争时，高优先级 (P:5 > P:4 > P:3 > P:2 > P:1) 优先触发
+4. 同优先级按领域匹配精度裁决
+5. 新增 skill 时同步更新此注册表
+
+**快速查看**：
+```bash
+python -m projects.skills.service_manager          # 统一状态面板
+python -m projects.skills.service_manager --skills # JSON 格式完整清单
+```
+
+---
+
+## 🧠 知识自动沉淀机制 ⚠️ **2026-05-07 新增**
+
+> 讨论→决策→执行信号 的完整闭环中，AI 自动将讨论结果写入 `docs/knowledge/`。
+
+**触发条件**：用户发出执行信号——"开始开发"、"可以推进了"、"开干"、"没问题开始吧" 等。这意味着多轮讨论已完成、计划已敲定，此时此前的对话内容值得永久保存。
+
+**提取范围**：领域知识、架构决策、技术方案、新安装的 skill、用户纠正反馈。
+
+**不触发**：简单一问一答、单轮操作、未形成结论的讨论。
+
+**存储格式**：一个主题一个 .md 文件，`docs/knowledge/README.md` 维护索引。
+
+---
+
+## 📈 Stock Analyst 量化系统 ⚠️ **2026-06-07 新增**
+
+> **项目路径**: `C:\AI-Agent-Local\Stock\`
+> **版本**: v4.5
+> **核心定位**: A 股量化分析 + 个性化模型 + 自学习闭环
+
+### 核心文档（每次启动自动加载）⭐⭐⭐
+
+| 文档 | 位置 | 用途 |
+|------|------|------|
+| **系统架构文档** | `Stock/docs/architecture.md` | 完整架构、数据流、调用链、数据库、变更日志 |
+| **开发施工手册** | `Stock/docs/DEVELOPER_GUIDE.md` | 跨模块依赖、连带影响表、全局约定、统一工具库 API |
+| **新闻事件系统** | `Stock/docs/news.md` | 新闻管线数据流、LLM 输出规范、跨源去重 |
+| **Tushare API 手册** | `Stock/docs/tushare.md` | Tushare Pro 接口参数速查、调用示例、权限边界 |
+
+> **强制规则**：
+> - 🔴 **开发前**必须阅读 `DEVELOPER_GUIDE.md` — 先查 §7"统一工具库"看所需功能是否已有全局实现，再查"连带影响"表
+> - 🔴 **系统升级后**必须更新 `architecture.md` 的变更日志 + 已知问题
+> - 🔴 **新增模块**必须先查"统一工具库"，不要在模块内打补丁
+> - 🟡 **更新系统架构**后同步更新 `DEVELOPER_GUIDE.md` 全局约定
+> - 🟡 **诊断问题时**先读 `DEVELOPER_GUIDE.md` "常见补丁原因速查"
+> - 🟡 **调用 Tushare API** 前先查 `Stock/docs/tushare.md` — 确认接口权限、参数格式、调用限制
+
+### 全局禁止事项
+
+| 禁止行为 | 原因 | 替代方案 |
+|---------|------|---------|
+| ❌ 内联 NaN 守卫 (`isnan`/`nan_to_num`/`fillna`) | 14 处不一致 (回退值 0.0/0.5/50) | `safe_float()` / `sanitize_array()` |
+| ❌ 自写 700001.TI SQL 查询 | 14 处分散 + 5 种写法 | `get_benchmark_closes()` (模块级缓存) |
+| ❌ 日历日超额收益计算 | 影子训练系统性偏误 | `compute_excess_return()` (交易日计数) |
+| ❌ 2/3 参数 Progress 回调 | 3 种签名混用导致崩溃 | 4 参数标准 + `make_progress_adapter()` |
+| ❌ `startswith('6') → .SH` 内联 | 9 处复制 + 6 处 BJ 丢弃 bug | `normalize_ts_code()` |
+| ❌ 跳过 `stock_name_cache` 直接查 `scan_results` | 5 处绕过 | `get_stock_name()` |
+| ❌ 新增任何除权检测代码 | 系统已全局前复权 (`daily_kline.adj_factor`) | 直接用 `daily_kline` |
+| ❌ 修改现有系统代码只为 DNA 实验室接入 | 违反并行原则 | DNA 在独立 schema/API/前端 |
+
+### 开发工作流
+
+```
+接入 Stock 开发任务 →
+  第一步: 读 DEVELOPER_GUIDE.md §7 "统一工具库" — 确认无全局实现
+  第二步: 读 DEVELOPER_GUIDE.md 对应文件的"连带影响"表 → 注意上下游
+  第三步: 读 architecture.md 数据流章节 → 确认全链路影响
+  第四步: 读 CLAUDE.md 本节的"禁止事项" — 确认不踩红线
+  第五步: 开始编码
+```
+
+### 快速索引
+
+```
+系统架构:    Stock/docs/architecture.md       (v4.5, 2026-06-07)
+开发手册:    Stock/docs/DEVELOPER_GUIDE.md     (v2.0, 2026-06-07)
+新闻系统:    Stock/docs/news.md                (v2.1, 2026-06-07)
+Tushare API: Stock/docs/tushare.md             (8000积分 + A股分钟权限)
+DNA 实验室:  Stock/docs/PHASE_PLAN.md          (施工执行清单)
+DNA 服务:    Stock/backend/app/services/stock_dna/  (10 模块)
+DNA API:     Stock/backend/app/api/dna.py      (7 端点)
+P0 工具:     Stock/backend/app/utils/numpy_utils.py
+             Stock/backend/app/core/market_data.py
+             Stock/backend/app/core/progress.py
+             Stock/backend/app/utils/stock_code.py
+             Stock/backend/app/core/name_resolver.py
+前复权:      Stock/backend/scripts/resync_all_kline.py
+```

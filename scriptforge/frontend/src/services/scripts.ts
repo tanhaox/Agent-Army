@@ -1,22 +1,39 @@
 import api from '../lib/api';
 import type { Dialogue } from '../types';
 
+export interface DirectorRole {
+  role_type: 'anchor' | 'caller' | 'extra';
+  name: string;
+  position?: string;
+  function?: string;
+  persona_id?: string;
+  storyline?: string;
+  perspective?: string;
+  sort_order?: number;
+}
+
+export interface DirectorAct {
+  title: string;
+  task: string;
+  participants: string[];
+  sort_order?: number;
+}
+
 export interface GenerateParams {
   tone_id: string;
   persona_id: string;
-  guest_config: {
-    name?: string;
-    age_range?: string;
-    occupation?: string;
-    personality?: string;
-    core_issue: string;
-  };
+  guest_config: Record<string, unknown> | Record<string, unknown>[];
   emotion_curve?: string;
   strategy_mix?: string;
   hot_topic?: string;
   multi_version?: boolean;
   scene_type?: string;
   enable_caller_enhancement?: boolean;
+  topic?: string;
+  required_lines?: string[];
+  director_roles?: DirectorRole[];
+  director_acts?: DirectorAct[];
+  custom_tone?: string;
 }
 
 export interface ScriptVersionItem {
@@ -42,6 +59,7 @@ export interface ScriptResult {
   multi_version?: boolean;
   versions?: ScriptVersionItem[];
   recommended_version?: number;
+  degraded?: boolean;
 }
 
 export interface ScriptDetail {
@@ -79,8 +97,8 @@ export async function getScript(id: string): Promise<ScriptDetail> {
   return data;
 }
 
-export async function listScripts(skip = 0, limit = 20) {
-  const { data } = await api.get('/scripts/', { params: { skip, limit } });
+export async function listScripts(skip = 0, limit = 20, keyword?: string) {
+  const { data } = await api.get('/scripts/', { params: { skip, limit, keyword: keyword || undefined } });
   return data;
 }
 

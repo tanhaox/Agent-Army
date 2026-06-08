@@ -5,7 +5,10 @@ Each check is independent — one failure does not block others.
 """
 import asyncio
 import logging
+import os
+import shutil
 import time
+from pathlib import Path
 
 import httpx
 from sqlalchemy import text
@@ -26,22 +29,6 @@ async def check_database() -> dict:
         return {"status": "ok", "latency_ms": elapsed}
     except Exception as e:
         logger.warning("DB health check failed: %s", e)
-        return {"status": "error", "detail": str(e)[:200]}
-
-
-async def check_redis() -> dict:
-    """Verify Redis connectivity via ping."""
-    try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
-        start = time.monotonic()
-        await r.ping()
-        elapsed = round((time.monotonic() - start) * 1000)
-        await r.aclose()
-        return {"status": "ok", "latency_ms": elapsed}
-    except Exception as e:
-        logger.warning("Redis health check failed: %s", e)
         return {"status": "error", "detail": str(e)[:200]}
 
 
@@ -89,17 +76,36 @@ async def check_deepseek() -> dict:
         return {"status": "error", "detail": str(e)[:200]}
 
 
+async def get_disk_usage() -> dict:
+    """Return uploads/ directory size and disk free space."""
+    try:
+        uploads_dir = Path(os.getenv("UPLOAD_DIR", "uploads"))
+        total_bytes = sum(f.stat().st_size for f in uploads_dir.rglob("*") if f.is_file()) if uploads_dir.exists() else 0
+        disk = shutil.disk_usage(str(uploads_dir.resolve()) if uploads_dir.exists() else ".")
+        return {
+            "status": "ok",
+            "uploads_bytes": total_bytes,
+            "uploads_gb": round(total_bytes / (1024 ** 3), 2),
+            "disk_total_gb": round(disk.total / (1024 ** 3), 1),
+            "disk_used_gb": round(disk.used / (1024 ** 3), 1),
+            "disk_free_gb": round(disk.free / (1024 ** 3), 1),
+        }
+    except Exception as e:
+        logger.warning("Disk usage check failed: %s", e)
+        return {"status": "error", "detail": str(e)[:200]}
+
+
 async def get_health_status() -> dict:
     """Aggregate all health checks. Each check is independent."""
     results = await asyncio.gather(
         check_database(),
-        check_redis(),
         check_chromadb(),
         check_deepseek(),
+        get_disk_usage(),
         return_exceptions=True,
     )
 
-    check_names = ["database", "redis", "chromadb", "deepseek"]
+    check_names = ["database", "chromadb", "deepseek", "disk"]
     checks = {}
     for name, result in zip(check_names, results):
         if isinstance(result, Exception):
@@ -111,6 +117,6 @@ async def get_health_status() -> dict:
 
     return {
         "status": "ok" if all_ok else "degraded",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "checks": checks,
     }

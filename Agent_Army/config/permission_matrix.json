@@ -1,0 +1,54 @@
+{
+  "version": "2.0",
+  "permission_matrix": {
+    "investor": {
+      "can_call": ["commander"],
+      "description": "投资者只能调用总司令"
+    },
+    "commander": {
+      "can_call": [
+        "research_department",
+        "analysis_department",
+        "prediction_department",
+        "strategy_department",
+        "validation_department",
+        "monitoring_department",
+        "optimization_department",
+        "configuration_department"
+      ],
+      "description": "总司令可以调用任何部门"
+    },
+    "research_department": {
+      "can_call": ["commander", "research_department"],
+      "description": "研究部可以回调总司令和内部调用"
+    },
+    "analysis_department": {
+      "can_call": ["commander", "analysis_department"],
+      "description": "分析部可以回调总司令和内部调用"
+    },
+    "prediction_department": {
+      "can_call": ["commander", "prediction_department"],
+      "description": "预测部可以回调总司令和内部调用"
+    },
+    "strategy_department": {
+      "can_call": ["commander", "strategy_department"],
+      "description": "策略部可以回调总司令和内部调用"
+    },
+    "validation_department": {
+      "can_call": ["commander", "validation_department"],
+      "description": "验证部可以回调总司令和内部调用"
+    },
+    "monitoring_department": {
+      "can_call": ["commander", "monitoring_department"],
+      "description": "监控部可以回调总司令和内部调用"
+    },
+    "optimization_department": {
+      "can_call": ["commander", "optimization_department"],
+      "description": "优化部可以回调总司令和内部调用"
+    },
+    "configuration_department": {
+      "can_call": ["commander", "configuration_department"],
+      "description": "配置部可以回调总司令和内部调用"
+    }
+  }
+}

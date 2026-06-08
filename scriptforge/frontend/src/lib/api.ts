@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { reportRequestSuccess, reportRequestFailure } from '../hooks/useConnectionStatus';
 
 const api = axios.create({
   baseURL: '/api',
@@ -15,8 +16,18 @@ api.interceptors.request.use((config) => {
 });
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    reportRequestSuccess();
+    return res;
+  },
   (err) => {
+    // Network error (no response) → report failure for offline detection
+    if (!err.response) {
+      reportRequestFailure();
+    } else {
+      reportRequestSuccess(); // Server responded, it's online
+    }
+
     console.error('API Error:', err?.response?.data || err.message);
 
     if (err.response && err.response.status === 401) {

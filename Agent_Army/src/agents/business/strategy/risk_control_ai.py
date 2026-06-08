@@ -46,6 +46,8 @@ class RiskControlResult(BaseModel):
     risk_assessment: RiskAssessment
     risk_indicators: RiskIndicators
     risk_limits: RiskLimits
+    stop_loss_strategy: Dict[str, Any] = Field(default_factory=dict, description="止损策略")
+    risk_control_plan: List[str] = Field(default_factory=list, description="风险控制计划")
     suggestions: List[str] = Field(default_factory=list, description="风险控制建议")
 
 
@@ -107,10 +109,10 @@ class RiskControlAI(BusinessAgent):
 
         # 初始化基类
         super().__init__(
-            name="风险控制AI",
+            name="风控AI",
             role="风险控制专家",
             corps="战略军团",
-            analysis_type="风险控制",
+            analysis_type="risk_control",
             capabilities=default_capabilities,
             tools=tools,
             config=config
@@ -274,12 +276,32 @@ class RiskControlAI(BusinessAgent):
             risk_limits=risk_limits
         )
 
+        # 5. 止损策略（简化版本）
+        # 从price_data获取当前价格（如果有）
+        current_price = price_data[-1] if price_data else 50.0
+
+        stop_loss_strategy = {
+            "stop_loss_price": round(current_price * 0.92, 2),  # 止损价：当前价*0.92
+            "take_profit_price": round(current_price * 1.15, 2),  # 止盈价：当前价*1.15
+            "stop_loss_ratio": 0.08,  # 止损比例8%
+            "take_profit_ratio": 0.15  # 止盈比例15%
+        }
+
+        # 6. 风险控制计划
+        risk_control_plan = [
+            "严格执行止损策略",
+            "控制仓位在限额内",
+            "关注市场风险变化"
+        ]
+
         return RiskControlResult(
             stock_code=stock_code,
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             risk_assessment=risk_assessment,
             risk_indicators=risk_indicators,
             risk_limits=risk_limits,
+            stop_loss_strategy=stop_loss_strategy,
+            risk_control_plan=risk_control_plan,
             suggestions=suggestions
         )
 
@@ -672,3 +694,31 @@ class RiskControlAI(BusinessAgent):
             confidence -= 0.1
 
         return max(confidence, 0.3)  # 最低0.3
+
+
+# 便捷函数
+async def analyze_risk_control(
+    stock_code: str,
+    current_price: float,
+    position_cost: Optional[float] = None,
+    intended_buy_price: Optional[float] = None
+) -> AnalysisResult:
+    """
+    风控分析（便捷函数）
+
+    Args:
+        stock_code: 股票代码
+        current_price: 当前股价
+        position_cost: 持仓成本
+        intended_buy_price: 计划买入价
+
+    Returns:
+        分析结果
+    """
+    ai = RiskControlAI()
+    return await ai.analyze(
+        stock_code,
+        current_price=current_price,
+        position_cost=position_cost,
+        intended_buy_price=intended_buy_price
+    )

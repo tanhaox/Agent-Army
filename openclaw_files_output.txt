@@ -1,0 +1,1864 @@
+================================================================================
+OpenClaw Server Files
+================================================================================
+
+################################################################################
+# FILE: /root/.openclaw/workspace/agent_army/coordinator_agent.py
+################################################################################
+
+#!/usr/bin/env python3
+"""
+CoordinatorAgent - 投资决策协调器
+
+职责：
+1. 接收各分析层的输出（技术面、基本面、资金面、新闻面）
+2. 应用权重（当前为静态，后续可动态调整）
+3. 执行否决规则（财务造假、监管立案、周线破位等）
+4. 输出最终评分、推荐动作、仓位建议、理由
+
+版本：v0.2 (集成 ML 预测)
+"""
+
+from typing import Dict, Any, Optional
+
+class CoordinatorAgent:
+    def __init__(self, weights: Optional[Dict[str, float]] = None):
+        """
+        初始化协调器
+        :param weights: 各维度权重，如 {"technical": 0.4, "fundamental": 0.3, "capital": 0.2, "news": 0.1}
+        """
+        self.weights = weights or {
+            "technical": 0.40,
+            "fundamental": 0.30,
+            "capital": 0.20,
+            "news": 0.10
+        }
+
+    def coordinate(self,
+                  technical_result: Dict[str, Any],
+                  fundamental_result: Dict[str, Any],
+                  capital_result: Dict[str, Any],
+                  news_result: Dict[str, Any],
+                  kline_result: Optional[Dict[str, Any]] = None,
+                  rs_result: Optional[Dict[str, Any]] = None,
+                  ml_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        协调各层分析，生成最终投资建议
+        :param technical_result: 技术分析结果，应包含 'total_score' (0-10) 和 'recommendation'
+        :param fundamental_result: 基本面分析结果，应包含 'total_score' (0-10) 和 'recommendation'
+        :param capital_result: 资金面分析结果，应包含 'total_score' (0-10) 和 'recommendation'
+        :param news_result: 新闻面分析结果，应包含 'total_score' (0-10) 和 'recommendation'
+        :param kline_result: K线博弈分析结果（可选）
+        :param rs_result: 相对强度分析结果（可选）
+        :param ml_result: ML预测结果（可选），应包含 'direction' ('up'/'down'), 'confidence', 'accuracy'
+        :return: 综合结果字典
+        """
+        # 1. 执行否决检查（优先级最高）
+        veto = self._check_veto(technical_result, fundamental_result, capital_result, news_result)
+        if veto["triggered"]:
+            return {
+                "total_score": 0,
+                "recommendation": veto["action"],
+                "position_advice": "清仓",
+                "reasoning": veto["reason"],
+                "details": {"veto": veto},
+                "source": "CoordinatorAgent (VETO)"
+            }
+
+        # 2. 提取各层评分（若无评分字段则用推荐映射）
+        tech_score = self._extract_score(technical_result, "technical")
+        fund_score = self._extract_score(fundamental_result, "fundamental")
+        cap_score = self._extract_score(capital_result, "capital")
+        news_score = self._extract_score(news_result, "news")
+        kline_score = self._extract_score(kline_result, "kline_game") if kline_result else None
+        rs_score = self._extract_score(rs_result, "rs") if rs_result else None
+        ml_score = self._extract_ml_score(ml_result) if ml_result else None
+
+        # 3. 加权计算综合得分
+        total_score = (
+            tech_score * self.weights.get("technical", 0) +
+            fund_score * self.weights.get("fundamental", 0) +
+            cap_score * self.weights.get("capital", 0) +
+            news_score * self.weights.get("news", 0)
+        )
+
+        # 如果有K线博弈分析，加入权重
+        if kline_score is not None and "kline_game" in self.weights:
+            total_score += kline_score * self.weights["kline_game"]
+
+        if rs_score is not None and "rs" in self.weights:
+            total_score += rs_score * self.weights["rs"]
+
+        # ML预测作为调整项（不是独立权重，而是基于置信度的微调）
+        if ml_score is not None and "ml" in self.weights:
+            total_score += ml_score * self.weights["ml"]
+
+        # 4. 根据总分给出推荐和仓位建议
+        recommendation, position_advice = self._map_score_to_advice(total_score)
+
+        # 5. 生成简要理由
+        reasoning = self._build_reasoning(tech_score, fund_score, cap_score, news_score,
+                                          technical_result, fundamental_result,
+                                          kline_result, rs_result, ml_result)
+
+        return {
+            "total_score": round(total_score, 1),
+            "recommendation": recommendation,
+            "position_advice": position_advice,
+            "reasoning": reasoning,
+            "details": {
+                "scores": {
+                    "technical": tech_score,
+                    "fundamental": fund_score,
+                    "capital": cap_score,
+                    "news": news_score,
+                    "kline_game": kline_score,
+                    "rs": rs_score,
+                    "ml": ml_score
+                },
+                "weights": self.weights
+            },
+            "source": "CoordinatorAgent"
+        }
+
+    # ---------- 辅助方法 ----------
+    def _extract_ml_score(self, ml_result: Dict[str, Any]) -> Optional[float]:
+        """将 ML 预测结果转换为 0-10 评分
+
+        ML预测方向和置信度映射为评分：
+        - 上涨 + 高置信度 → 高分
+        - 下跌 + 高置信度 → 低分
+        - 低置信度 → 接近中性5.0
+
+        Returns:
+            0-10 评分，或 None（如果不可用）
+        """
+        if not ml_result:
+            return None
+
+        direction = ml_result.get('direction', 'unknown')
+        confidence = float(ml_result.get('confidence', 0))
+        accuracy = float(ml_result.get('accuracy', 0))
+
+        if direction == 'unknown' or confidence < 0.1:
+            return None
+
+        # 基于置信度的调整幅度（0.5~2.5分）
+        # 置信度 * 准确率衰减因子，避免过度依赖低准确率模型
+        adj = confidence * max(0.3, accuracy) * 5.0
+
+        if direction == 'up':
+            return 5.0 + adj
+        elif direction == 'down':
+            return 5.0 - adj
+        return None
+
+    def _extract_score(self, result: Dict[str, Any], layer: str) -> float:
+        """从各层结果中提取评分（0-10），若没有则根据推荐映射一个默认分"""
+        if "total_score" in result:
+            return min(max(result["total_score"], 0), 10)
+
+        # 若没有评分，根据 recommendation 字段估算（用于兼容旧版）
+        rec = result.get("recommendation", "").lower()
+        if "强烈推荐" in rec or "买入" in rec:
+            return 8.0
+        elif "推荐" in rec or "增持" in rec:
+            return 6.0
+        elif "持有" in rec or "中性" in rec:
+            return 5.0
+        elif "减持" in rec or "谨慎" in rec:
+            return 3.0
+        elif "卖出" in rec or "回避" in rec:
+            return 1.0
+        else:
+            # 默认中性
+            return 5.0
+
+    def _map_score_to_advice(self, score: float) -> tuple:
+        """根据综合得分映射推荐和仓位"""
+        if score >= 8.0:
+            return "强烈推荐买入", "80%-100%"
+        elif score >= 6.5:
+            return "推荐买入", "60%-80%"
+        elif score >= 5.0:
+            return "持有/观望", "30%-60%"
+        elif score >= 3.5:
+            return "减持/谨慎", "10%-30%"
+        else:
+            return "卖出/回避", "0%-10%"
+
+    def _build_reasoning(self, tech, fund, cap, news,
+                       tech_result, fund_result, kline_result=None, rs_result=None,
+                       ml_result=None) -> str:
+        """生成简短理由（可扩展）"""
+        parts = []
+        if tech >= 7:
+            parts.append("技术面表现强劲")
+        elif tech <= 3:
+            parts.append("技术面承压")
+        if fund >= 7:
+            parts.append("基本面优秀")
+        elif fund <= 3:
+            parts.append("基本面疲软")
+        if cap >= 7:
+            parts.append("资金面流入积极")
+        elif cap <= 3:
+            parts.append("资金面流出")
+        if news >= 7:
+            parts.append("新闻面偏多")
+        elif news <= 3:
+            parts.append("新闻面偏空")
+
+        # K线博弈分析（新增）
+        if kline_result:
+            kline_details = kline_result.get('details', {})
+            kline_trend = kline_details.get('短期预测', '')
+            kline_advantage = kline_details.get('博弈优势方', '')
+            if kline_trend == '看涨':
+                parts.append(f"K线博弈看涨（{kline_advantage}）")
+            elif kline_trend == '看跌':
+                parts.append(f"K线博弈看跌（{kline_advantage}）")
+            elif kline_trend in ['偏涨', '偏跌']:
+                parts.append(f"K线博弈{kline_trend}（{kline_advantage}）")
+
+        # 相对强度分析（新增）
+        if rs_result:
+            rs_details = rs_result.get('details', {})
+            rs_grade = rs_details.get('strength_grade', '')
+            rs_rec = rs_result.get('recommendation', '')
+            if rs_grade == 'strong':
+                parts.append(f"相对强度强势（{rs_rec}）")
+            elif rs_grade == 'weak':
+                parts.append(f"相对强度弱势（{rs_rec}）")
+
+        # ML预测信号
+        if ml_result and ml_result.get('direction', 'unknown') != 'unknown':
+            direction = ml_result['direction']
+            confidence = ml_result.get('confidence', 0)
+            accuracy = ml_result.get('accuracy', 0)
+            if direction == 'up':
+                parts.append(f"ML预测上涨（置信度{confidence:.0%}，历史准确率{accuracy:.0%}）")
+            elif direction == 'down':
+                parts.append(f"ML预测下跌（置信度{confidence:.0%}，历史准确率{accuracy:.0%}）")
+
+        if not parts:
+            parts.append("各维度信号不显著，建议观望")
+
+        # 补充技术/基本面具体说明（可选）
+        tech_trend = tech_result.get("trend", "")
+        if tech_trend:
+            parts.append(f"技术趋势: {tech_trend}")
+        fund_rec = fund_result.get("recommendation", "")
+        if fund_rec:
+            parts.append(f"基本面建议: {fund_rec}")
+
+        return "；".join(parts)
+
+    def _check_veto(self, tech, fund, cap, news) -> Dict[str, Any]:
+        """
+        否决权检查（初期实现几个硬规则）
+        返回 {"triggered": bool, "action": str, "reason": str}
+        """
+        # 示例规则1：若基本面分析中有财务造假嫌疑
+        if fund.get("fraud_suspected", False):
+            return {
+                "triggered": True,
+                "action": "强制卖出",
+                "reason": "基本面检测到财务造假嫌疑，立即清仓"
+            }
+
+        # 示例规则2：若新闻面分析中有监管立案调查
+        if news.get("regulatory_investigation", False):
+            return {
+                "triggered": True,
+                "action": "强制清仓",
+                "reason": "监管立案调查，强制清仓回避"
+            }
+
+        # 示例规则3：若技术面周线级别破位（需要技术分析结果中提供）
+        if tech.get("weekly_breakdown", False):
+            return {
+                "triggered": True,
+                "action": "减仓至观察仓",
+                "reason": "周线级别破位，建议减仓至观察仓位（≤10%）"
+            }
+
+        # 可继续添加其他规则...
+
+        return {"triggered": False, "action": None, "reason": None}
+
+
+# ---------- 使用示例 ----------
+if __name__ == "__main__":
+    # 模拟各层分析结果（实际应从各 Agent 获取）
+    tech_result = {
+        "total_score": 7.2,
+        "trend": "上升趋势",
+        "recommendation": "推荐买入",
+        "weekly_breakdown": False
+    }
+    fund_result = {
+        "total_score": 6.5,
+        "recommendation": "推荐买入",
+        "fraud_suspected": False
+    }
+    capital_result = {
+        "total_score": 5.0,
+        "recommendation": "中性"
+    }
+    news_result = {
+        "total_score": 8.0,
+        "recommendation": "利好",
+        "regulatory_investigation": False
+    }
+
+    agent = CoordinatorAgent()
+    decision = agent.coordinate(tech_result, fund_result, capital_result, news_result)
+    print("=== 最终决策 ===")
+    for k, v in decision.items():
+        print(f"{k}: {v}")
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/scripts/monitor.py
+################################################################################
+
+#!/usr/bin/env python3
+"""
+monitor.py - 盘中监控脚本
+扫描持仓股和关注池，检测异常/机会信号，生成预警
+"""
+
+import sys
+import time
+import json
+import pandas as pd
+from datetime import datetime
+from typing import Dict, List
+
+# 添加项目路径
+sys.path.insert(0, '/root/.openclaw/workspace')
+sys.path.insert(0, '/root/.openclaw/workspace/agent_army')
+
+from db_manager import get_db_manager
+from data_fetcher_duckdb import get_data_fetcher
+from agent_army.technical_analysis_agent import TechnicalAnalysisAgent
+
+# 可选导入
+try:
+    from scripts.news_sentiment_analyzer import NewsSentimentAnalyzer
+    HAS_NEWS_ANALYZER = True
+except ImportError:
+    HAS_NEWS_ANALYZER = False
+    print("⚠️ NewsSentimentAnalyzer 未找到，将跳过新闻分析")
+
+try:
+    from scripts.capital_flow_analyzer import CapitalFlowAnalyzer
+    HAS_CAPITAL_ANALYZER = True
+except ImportError:
+    try:
+        from agent_army.capital_flow_analyzer import CapitalFlowAnalyzer
+        HAS_CAPITAL_ANALYZER = True
+    except ImportError:
+        HAS_CAPITAL_ANALYZER = False
+        print("⚠️ CapitalFlowAnalyzer 未找到，将跳过资金面分析")
+
+try:
+    from event_impact_analyzer import EventImpactAnalyzer
+    HAS_EVENT_ANALYZER = True
+except ImportError:
+    HAS_EVENT_ANALYZER = False
+    print("⚠️ EventImpactAnalyzer 未找到，将跳过事件分析")
+
+try:
+    from market_sentiment_analyzer import MarketSentimentAnalyzer
+    HAS_MARKET_SENTIMENT = True
+except ImportError:
+    HAS_MARKET_SENTIMENT = False
+    print("⚠️ MarketSentimentAnalyzer 未找到，将跳过市场情绪监控")
+
+try:
+    from market_technical_analyzer import MarketTechnicalAnalyzer
+    HAS_MARKET_TECHNICAL = True
+except ImportError:
+    HAS_MARKET_TECHNICAL = False
+    print("⚠️ MarketTechnicalAnalyzer 未找到，将跳过大盘技术监控")
+
+try:
+    from capital_flow_v2_analyzer import CapitalFlowV2Analyzer
+    HAS_CAPITAL_FLOW_V2 = True
+except ImportError:
+    HAS_CAPITAL_FLOW_V2 = False
+    print("⚠️ CapitalFlowV2Analyzer 未找到，将跳过资金面监控")
+
+# ========== 配置 ==========
+ALERT_LEVELS = {
+    'high': 3,    # 严重预警（如放量破位）
+    'medium': 2,  # 中等信号（如MACD金叉）
+    'low': 1      # 一般提示（如RSI超卖）
+}
+
+# 止损预警配置（基于回测验证: 5%止损 Sharpe最优）
+STOP_LOSS_CONFIG = {
+    'enabled': True,
+    'threshold': 0.95,     # 跌破成本价95%触发预警
+    'apply_to_holdings': True,
+    'apply_to_watchlist': True,  # 关注池中也提示参考止损
+}
+
+class Monitor:
+    def __init__(self):
+        self.db = get_db_manager()
+        self.data_fetcher = get_data_fetcher()
+        self.news_analyzer = NewsSentimentAnalyzer() if HAS_NEWS_ANALYZER else None
+        self.capital_analyzer = CapitalFlowAnalyzer() if HAS_CAPITAL_ANALYZER else None
+        self.event_analyzer = EventImpactAnalyzer() if HAS_EVENT_ANALYZER else None
+
+    def get_watch_symbols(self) -> List[Dict]:
+        """获取需要监控的股票列表（持仓 + 关注池，含成本价）"""
+        conn = self.db.get_conn('holdings')
+        # 当前持仓（含成本价）
+        holdings = conn.execute("""
+            SELECT code, name, shares, cost_price
+            FROM current_holdings
+        """).fetchdf()
+        # 关注池
+        watchlist = conn.execute("""
+            SELECT stock_code as code, stock_name as name FROM watchlist
+        """).fetchdf()
+        # 合并去重
+        if holdings.empty and watchlist.empty:
+            return []
+        if holdings.empty:
+            all_stocks = watchlist[['code', 'name']].copy()
+            all_stocks['cost_price'] = None
+        elif watchlist.empty:
+            all_stocks = holdings[['code', 'name', 'cost_price']].copy()
+        else:
+            h = holdings[['code', 'name', 'cost_price']].copy()
+            w = watchlist[['code', 'name']].copy()
+            w['cost_price'] = None
+            all_stocks = pd.concat([h, w], ignore_index=True)
+        all_stocks = all_stocks.drop_duplicates(subset='code')
+        return all_stocks.to_dict('records')
+
+    def check_technical(self, stock_code: str, stock_name: str) -> List[Dict]:
+        """技术面检查，返回信号列表"""
+        signals = []
+        try:
+            # 获取最近3个月日K线
+            df = self.data_fetcher.get_daily_kline(stock_code,
+                (datetime.now() - pd.Timedelta(days=90)).strftime('%Y-%m-%d'),
+                datetime.now().strftime('%Y-%m-%d'))
+            if df.empty:
+                return signals
+
+            # 调用技术分析Agent
+            agent = TechnicalAnalysisAgent(stock_data={'df': df})
+            result = agent.analyze()
+
+            # 提取关键指标
+            rsi = result.get('indicators', {}).get('RSI', 50)
+            macd = result.get('indicators', {}).get('MACD', 0)
+            trend = result.get('trend', 'sideways')
+
+            # RSI 超买超卖
+            if rsi > 70:
+                signals.append({'level': 'medium', 'type': '技术超买',
+                    'msg': f'{stock_name}({stock_code}) RSI={rsi:.1f}，进入超买区'})
+            elif rsi < 30:
+                signals.append({'level': 'medium', 'type': '技术超卖',
+                    'msg': f'{stock_name}({stock_code}) RSI={rsi:.1f}，进入超卖区'})
+
+            # MACD 金叉死叉（简单判断：当日MACD>0且前日<=0）
+            if len(df) >= 2:
+                macd_prev = result.get('indicators_prev', {}).get('MACD', 0)
+                if macd > 0 and macd_prev <= 0:
+                    signals.append({'level': 'medium', 'type': 'MACD金叉',
+                        'msg': f'{stock_name}({stock_code}) MACD金叉，短期看涨'})
+                elif macd < 0 and macd_prev >= 0:
+                    signals.append({'level': 'medium', 'type': 'MACD死叉',
+                        'msg': f'{stock_name}({stock_code}) MACD死叉，短期看跌'})
+
+            # 趋势
+            if trend == 'up':
+                signals.append({'level': 'low', 'type': '上升趋势',
+                    'msg': f'{stock_name}({stock_code}) 处于上升趋势'})
+            elif trend == 'down':
+                signals.append({'level': 'high', 'type': '下降趋势',
+                    'msg': f'{stock_name}({stock_code}) 处于下降趋势，注意风险'})
+
+            # 换手率异动检测
+            if 'Turnover' in df.columns and df['Turnover'].notna().any():
+                turnover = df['Turnover'].dropna()
+                if len(turnover) >= 20:
+                    turnover_last = float(turnover.iloc[-1])
+                    turnover_ma20 = float(turnover.tail(20).mean())
+                    if turnover_ma20 > 0:
+                        turnover_ratio = turnover_last / turnover_ma20
+                        if turnover_ratio > 2:
+                            signals.append({
+                                'level': 'high',
+                                'type': '换手率异常放大',
+                                'msg': f'{stock_name}({stock_code}) 换手率异常放大(当前{turnover_last:.2f}%, '
+                                       f'20日均{turnover_ma20:.2f}%, 放大{turnover_ratio:.1f}倍), 注意主力动向'
+                            })
+                        elif turnover_ratio > 1.5:
+                            signals.append({
+                                'level': 'medium',
+                                'type': '换手率放大',
+                                'msg': f'{stock_name}({stock_code}) 换手率放大(当前{turnover_last:.2f}%, '
+                                       f'20日均{turnover_ma20:.2f}%, 放大{turnover_ratio:.1f}倍)'
+                            })
+                        elif turnover_ratio < 0.3:
+                            signals.append({
+                                'level': 'low',
+                                'type': '换手率极低',
+                                'msg': f'{stock_name}({stock_code}) 换手率极低(当前{turnover_last:.2f}%, '
+                                       f'20日均{turnover_ma20:.2f}%, 仅{turnover_ratio:.1f}倍), 交易冷清'
+                            })
+
+        except Exception as e:
+            print(f"技术分析失败 {stock_code}: {e}")
+        return signals
+
+    def check_capital(self, stock_code: str, stock_name: str) -> List[Dict]:
+        """资金面检查（主力资金 + 龙虎榜 + 北向资金）"""
+        signals = []
+        if not self.capital_analyzer:
+            return signals
+        try:
+            # 调用资金面分析器
+            capital_result = self.capital_analyzer.analyze(stock_code)
+            if capital_result:
+                # 主力净流入
+                inflow = capital_result.get('main_net_inflow', 0)
+                if inflow > 1e7:  # 大于1000万
+                    signals.append({'level': 'medium', 'type': '主力大幅流入',
+                        'msg': f'{stock_name}({stock_code}) 主力净流入{inflow/1e4:.0f}万'})
+                elif inflow < -1e7:
+                    signals.append({'level': 'high', 'type': '主力大幅流出',
+                        'msg': f'{stock_name}({stock_code}) 主力净流出{-inflow/1e4:.0f}万'})
+
+                # 龙虎榜机构净买入预警
+                lhb_score = capital_result.get('lhb_score', 0)
+                if lhb_score > 0:
+                    lhb_details = [d for d in capital_result.get('details', []) if '龙虎榜' in d]
+                    detail_msg = lhb_details[0] if lhb_details else '龙虎榜机构净买入'
+                    signals.append({
+                        'level': 'medium',
+                        'type': '龙虎榜机构买入',
+                        'msg': f'{stock_name}({stock_code}) {detail_msg}，关注短期异动'
+                    })
+
+                # 北向资金评分
+                north_score = capital_result.get('north_score', 0)
+                if north_score < -0.5:
+                    north_details = [d for d in capital_result.get('details', []) if '北向' in d and '流出' in d]
+                    if north_details:
+                        signals.append({
+                            'level': 'high',
+                            'type': '北向资金流出',
+                            'msg': f'{stock_name}({stock_code}) {north_details[0]}，注意外资减仓风险'
+                        })
+        except Exception as e:
+            print(f"资金面分析失败 {stock_code}: {e}")
+
+        # 独立的北向连续流出检测
+        try:
+            code = self.data_fetcher.normalize_stock_code(stock_code)
+            end = datetime.now().strftime('%Y-%m-%d')
+            start = (datetime.now() - pd.Timedelta(days=10)).strftime('%Y-%m-%d')
+            north_df = self.data_fetcher.get_north_flow(code, start, end)
+            if north_df is not None and not north_df.empty and len(north_df) >= 3:
+                north_df = north_df.sort_values('trade_date', ascending=False).head(3)
+                negative_days = sum(1 for v in north_df['net_buy_amount'].values if v < 0)
+                if negative_days >= 3:
+                    total_out = abs(north_df['net_buy_amount'].sum())
+                    signals.append({
+                        'level': 'high',
+                        'type': '北向连续流出',
+                        'msg': f'{stock_name}({stock_code}) 北向资金连续3日净流出，注意外资减仓风险'
+                    })
+        except Exception:
+            pass  # 北向数据不可用时静默跳过
+
+        return signals
+
+    def check_news(self, stock_code: str, stock_name: str) -> List[Dict]:
+        """新闻情感检查（从 market_data.db 读取近1天预存新闻）"""
+        signals = []
+        try:
+            df = self.data_fetcher.get_stock_news(stock_code, days=1)
+            if df is None or df.empty:
+                return signals
+
+            avg = df['sentiment_score'].mean()
+            news_count = len(df)
+
+            if avg < -0.4:
+                signals.append({'level': 'medium', 'type': '新闻利空',
+                    'msg': f'{stock_name}({stock_code}) 近期新闻偏负面(avg={avg:.2f}, {news_count}条)'})
+            elif avg > 0.4:
+                signals.append({'level': 'low', 'type': '新闻利多',
+                    'msg': f'{stock_name}({stock_code}) 近期新闻偏正面(avg={avg:.2f}, {news_count}条)'})
+        except Exception as e:
+            print(f"新闻分析失败 {stock_code}: {e}")
+        return signals
+
+    def check_events(self, stock_code: str, stock_name: str) -> List[Dict]:
+        """事件驱动检查（近期重大事件 + 预期差信号）"""
+        signals = []
+        if not self.event_analyzer:
+            return signals
+        try:
+            result = self.event_analyzer.analyze(stock_code)
+            score = result.get('total_score', 5.0)
+
+            # 预期差信号
+            for sig in result.get('surprise_signals', []):
+                direction = '超预期' if sig['direction'] == 'beat' else '不及预期'
+                level = 'medium' if sig['direction'] == 'beat' else 'high'
+                signals.append({
+                    'level': level,
+                    'type': f'业绩{direction}',
+                    'msg': f'{stock_name}({stock_code}) {sig["metric"]}{direction}{sig["surprise_pct"]:+.1f}%'
+                })
+
+            # 近期重大事件
+            for evt in result.get('recent_events', []):
+                evt_type = evt.get('event_type', '')
+                if evt_type in ('lockup_expire', 'insider_sell'):
+                    signals.append({
+                        'level': 'high',
+                        'type': evt['event_title'],
+                        'msg': f'{stock_name}({stock_code}) 近期{evt["event_title"]}: {evt.get("event_detail", "")}'
+                    })
+                elif evt_type in ('dividend', 'share_buyback', 'insider_buy'):
+                    signals.append({
+                        'level': 'low',
+                        'type': evt['event_title'],
+                        'msg': f'{stock_name}({stock_code}) 近期{evt["event_title"]}: {evt.get("event_detail", "")}'
+                    })
+
+            # 未来事件预警
+            for evt in result.get('upcoming_events', []):
+                evt_type = evt.get('event_type', '')
+                if evt_type in ('lockup_expire',):
+                    signals.append({
+                        'level': 'medium',
+                        'type': '解禁预告',
+                        'msg': f'{stock_name}({stock_code}) 即将{evt["event_title"]}({evt["event_date"]})'
+                    })
+                elif evt_type == 'earnings_release':
+                    signals.append({
+                        'level': 'low',
+                        'type': '财报预告',
+                        'msg': f'{stock_name}({stock_code}) 将于{evt["event_date"]}披露财报'
+                    })
+        except Exception as e:
+            print(f"事件分析失败 {stock_code}: {e}")
+        return signals
+
+    def check_stop_loss(self, stock_code: str, stock_name: str,
+                        cost_price: float = None) -> List[Dict]:
+        """止损预警：检测是否跌破成本价95%（基于回测验证的5%止损阈值）"""
+        signals = []
+        if not STOP_LOSS_CONFIG['enabled']:
+            return signals
+        if cost_price is None or cost_price <= 0:
+            return signals
+        try:
+            df = self.data_fetcher.get_daily_kline(stock_code,
+                (datetime.now() - pd.Timedelta(days=5)).strftime('%Y-%m-%d'),
+                datetime.now().strftime('%Y-%m-%d'))
+            if df.empty:
+                return signals
+            current_price = float(df['close'].iloc[-1] if 'close' in df.columns else df['Close'].iloc[-1])
+            loss_pct = (current_price / cost_price - 1) * 100
+            if current_price < cost_price * STOP_LOSS_CONFIG['threshold']:
+                signals.append({
+                    'level': 'high',
+                    'type': '建议止损',
+                    'msg': f'{stock_name}({stock_code}) 当前价{current_price:.2f}, '
+                           f'成本价{cost_price:.2f}, 跌幅{loss_pct:.1f}%, '
+                           f'已跌破{STOP_LOSS_CONFIG["threshold"]:.0%}止损线，建议止损'
+                })
+            elif current_price < cost_price * 0.97:
+                signals.append({
+                    'level': 'medium',
+                    'type': '接近止损线',
+                    'msg': f'{stock_name}({stock_code}) 当前价{current_price:.2f}, '
+                           f'成本价{cost_price:.2f}, 跌幅{loss_pct:.1f}%, 接近止损线'
+                })
+        except Exception as e:
+            print(f"止损检查失败 {stock_code}: {e}")
+        return signals
+
+    def check_price_limit(self, stock_code: str, stock_name: str) -> List[Dict]:
+        """涨跌停预警：检测是否接近涨停/跌停价格"""
+        signals = []
+        try:
+            # 获取涨跌停价格
+            conn_md = self.db.get_conn('market_data')
+            limit_df = conn_md.execute(f"""
+                SELECT up_limit, down_limit FROM stk_limit
+                WHERE ts_code = '{stock_code}'
+                ORDER BY trade_date DESC LIMIT 1
+            """).fetchdf()
+            if limit_df.empty:
+                return signals
+
+            up_limit = float(limit_df.iloc[0]['up_limit']) if pd.notna(limit_df.iloc[0]['up_limit']) else None
+            down_limit = float(limit_df.iloc[0]['down_limit']) if pd.notna(limit_df.iloc[0]['down_limit']) else None
+
+            if up_limit is None and down_limit is None:
+                return signals
+
+            # 获取当前价格
+            df = self.data_fetcher.get_daily_kline(stock_code,
+                (datetime.now() - pd.Timedelta(days=5)).strftime('%Y-%m-%d'),
+                datetime.now().strftime('%Y-%m-%d'))
+            if df.empty:
+                return signals
+
+            current_price = float(df['close'].iloc[-1])
+
+            # 接近涨停（>98%）
+            if up_limit and up_limit > 0:
+                ratio_up = current_price / up_limit
+                if ratio_up >= 0.98:
+                    signals.append({
+                        'level': 'medium',
+                        'type': '接近涨停',
+                        'msg': f'{stock_name}({stock_code}) 当前价{current_price:.2f}, '
+                               f'涨停价{up_limit:.2f}, 接近度{ratio_up:.1%}'
+                    })
+
+            # 接近跌停（<102%）
+            if down_limit and down_limit > 0:
+                ratio_down = current_price / down_limit
+                if ratio_down <= 1.02:
+                    signals.append({
+                        'level': 'high',
+                        'type': '接近跌停',
+                        'msg': f'{stock_name}({stock_code}) 当前价{current_price:.2f}, '
+                               f'跌停价{down_limit:.2f}, 接近度{ratio_down:.1%}'
+                    })
+        except Exception as e:
+            print(f"涨跌停检查失败 {stock_code}: {e}")
+        return signals
+
+    def save_alert(self, stock_code: str, alert_type: str, level: str, message: str):
+        """将预警写入数据库"""
+        conn = self.db.get_conn('system')
+        # 获取下一个id
+        max_id = conn.execute("SELECT COALESCE(MAX(id), 0) FROM alerts").fetchone()[0]
+        next_id = max_id + 1
+        conn.execute("""
+            INSERT INTO alerts (id, alert_time, stock_code, category, level, message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [next_id, datetime.now(), stock_code, alert_type, level, message, datetime.now()])
+
+    def run_once(self):
+        """执行一次完整监控"""
+        stocks = self.get_watch_symbols()
+        if not stocks:
+            print(f"{datetime.now()} 无监控股票")
+            return
+
+        print(f"{datetime.now()} 开始监控 {len(stocks)} 只股票")
+        for stock in stocks:
+            code = stock['code']
+            name = stock['name']
+            cost_price = stock.get('cost_price')
+            # 综合各维度信号
+            all_signals = []
+            all_signals.extend(self.check_technical(code, name))
+            all_signals.extend(self.check_capital(code, name))
+            all_signals.extend(self.check_news(code, name))
+            all_signals.extend(self.check_events(code, name))
+            # 止损预警（持仓股或有成本价的关注股）
+            if cost_price:
+                all_signals.extend(self.check_stop_loss(code, name, cost_price))
+            # 涨跌停预警
+            all_signals.extend(self.check_price_limit(code, name))
+            # 保存预警
+            for sig in all_signals:
+                self.save_alert(code, sig['type'], sig['level'], sig['msg'])
+                # 同时输出到控制台
+                print(f"[{sig['level'].upper()}] {sig['msg']}")
+
+        # 市场情绪极端预警
+        if HAS_MARKET_SENTIMENT:
+            try:
+                sentiment = MarketSentimentAnalyzer().get_latest_sentiment()
+                if sentiment:
+                    composite = float(sentiment.get('composite_index', 50))
+                    if composite < 20 or composite > 80:
+                        level_str = '极度恐慌' if composite < 20 else '极度乐观'
+                        self.save_alert('MARKET', '市场情绪极端', 'medium',
+                            f"综合情绪指数 {composite:.1f}，处于{level_str}区间，注意风险")
+                        print(f"[MEDIUM] 市场情绪极端: 综合指数 {composite:.1f}（{level_str}），注意风险")
+            except Exception as e:
+                print(f"市场情绪检查失败: {e}")
+
+        # 大盘破位预警
+        if HAS_MARKET_TECHNICAL:
+            try:
+                mt = MarketTechnicalAnalyzer()
+                sr = mt.support_resistance()
+                if sr:
+                    current = sr.get('current_price', 0)
+                    strong_support = sr.get('strong_support', 0)
+                    strong_resistance = sr.get('strong_resistance', 0)
+                    if strong_support > 0 and current < strong_support:
+                        self.save_alert('MARKET', '大盘破位', 'high',
+                            f"上证指数当前{current:.1f}跌破长期支撑位{strong_support:.1f}，注意系统性风险")
+                        print(f"[HIGH] 大盘跌破长期支撑位: 当前{current:.1f} < 支撑{strong_support:.1f}")
+                    elif strong_resistance > 0 and current > strong_resistance:
+                        self.save_alert('MARKET', '大盘突破', 'medium',
+                            f"上证指数当前{current:.1f}突破长期阻力位{strong_resistance:.1f}，可能开启上涨趋势")
+                        print(f"[MEDIUM] 大盘突破长期阻力位: 当前{current:.1f} > 阻力{strong_resistance:.1f}")
+            except Exception as e:
+                print(f"大盘技术监控失败: {e}")
+
+        # 资金面极端预警
+        if HAS_CAPITAL_FLOW_V2:
+            try:
+                cf = CapitalFlowV2Analyzer()
+                score = cf.calculate_score()
+                etf_5d = score.get('etf_flow_5d', 0) / 1e4  # 亿元
+                corp_5d = score.get('corp_net_5d', 0) / 1e4  # 亿元
+                if etf_5d > 800:
+                    self.save_alert('CAPITAL', 'ETF资金大幅流入', 'medium',
+                        f"ETF近5日净流入{etf_5d:.0f}亿元，市场情绪亢奋，注意短期过热风险")
+                    print(f"[MEDIUM] ETF资金大幅流入: 近5日净流入{etf_5d:.0f}亿元")
+                if corp_5d < -100:
+                    self.save_alert('CAPITAL', '产业资本大幅减持', 'medium',
+                        f"产业资本近5日净减持{abs(corp_5d):.0f}亿元，警惕股东套现")
+                    print(f"[MEDIUM] 产业资本大幅减持: 近5日净减持{abs(corp_5d):.0f}亿元")
+            except Exception as e:
+                print(f"资金面监控失败: {e}")
+
+        # 宏观环境预警
+        try:
+            from macro_analyzer import MacroAnalyzer
+            _macro = MacroAnalyzer()
+            _macro_result = _macro.get_latest_macro_score()
+            _macro_score = _macro_result.get('total_score', 5.0)
+            if _macro_score < 3.0:
+                self.save_alert('MACRO', '宏观环境恶化', 'high',
+                    f"宏观经济评分{_macro_score}/10，{_macro_result['comment']}")
+                print(f"[HIGH] 宏观环境恶化: 评分{_macro_score}/10，{_macro_result['comment']}")
+            elif _macro_score > 8.0:
+                self.save_alert('MACRO', '宏观环境偏暖', 'medium',
+                    f"宏观经济评分{_macro_score}/10，市场风险偏好可能提升")
+                print(f"[MEDIUM] 宏观环境偏暖: 评分{_macro_score}/10")
+        except Exception as e:
+            print(f"宏观监控失败: {e}")
+
+        print("监控完成")
+
+if __name__ == "__main__":
+    from agent_army.data_fetcher_duckdb import get_data_fetcher as _gdf
+    from datetime import datetime as _dt
+    _today = _dt.now().strftime('%Y-%m-%d')
+    if not _gdf().is_trading_day(_today):
+        print(f"今日 {_today} 非交易日，监控脚本退出")
+        sys.exit(0)
+    monitor = Monitor()
+    monitor.run_once()
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/scripts/scanner.py
+################################################################################
+
+#!/usr/bin/env python3
+"""
+全市场机会扫描器 - 每日盘后发现主板潜在机会股
+
+过滤规则：
+- 只关注上证/深证主板（600/601/603/000/001/002）
+- 排除 ST/*ST/退市/停牌/新股(<60天)/创业板/科创板/北交所/ETF
+
+策略评分（技术6分 + 基本面4分，满分 10 分）：
+1. 突破20日高点（放量突破）
+2. 短期强势（20日涨幅 > 5%）
+3. 底部放量（低价位区间 + 倍量）
+4. 超卖反弹（RSI14 < 30）
+5. 相对强度（20日涨幅 > 上证同期）
+6. 主力资金净流入（量价关系代理）
+
+基本面评分（0-4分）：
+7. ROE >= 20%: +2分, >= 15%: +1分
+8. 营收增长 >= 50%: +2分, >= 20%: +1分
+
+输出：前20只得分最高的股票
+"""
+
+import os
+import sys
+import json
+import time
+import argparse
+import traceback
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+
+# ===================== 自动加入关注池配置 =====================
+AUTO_ADD_CONFIG = {
+    'enabled': True,
+    'min_score': 4,           # 最低总分（回测验证: score>=4 Sharpe=1.17）
+    'max_rank': 10,           # 仅加入前 N 名
+    'avoid_duplicates': True, # 避免重复（已持仓/已关注跳过）
+    'add_reason': '自动扫描机会股'
+}
+
+WORKSPACE = '/root/.openclaw/workspace'
+sys.path.insert(0, WORKSPACE)
+sys.path.insert(0, os.path.join(WORKSPACE, 'agent_army'))
+
+DB_PATH = os.path.join(WORKSPACE, 'data', 'market_data.db')
+SYSTEM_DB = os.path.join(WORKSPACE, 'data', 'system.db')
+LOG_DIR = os.path.join(WORKSPACE, 'logs')
+
+NAME_MAP_PATH = os.path.join(WORKSPACE, 'data', 'stock_name_map.json')
+STOCK_POOL_CACHE = os.path.join(WORKSPACE, 'data', 'stock_pool_cache.json')
+FUNDAMENTALS_CACHE = os.path.join(WORKSPACE, 'data', 'fundamentals_cache.json')
+
+
+# ===================== 股票池过滤 =====================
+
+def is_main_board(code):
+    """判断是否为主板股票代码"""
+    c = code.replace('.SH', '').replace('.SZ', '').replace('.SS', '')
+    if len(c) != 6:
+        return False
+    if c[:3] in ('600', '601', '603', '000', '001', '002'):
+        return True
+    return False
+
+
+def is_excluded_name(name):
+    """判断是否为ST/退市股"""
+    if not name:
+        return True
+    name_upper = name.upper()
+    if 'ST' in name_upper or '退' in name:
+        return True
+    return False
+
+
+def is_etf(code):
+    """判断是否为ETF/基金/债券/REITs"""
+    c = code.replace('.SH', '').replace('.SZ', '').replace('.SS', '')
+    # ETF/基金
+    if c[:2] in ('51', '56') or c[:3] == '159':
+        return True
+    # 债券
+    if c[:2] in ('11', '12') or c[:3] in ('110', '113', '118', '123', '127', '128'):
+        return True
+    # REITs
+    if c[:3] == '508':
+        return True
+    return False
+
+
+def load_name_map():
+    """加载本地名称映射"""
+    if os.path.exists(NAME_MAP_PATH):
+        try:
+            with open(NAME_MAP_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+
+def save_name_map(name_map):
+    """保存名称映射"""
+    try:
+        os.makedirs(os.path.dirname(NAME_MAP_PATH), exist_ok=True)
+        with open(NAME_MAP_PATH, 'w', encoding='utf-8') as f:
+            json.dump(name_map, f, ensure_ascii=False)
+    except:
+        pass
+
+
+def load_tushare_token():
+    """加载Tushare Token"""
+    token = os.environ.get('TUSHARE_TOKEN', '')
+    if token:
+        return token
+    env_path = os.path.join(WORKSPACE, '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('TUSHARE_TOKEN='):
+                    return line.split('=', 1)[1].strip().strip('"').strip("'")
+    return None
+
+
+def fetch_stock_pool():
+    """获取主板股票池（优先启灵 -> 缓存 -> Tushare降级）"""
+    
+    # === 优先级1：启灵数据（稳定、无限流、含名称） ===
+    try:
+        from data_fetcher import get_data_fetcher
+        fetcher = get_data_fetcher()
+        if fetcher.lingqi:
+            print('  从启灵数据获取股票列表...')
+            all_stocks = fetcher.lingqi.get_stock_list()
+            if all_stocks is not None and not all_stocks.empty and 'stock_code' in all_stocks.columns:
+                # 重命名列以统一格式
+                stocks = all_stocks.rename(columns={'stock_code': 'ts_code'})
+                
+                # 过滤1：主板
+                stocks = stocks[stocks['ts_code'].apply(is_main_board)].reset_index(drop=True)
+                print(f'  全市场 -> 主板: {len(stocks)} 只')
+                
+                # 过滤2：排除ETF
+                stocks = stocks[~stocks['ts_code'].apply(is_etf)].reset_index(drop=True)
+                
+                # 过滤3：排除ST/退市
+                stocks = stocks[~stocks['name'].apply(is_excluded_name)].reset_index(drop=True)
+                print(f'  去ST/退: {len(stocks)} 只')
+                
+                # 过滤4：上市>=60个交易日
+                today = datetime.now()
+                cutoff = today - timedelta(days=120)
+                cutoff_str = cutoff.strftime('%Y-%m-%d')
+                stocks = stocks[stocks['list_date'] <= cutoff_str].reset_index(drop=True)
+                print(f'  去新股: {len(stocks)} 只')
+                
+                # 保存名称映射和缓存
+                name_map = dict(zip(stocks['ts_code'], stocks['name']))
+                save_name_map(name_map)
+                
+                os.makedirs(os.path.dirname(STOCK_POOL_CACHE), exist_ok=True)
+                stocks.to_json(STOCK_POOL_CACHE, orient='records', force_ascii=False)
+                print(f'  启灵获取成功，缓存已保存')
+                
+                return stocks
+    except Exception as e:
+        print(f'  [WARN] 启灵获取失败: {e}')
+    
+    # === 优先级2：本地缓存（24小时有效） ===
+    if os.path.exists(STOCK_POOL_CACHE):
+        cache_age = time.time() - os.path.getmtime(STOCK_POOL_CACHE)
+        if cache_age < 86400:
+            try:
+                df = pd.read_json(STOCK_POOL_CACHE, orient='records')
+                if len(df) > 100:
+                    print(f'  使用缓存: {len(df)} 只（{cache_age/3600:.1f}小时前）')
+                    return df
+            except:
+                pass
+    
+    # === 优先级3：Tushare降级 ===
+    import tushare as ts
+    token = load_tushare_token()
+    if not token:
+        print('[ERROR] 无数据源可用')
+        return pd.DataFrame()
+    
+    ts.set_token(token)
+    pro = ts.pro_api()
+    
+    print('  降级到 Tushare...')
+    try:
+        df = pro.stock_basic(
+            exchange='', list_status='L',
+            fields='ts_code,symbol,name,area,industry,list_date'
+        )
+    except Exception as e:
+        print(f'  [ERROR] Tushare 也失败: {e}')
+        return pd.DataFrame()
+    
+    if df is None or df.empty:
+        return pd.DataFrame()
+    
+    df = df[df['ts_code'].apply(is_main_board)].reset_index(drop=True)
+    df = df[~df['ts_code'].apply(is_etf)].reset_index(drop=True)
+    df = df[~df['name'].apply(is_excluded_name)].reset_index(drop=True)
+    
+    today = datetime.now()
+    cutoff_str = (today - timedelta(days=120)).strftime('%Y%m%d')
+    df = df[df['list_date'] <= cutoff_str].reset_index(drop=True)
+    
+    print(f'  Tushare: {len(df)} 只')
+    
+    name_map = dict(zip(df['ts_code'], df['name']))
+    save_name_map(name_map)
+    
+    return df
+
+
+# ===================== 数据获取 =====================
+
+def fetch_daily_batch(pro, stock_codes, start_date, end_date):
+    """批量获取日线数据（Tushare每次最多5000行）"""
+    all_data = []
+    batch_size = 100
+
+    for i in range(0, len(stock_codes), batch_size):
+        batch = stock_codes[i:i+batch_size]
+        codes_str = ','.join(batch)
+        try:
+            df = pro.daily(
+                ts_code=codes_str,
+                start_date=start_date,
+                end_date=end_date,
+                fields='ts_code,trade_date,open,high,low,close,vol,amount'
+            )
+            if df is not None and not df.empty:
+                all_data.append(df)
+        except Exception as e:
+            # 逐个获取
+            for code in batch:
+                try:
+                    df = pro.daily(
+                        ts_code=code,
+                        start_date=start_date,
+                        end_date=end_date,
+                        fields='ts_code,trade_date,open,high,low,close,vol,amount'
+                    )
+                    if df is not None and not df.empty:
+                        all_data.append(df)
+                except:
+                    pass
+
+        if i > 0 and i % 500 == 0:
+            print(f'    已获取 {min(i+batch_size, len(stock_codes))}/{len(stock_codes)} 只...')
+        time.sleep(0.3)  # 频率控制
+
+    if all_data:
+        return pd.concat(all_data, ignore_index=True)
+    return pd.DataFrame()
+
+
+# ===================== 策略评分 =====================
+
+def calc_rsi(closes, period=14):
+    """计算RSI"""
+    if len(closes) < period + 1:
+        return 50.0
+    deltas = np.diff(closes[-(period+1):])
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
+    avg_gain = np.mean(gains)
+    avg_loss = np.mean(losses)
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def score_stock(df, index_ret_20d=None, code=None):
+    """
+    对单只股票计算策略得分
+
+    Args:
+        df: 日线DataFrame（至少20行），含 close, high, low, vol 列
+        index_ret_20d: 上证指数20日涨幅（用于相对强度）
+
+    Returns:
+        (total_score, triggers_list)
+    """
+    score = 0
+    triggers = []
+
+    close = df['close'].values.astype(float)
+    high = df['high'].values.astype(float)
+    low = df['low'].values.astype(float)
+    vol = df['vol'].values.astype(float) if 'vol' in df.columns else None
+    n = len(close)
+
+    if n < 20:
+        return 0, []
+
+    today_close = close[-1]
+    today_vol = vol[-1] if vol is not None else 0
+
+    # 20日均量
+    vol_ma20 = np.mean(vol[-20:]) if vol is not None else 0
+
+    # === 策略1：突破20日高点（放量突破）===
+    if n >= 21:
+        past_19_high = np.max(high[-20:-1])
+        if today_close > past_19_high and vol_ma20 > 0 and today_vol > 1.5 * vol_ma20:
+            score += 1
+            triggers.append('突破20日高点')
+
+    # === 策略2：短期强势（20日涨幅 > 5%）===
+    if n >= 21 and close[-21] > 0:
+        ret_20d = (today_close - close[-21]) / close[-21]
+        if ret_20d > 0.05:
+            score += 1
+            triggers.append(f'20日涨{ret_20d*100:.1f}%')
+
+    # === 策略3：底部放量 ===
+    if n >= 60 and vol is not None and vol_ma20 > 0:
+        low_60d = np.min(low[-60:])
+        high_60d = np.max(high[-60:])
+        price_range = high_60d - low_60d
+        if price_range > 0:
+            price_position = (today_close - low_60d) / price_range
+            if price_position < 0.3 and today_vol > 2.0 * vol_ma20:
+                score += 1
+                triggers.append(f'底部放量(位{price_position:.0%})')
+
+    # === 策略4：超卖反弹（RSI14 < 30）===
+    rsi = calc_rsi(close, 14)
+    if rsi < 30:
+        score += 1
+        triggers.append(f'RSI={rsi:.0f}超卖')
+
+    # === 策略5：相对强度（涨幅 > 上证）===
+    if n >= 21 and close[-21] > 0 and index_ret_20d is not None:
+        stock_ret_20d = (today_close - close[-21]) / close[-21]
+        if index_ret_20d != 0 and stock_ret_20d / index_ret_20d > 1.05:
+            score += 1
+            triggers.append(f'相对强度{stock_ret_20d/index_ret_20d:.2f}')
+
+    # === 策略6：主力资金净流入（优先使用 moneyflow 真实数据，降级用量价代理）===
+    moneyflow_used = False
+    try:
+        # 优先：从 moneyflow 表读取前一交易日主力净流入
+        from data_fetcher_duckdb import get_data_fetcher as _gdf
+        _fetcher = _gdf()
+        code_for_mf = code if '.' in code else ''
+        if code_for_mf:
+            mf_df = _fetcher.get_moneyflow(code_for_mf, days=3)
+            if mf_df is not None and not mf_df.empty:
+                net_mf = float(mf_df.iloc[0].get('net_mf_amount', 0) or 0)
+                if net_mf > 5000:
+                    score += 1
+                    triggers.append(f'主力净流入{net_mf:.0f}万+1')
+                elif net_mf > 1000:
+                    score += 0.5
+                    triggers.append(f'主力净流入{net_mf:.0f}万+0.5')
+                elif net_mf < -5000:
+                    score -= 1
+                    triggers.append(f'主力净流出{abs(net_mf):.0f}万-1')
+                elif net_mf < -1000:
+                    score -= 0.5
+                    triggers.append(f'主力净流出{abs(net_mf):.0f}万-0.5')
+                moneyflow_used = True
+    except Exception:
+        pass
+
+    # 降级：量价代理（仅在 moneyflow 不可用时）
+    if not moneyflow_used and vol is not None and vol_ma20 > 0 and n >= 3:
+        open_prices = df['open'].values.astype(float) if 'open' in df.columns else None
+        if open_prices is not None:
+            # 条件A: 连续3日阳线 + 放量
+            consecutive_bullish = 0
+            for j in range(1, min(4, n)):
+                idx = -j
+                if close[idx] > open_prices[idx] and vol[idx] > vol_ma20:
+                    consecutive_bullish += 1
+                else:
+                    break
+
+            # 条件B: 当日强势买入（涨幅>3% + 量比>1.5）
+            today_return = (today_close - open_prices[-1]) / open_prices[-1] if open_prices[-1] > 0 else 0
+            today_vol_ratio = today_vol / vol_ma20
+
+            if consecutive_bullish >= 3:
+                score += 1
+                triggers.append(f'连续{consecutive_bullish}日阳线放量')
+            elif today_return > 0.03 and today_vol_ratio > 1.5:
+                score += 1
+                triggers.append(f'主力买入(涨{today_return*100:.1f}%量比{today_vol_ratio:.1f})')
+
+    return score, triggers
+
+
+# ===================== 主流程 =====================
+
+
+# ===================== 基本面因子 =====================
+
+def fetch_fundamentals(stock_codes, force_refresh=False):
+    """
+    获取基本面因子（ROE + 营收增长率）
+    委托给 data_fetcher.get_fundamentals()，复用统一基础设施。
+    """
+    try:
+        from data_fetcher import get_data_fetcher
+        fetcher = get_data_fetcher()
+        return fetcher.get_fundamentals(stock_codes, force_refresh=force_refresh)
+    except Exception as e:
+        print(f'  [WARN] data_fetcher.get_fundamentals() failed: {e}')
+        print(f'  降级到本地缓存...')
+        # Fallback: try reading cache directly
+        if not force_refresh and os.path.exists(FUNDAMENTALS_CACHE):
+            try:
+                cache_age = time.time() - os.path.getmtime(FUNDAMENTALS_CACHE)
+                if cache_age < 86400:
+                    with open(FUNDAMENTALS_CACHE, 'r') as f:
+                        cache = json.load(f)
+                    if cache.get('data'):
+                        print(f'  Using local cache ({len(cache["data"])} stocks)')
+                        return cache['data']
+            except Exception:
+                pass
+        return {}
+
+
+def score_fundamentals(roe, revenue_growth):
+    """
+    Score fundamentals: 0-4 points based on ROE and revenue growth.
+
+    ROE scoring:
+        >= 20%: +2 points
+        >= 15%: +1 point
+    Revenue growth scoring:
+        >= 50%: +2 points
+        >= 20%: +1 point
+    """
+    score = 0
+
+    if roe is not None:
+        if roe >= 20:
+            score += 2
+        elif roe >= 15:
+            score += 1
+
+    if revenue_growth is not None:
+        if revenue_growth >= 50:
+            score += 2
+        elif revenue_growth >= 20:
+            score += 1
+
+    return score
+
+
+def get_index_return(pro, days=20):
+    """获取上证指数20日涨幅"""
+    end_date = datetime.now().strftime('%Y%m%d')
+    start_date = (datetime.now() - timedelta(days=days*3)).strftime('%Y%m%d')
+    try:
+        df = pro.index_daily(
+            ts_code='000001.SH',
+            start_date=start_date,
+            end_date=end_date,
+            fields='trade_date,close'
+        )
+        if df is not None and len(df) >= days + 1:
+            df = df.sort_values('trade_date').reset_index(drop=True)
+            ret = (df['close'].iloc[-1] - df['close'].iloc[-days-1]) / df['close'].iloc[-days-1]
+            return float(ret)
+    except:
+        pass
+    return 0.0
+
+
+def save_to_db(results, scan_date):
+    """保存结果到 system.db opportunities 表"""
+    try:
+        import duckdb
+        os.makedirs(os.path.dirname(SYSTEM_DB), exist_ok=True)
+        conn = duckdb.connect(SYSTEM_DB)
+        conn.execute('''CREATE TABLE IF NOT EXISTS opportunities (
+            date VARCHAR,
+            stock_code VARCHAR,
+            name VARCHAR,
+            total_score INTEGER,
+            triggers VARCHAR,
+            rank INTEGER,
+            PRIMARY KEY (date, stock_code)
+        )''')
+
+        conn.execute(f"DELETE FROM opportunities WHERE date = '{scan_date}'")
+
+        for _, row in results.iterrows():
+            triggers_json = json.dumps(row['triggers'], ensure_ascii=False).replace("'", "''")
+            conn.execute(f"INSERT INTO opportunities (date, stock_code, name, total_score, triggers, rank) VALUES ('{scan_date}','{row['stock_code']}','{row['name']}',{row['score']},'{triggers_json}',{row['rank']})")
+
+        conn.commit()
+        conn.close()
+        print(f'  已保存 {len(results)} 条到 opportunities 表 ({scan_date})')
+    except Exception as e:
+        print(f'  [WARN] 保存数据库失败: {e}')
+
+
+def auto_add_to_watchlist(opportunities_df, config=None):
+    """将符合条件的机会股自动加入关注池（排除近期失败案例）"""
+    # 排除近期失败的候选股
+    failed_codes = set()
+    try:
+        sys.path.insert(0, '/root/.openclaw/workspace/scripts')
+        from record_failure import get_failed_stock_codes
+        failed_codes = get_failed_stock_codes(30)
+        if failed_codes:
+            print(f'  排除近期失败案例: {len(failed_codes)} 只')
+    except Exception as e:
+        pass  # 静默忽略
+
+    if config is None:
+        config = AUTO_ADD_CONFIG
+
+    if not config.get('enabled', True):
+        return []
+
+    """将符合条件的机会股自动加入关注池
+    
+    Args:
+        opportunities_df: 扫描结果 DataFrame（已按得分降序，含 rank 列）
+        config: 配置字典，默认使用 AUTO_ADD_CONFIG
+    
+    Returns:
+        list: 成功加入的 [(code, name, score), ...]
+    """
+    if config is None:
+        config = AUTO_ADD_CONFIG
+    
+    if not config.get('enabled', True):
+        return []
+    
+    try:
+        from agent_army.holdings_manager import get_holdings_manager
+        hm = get_holdings_manager()
+    except Exception as e:
+        print(f'  [WARN] 无法加载持仓管理器: {e}')
+        return []
+    
+    # 获取当前持仓和已有关注池
+    try:
+        current_holdings = hm.get_current_holdings()
+        current_watchlist = hm.get_watchlist()
+        existing_codes = set(current_holdings.keys()) | {item['code'] for item in current_watchlist}
+    except Exception as e:
+        print(f'  [WARN] 获取持仓/关注池失败: {e}')
+        existing_codes = set()
+    
+    added = []
+    for _, row in opportunities_df.iterrows():
+        # 检查排名
+        if row.get('rank', 999) > config['max_rank']:
+            break  # 已按得分排序，后面的排名更大，直接退出
+        
+        # 检查最低分
+        if row.get('score', 0) < config['min_score']:
+            continue
+        
+        code = row['stock_code']
+        
+        # 检查重复
+        if config['avoid_duplicates'] and code in existing_codes:
+            continue
+        
+        # 构建理由
+        triggers = row.get('triggers', [])
+        triggers_str = ','.join(triggers[:3]) if isinstance(triggers, list) else str(triggers)[:60]
+        reason = f"{config['add_reason']} (得分{row['score']}, 触发:{triggers_str})"
+        
+        # 加入关注池
+        try:
+            name = row.get('name', code)
+            hm.add_to_watchlist(code, name=name, reason=reason)
+            added.append((code, name, row['score']))
+            existing_codes.add(code)  # 避免本次重复
+        except Exception as e:
+            print(f'  [WARN] 加入关注池失败 {code}: {e}')
+    
+    if added:
+        print(f'自动加入关注池: {len(added)} 只')
+        for code, name, score in added:
+            print(f'    {code} {name} (得分{score})')
+    else:
+        print(f'  无新股票加入关注池（可能已存在或不符合条件）')
+    
+    return added
+
+
+def main():
+    parser = argparse.ArgumentParser(description='全市场机会扫描器')
+    parser.add_argument('--top', type=int, default=20, help='输出前N只（默认20）')
+    parser.add_argument('--no-fetch', action='store_true', help='跳过Tushare获取，只用缓存')
+    parser.add_argument('--refresh-fundamentals', action='store_true', help='强制刷新基本面数据')
+    args = parser.parse_args()
+
+    start_time = time.time()
+    scan_date = datetime.now().strftime('%Y-%m-%d')
+
+    # 非交易日检查
+    from agent_army.data_fetcher_duckdb import get_data_fetcher as _gdf
+    if not _gdf().is_trading_day(scan_date):
+        print(f"今日 {scan_date} 非交易日，扫描脚本退出")
+        return
+
+    print('=' * 60)
+    print(f'  全市场机会扫描器 - {scan_date}')
+    print('=' * 60)
+
+    # 加载名称映射
+    name_map = load_name_map()
+
+    # 1. 获取股票池
+    print('\n[1/4] 获取主板股票池...')
+    stock_pool = fetch_stock_pool()
+    if stock_pool.empty:
+        print('[ERROR] 股票池为空，退出')
+        return
+
+    stock_codes = stock_pool['ts_code'].tolist()
+    print(f'  待扫描: {len(stock_codes)} 只主板股票')
+
+    # 2. 获取上证指数涨幅（相对强度基准）
+    print('\n[2/4] 获取基准指数...')
+    import tushare as ts
+    token = load_tushare_token()
+    ts.set_token(token)
+    pro = ts.pro_api()
+
+    index_ret = get_index_return(pro)
+    print(f'  上证20日涨幅: {index_ret*100:+.2f}%')
+
+    # Fundamentals scoring (ROE + revenue growth)
+    print('\n  [2.5/4] Fetching fundamentals...')
+    fundamentals = fetch_fundamentals(stock_codes, force_refresh=args.refresh_fundamentals)
+
+    # 3. 获取日线数据 + 评分
+    print('\n[3/4] 扫描评分...')
+
+    end_date = datetime.now().strftime('%Y%m%d')
+    start_date = (datetime.now() - timedelta(days=150)).strftime('%Y%m%d')
+
+    # 批量获取
+    print('  批量获取日线数据...')
+    daily_df = fetch_daily_batch(pro, stock_codes, start_date, end_date)
+
+    if daily_df.empty:
+        print('[ERROR] 未获取到日线数据')
+        return
+
+    print(f'  获取到 {len(daily_df)} 条日线记录，覆盖 {daily_df["ts_code"].nunique()} 只股票')
+
+    # 停牌过滤：找到数据中最晚交易日，用该日数据
+    latest_date = daily_df['trade_date'].max()
+    print(f'  最近交易日: {latest_date}')
+
+    active_today = daily_df[
+        (daily_df['trade_date'] == latest_date) & (daily_df['vol'] > 0)
+    ]['ts_code'].unique()
+
+    print(f'  该日有交易: {len(active_today)} 只（过滤停牌/休市 {len(stock_codes) - len(active_today)} 只）')
+
+    # 逐股评分
+    results = []
+    scored = 0
+    for code in active_today:
+        stock_daily = daily_df[daily_df['ts_code'] == code].sort_values('trade_date').reset_index(drop=True)
+        if len(stock_daily) < 21:
+            continue
+
+        score, triggers = score_stock(stock_daily, index_ret, code=code)
+        if score >= AUTO_ADD_CONFIG['min_score']:
+            # 名称：优先从pool取，再从name_map取，最后用代码
+            pool_row = stock_pool[stock_pool['ts_code'] == code]
+            if len(pool_row) > 0 and 'name' in pool_row.columns:
+                pool_name = pool_row['name'].values[0]
+                name = pool_name if pool_name and pool_name != code else name_map.get(code, code)
+            else:
+                name = name_map.get(code, code)
+
+            # Add fundamental score
+            fund_data = fundamentals.get(code, {})
+            fund_score = score_fundamentals(
+                fund_data.get('roe'),
+                fund_data.get('revenue_growth')
+            )
+            if fund_score > 0:
+                fund_triggers = []
+                roe = fund_data.get('roe')
+                rev = fund_data.get('revenue_growth')
+                if roe is not None and roe >= 15:
+                    fund_triggers.append(f'ROE={roe:.1f}%')
+                if rev is not None and rev >= 20:
+                    fund_triggers.append(f'营收增长{rev:.1f}%')
+                triggers.extend(fund_triggers)
+                score += fund_score
+
+            # Event-driven bonus: check for positive surprise in recent events
+            try:
+                from event_impact_analyzer import EventImpactAnalyzer
+                if not hasattr(main, '_evt_analyzer'):
+                    main._evt_analyzer = EventImpactAnalyzer()
+                evt_result = main._evt_analyzer.analyze(code)
+                evt_score = evt_result.get('total_score', 5.0)
+                if evt_score >= 7.0:
+                    score += 1
+                    triggers.append(f'事件利好({evt_result["recommendation"][:4]})')
+                elif evt_score <= 3.0:
+                    triggers.append(f'事件利空({evt_result["recommendation"][:4]})')
+            except Exception:
+                pass  # 事件模块不可用时静默跳过
+
+            # 板块强度加分：从强板块中选股获得额外分数
+            sector_strength = 0.0
+            try:
+                from agent_army.sector_flow_analyzer import SectorFlowAnalyzer
+                if not hasattr(main, '_sector_analyzer'):
+                    main._sector_analyzer = SectorFlowAnalyzer()
+                ss_result = main._sector_analyzer.get_sector_strength(code)
+                sector_strength = ss_result.get('strength_score', 0.0)
+                if sector_strength > 0:
+                    score += sector_strength
+                    triggers.append(f'板块强度+{sector_strength:.1f}')
+                elif sector_strength < -0.5:
+                    triggers.append(f'板块弱势({sector_strength:.1f})')
+            except Exception:
+                pass  # 板块模块不可用时静默跳过
+
+            # 新闻情感加分：近期新闻正面/负面影响
+            try:
+                news_df = data_fetcher.get_stock_news(code, days=3)
+                if news_df is not None and not news_df.empty:
+                    avg_sentiment = news_df['sentiment_score'].mean()
+                    if avg_sentiment > 0.3:
+                        score += 0.5
+                        triggers.append(f'新闻正面+0.5')
+                    elif avg_sentiment < -0.3:
+                        score -= 0.5
+                        triggers.append(f'新闻负面-0.5')
+            except Exception:
+                pass  # 新闻模块不可用时静默跳过
+
+            # 券商金股加分：被多家券商推荐为金股
+            try:
+                broker_df = data_fetcher.db.fetchdf('system',
+                    f"SELECT recommend_count FROM broker_stocks "
+                    f"WHERE ts_code = '{code}' ORDER BY month DESC LIMIT 1"
+                )
+                if not broker_df.empty:
+                    rc = int(broker_df.iloc[0]['recommend_count'])
+                    if rc >= 5:
+                        score += 1.5
+                        triggers.append(f'券商金股{rc}家推荐+1.5')
+                    elif rc >= 3:
+                        score += 1.0
+                        triggers.append(f'券商金股{rc}家推荐+1.0')
+                    elif rc >= 1:
+                        score += 0.5
+                        triggers.append(f'券商金股{rc}家推荐+0.5')
+            except Exception:
+                pass  # 券商金股模块不可用时静默跳过
+
+            results.append({
+                'stock_code': code,
+                'name': name,
+                'score': score,
+                'triggers': triggers,
+                'sector_strength': sector_strength,
+                'close': float(stock_daily['close'].iloc[-1]),
+                'vol': float(stock_daily['vol'].iloc[-1])
+            })
+
+        scored += 1
+        if scored % 500 == 0:
+            print(f'    已评分 {scored}/{len(active_today)}，发现 {len(results)} 只机会')
+
+    print(f'  评分完成: {scored} 只，得分>0: {len(results)} 只')
+
+    # 4. 排序输出
+    print('\n[4/4] 输出结果...')
+
+    if not results:
+        print('  今日无符合条件的股票')
+        return
+
+    results_df = pd.DataFrame(results).sort_values('score', ascending=False).reset_index(drop=True)
+    results_df['rank'] = range(1, len(results_df) + 1)
+
+    top_n = results_df.head(args.top)
+
+    # 控制台输出
+    print(f'\n{"="*80}')
+    print(f'  机会扫描 TOP {args.top} ({scan_date}, 数据截至{latest_date})')
+    print(f'{"="*80}')
+    print(f'{"排名":>4} {"代码":<12} {"名称":<10} {"得分":>4} {"板块":>4} {"收盘价":>8} {"触发策略"}')
+    print('-' * 80)
+    for _, row in top_n.iterrows():
+        trigger_str = ' | '.join(row['triggers'][:3])
+        ss = row.get('sector_strength', 0)
+        ss_str = f'{ss:+.1f}' if ss != 0 else '-'
+        print(f'{row["rank"]:>4} {row["stock_code"]:<12} {row["name"]:<10} {row["score"]:>4} {ss_str:>4} {row["close"]:>8.2f} {trigger_str}')
+    print('=' * 80)
+
+    # 保存到数据库
+    save_to_db(top_n, scan_date)
+
+    # 自动加入关注池
+    auto_add_to_watchlist(top_n)
+
+    # 耗时
+    elapsed = time.time() - start_time
+    print(f'\n  总耗时: {elapsed:.1f}s')
+    print(f'  股票池: {len(stock_codes)} 只')
+    print(f'  有交易: {len(active_today)} 只')
+    print(f'  机会股: {len(results_df)} 只')
+    print(f'  得分>=3: {len(results_df[results_df["score"]>=3])} 只')
+
+
+if __name__ == '__main__':
+    main()
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/config/weights.json
+################################################################################
+
+{
+  "technical": 0.35,
+  "fundamental": 0.25,
+  "capital": 0.18,
+  "news": 0.06,
+  "game": 0.06,
+  "rs": 0.05,
+  "ml": 0.05
+}
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/config/scanner_config.json
+################################################################################
+
+{
+  "min_score": 4,
+  "max_rank": 10,
+  "top_n": 20,
+  "avoid_duplicates": true,
+  "auto_add_to_watchlist": true,
+  "add_reason": "自动扫描机会股",
+  "fundamental_scoring": {
+    "enabled": true,
+    "roe_thresholds": {"high": 20, "medium": 15},
+    "revenue_growth_thresholds": {"high": 50, "medium": 20},
+    "max_score": 4
+  },
+  "stock_filter": {
+    "main_board_prefixes": ["600", "601", "603", "000", "001", "002"],
+    "min_listing_days": 60,
+    "exclude_patterns": ["ST", "退"],
+    "exclude_etf_prefixes": ["51", "56", "159", "11", "12", "508"]
+  },
+  "cache": {
+    "stock_pool_hours": 24,
+    "fundamentals_hours": 24
+  }
+}
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/config/market_sentiment_config.json
+################################################################################
+
+{
+  "weights": {
+    "advance_decline": 0.24,
+    "new_high_low": 0.16,
+    "pcr_option": 0.20,
+    "margin_ratio": 0.20,
+    "short_term": 0.20
+  },
+  "thresholds": {
+    "extreme_optimism": 80,
+    "optimism": 60,
+    "neutral": 40,
+    "panic": 20
+  },
+  "update_schedule": {
+    "cron": "30 15 * * 1-5",
+    "description": "每个交易日15:30更新市场情绪"
+  },
+  "hot_top_n": 10,
+  "description": "市场情绪综合指数配置 - 5维度加权（涨跌比、新高新低、期权PCR、融资占比、短线情绪）"
+}
+
+
+################################################################################
+# FILE: /root/.openclaw/workspace/config/capital_flow_config.json
+################################################################################
+
+{
+  "individual": {
+    "description": "个股资金面评分配置",
+    "moneyflow_thresholds": {
+      "strong_inflow": 10000,
+      "medium_inflow": 5000,
+      "small_inflow": 1000,
+      "small_outflow": -1000,
+      "medium_outflow": -5000,
+      "strong_outflow": -10000,
+      "unit": "万元"
+    },
+    "big_order_consistency_bonus": 0.5,
+    "trend_3d_bonus": 0.5,
+    "trend_3d_threshold": 15000
+  },
+  "market": {
+    "description": "大盘资金面评分配置",
+    "weights": {
+      "fund": 0.30,
+      "etf": 0.30,
+      "corp": 0.20,
+      "block": 0.20
+    },
+    "fund_position_levels": {
+      "very_high": 85,
+      "high": 80,
+      "medium": 75,
+      "low": 70
+    },
+    "etf_5d_thresholds_yi": {
+      "strong_inflow": 500,
+      "medium_inflow": 200,
+      "medium_outflow": -200
+    },
+    "corp_5d_thresholds_yi": {
+      "strong": 10,
+      "weak": -10
+    },
+    "block_discount_thresholds": {
+      "good": -1,
+      "medium": -3
+    }
+  },
+  "lhb": {
+    "description": "龙虎榜评分配置",
+    "institution_and_hot_money_bonus": 2.5,
+    "institution_only_bonus": 1.5,
+    "institution_sell_penalty": 2.0,
+    "hot_money_bonus": 1.0,
+    "net_buy_small_bonus": 0.5
+  },
+  "north": {
+    "description": "北向资金评分配置",
+    "strong_inflow": 50000000,
+    "medium_inflow": 20000000,
+    "strong_outflow": -30000000,
+    "medium_outflow": -10000000,
+    "consecutive_outflow_days": 3
+  },
+  "margin": {
+    "description": "融资融券评分配置",
+    "rzye_increase_strong": 2.0,
+    "rzye_increase_medium": 0.5,
+    "rzye_decrease_strong": -2.0,
+    "rzye_decrease_medium": -0.5,
+    "rqye_increase_strong": 10,
+    "rqye_decrease_strong": -10
+  }
+}
+
+
+================================================================================
+END OF OUTPUT
+================================================================================

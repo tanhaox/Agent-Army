@@ -1,0 +1,4 @@
+  File "/tmp/explore_holdings.py", line 34
+    print("
+          ^
+SyntaxError: unterminated string literal (detected at line 34)

@@ -22,16 +22,16 @@ export default function ScriptDisplay({ result, onSave, onRegenerate }: Props) {
   const [editMode, setEditMode] = useState(false);
   const [activeVersion, setActiveVersion] = useState(result.recommended_version ?? 0);
   const [editedDialogues, setEditedDialogues] = useState<Dialogue[]>(
-    result.versions ? (result.versions[0]?.dialogues || []) : result.dialogues
+    result.versions ? (result.versions[0]?.dialogues || []) : (result.dialogues || [])
   );
   const [hoveredHighlight, setHoveredHighlight] = useState<number | null>(null);
   const [showCompliance, setShowCompliance] = useState(false);
 
   const isMultiVersion = result.multi_version && result.versions && result.versions.length > 0;
   const currentVersion = isMultiVersion ? result.versions[activeVersion] : null;
-  const activeDialogues = editMode ? editedDialogues : (currentVersion?.dialogues || result.dialogues);
-  const activeHighlights = currentVersion?.highlights || result.highlights;
-  const activeCompliance = currentVersion?.compliance || result.compliance;
+  const activeDialogues = editMode ? editedDialogues : (currentVersion?.dialogues || result.dialogues || []);
+  const activeHighlights = currentVersion?.highlights || result.highlights || [];
+  const activeCompliance = currentVersion?.compliance || result.compliance || { passed: true, hits: [], hit_count: 0, suggestion: '' };
   const activeTitle = currentVersion?.overall_style_note
     ? `${result.versions?.[activeVersion]?.version_name || ''}版`
     : result.title || '';
@@ -111,9 +111,9 @@ export default function ScriptDisplay({ result, onSave, onRegenerate }: Props) {
         <h2 className="text-xl font-semibold text-text-primary">
           {isMultiVersion ? result.versions?.[activeVersion]?.version_name + '版' : result.title}
         </h2>
-        {result.emotion_curve_actual.length > 0 && (
+        {(result.emotion_curve_actual || []).length > 0 && (
           <div className="flex gap-2 mt-2">
-            {result.emotion_curve_actual.map((seg, i) => (
+            {(result.emotion_curve_actual || []).map((seg, i) => (
               <span key={i} className="text-xs text-text-muted">{seg}</span>
             ))}
           </div>

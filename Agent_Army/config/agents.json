@@ -1,0 +1,215 @@
+{
+  "version": "2.0",
+  "management": {
+    "commander": {
+      "name": "总司令",
+      "description": "8部门总协调，意图识别，质量审核，报告生成",
+      "soul_file": "docs/commander-soul-8dept.md",
+      "class": "CommanderAgent",
+      "module": "src.agents.management.commander"
+    },
+    "hr": {
+      "name": "HR Agent",
+      "description": "系统诊断，Agent健康检查",
+      "class": "HRAgent",
+      "module": "src.agents.management.hr"
+    }
+  },
+  "departments": {
+    "research": {
+      "name": "研究部",
+      "description": "产业链和宏观政策研究",
+      "agents": [
+        {
+          "id": "industry_chain_research_ai",
+          "name": "产业链研究AI",
+          "description": "3合1：产业链分析 + 行业周期 + 竞争格局",
+          "class": "IndustryChainResearchAI",
+          "module": "src.agents.business.research.industry_chain_ai"
+        },
+        {
+          "id": "macro_policy_research_ai",
+          "name": "宏观政策研究AI",
+          "description": "2合1：宏观经济 + 政策影响",
+          "class": "MacroPolicyResearchAI",
+          "module": "src.agents.business.research.macro_policy_ai"
+        }
+      ]
+    },
+    "analysis": {
+      "name": "分析部",
+      "description": "基本面、估值、历史分析",
+      "agents": [
+        {
+          "id": "fundamental_analysis_ai",
+          "name": "基本面分析AI",
+          "description": "3合1：基本面 + 成长性 + 财务健康",
+          "class": "FundamentalAnalysisAI",
+          "module": "src.agents.business.analysis.fundamental_analysis_ai"
+        },
+        {
+          "id": "valuation_analysis_ai",
+          "name": "估值分析AI",
+          "description": "2合1：估值模型 + K线形态",
+          "class": "ValuationAnalysisAI",
+          "module": "src.agents.business.analysis.valuation_analysis_ai"
+        },
+        {
+          "id": "historical_analysis_ai",
+          "name": "历史分析AI",
+          "description": "2合1：历史周期 + 历史节点",
+          "class": "HistoricalAnalysisAI",
+          "module": "src.agents.business.analysis.historical_analysis_ai"
+        }
+      ]
+    },
+    "prediction": {
+      "name": "预测部",
+      "description": "目标定价、综合评估、价格预测",
+      "agents": [
+        {
+          "id": "target_pricing_ai",
+          "name": "估值定价AI",
+          "description": "2合1：目标定价 + 估值建议",
+          "class": "TargetPricingAI",
+          "module": "src.agents.business.prediction.target_pricing_ai"
+        },
+        {
+          "id": "comprehensive_evaluation_ai",
+          "name": "综合评估AI",
+          "description": "2合1：综合评分 + 质量评分",
+          "class": "ComprehensiveEvaluationAI",
+          "module": "src.agents.business.prediction.comprehensive_evaluation_ai"
+        },
+        {
+          "id": "forecast_ai",
+          "name": "预测AI",
+          "description": "2合1：价格预测 + 利润预测",
+          "class": "ForecastAI",
+          "module": "src.agents.business.prediction.forecast_ai"
+        }
+      ]
+    },
+    "strategy": {
+      "name": "策略部",
+      "description": "买卖时机、仓位管理、风险控制",
+      "agents": [
+        {
+          "id": "timing_analysis_ai",
+          "name": "时机分析AI",
+          "description": "2合1：买入时机 + 卖出时机",
+          "class": "TimingAnalysisAI",
+          "module": "src.agents.business.strategy.timing_analysis_ai"
+        },
+        {
+          "id": "position_management_ai",
+          "name": "仓位管理AI",
+          "description": "2合1：仓位管理 + 资金管理",
+          "class": "PositionManagementAI",
+          "module": "src.agents.business.strategy.position_management_ai"
+        },
+        {
+          "id": "risk_control_ai",
+          "name": "风控AI",
+          "description": "2合1：风控止损 + 情景分析",
+          "class": "RiskControlAI",
+          "module": "src.agents.business.strategy.risk_control_ai"
+        },
+        {
+          "id": "strategy_evaluation_ai",
+          "name": "策略评估AI",
+          "description": "2合1：风险评估 + 风险时机",
+          "class": "StrategyEvaluationAI",
+          "module": "src.agents.business.strategy.strategy_evaluation_ai"
+        }
+      ]
+    },
+    "validation": {
+      "name": "验证部",
+      "description": "预测验证和回测分析",
+      "agents": [
+        {
+          "id": "validation_backtest_ai",
+          "name": "验证回测AI",
+          "description": "2合1：预测验证 + 回测分析",
+          "class": "ValidationBacktestAI",
+          "module": "src.agents.business.validation.validation_backtest_ai"
+        },
+        {
+          "id": "attribution_options_ai",
+          "name": "归因期权AI",
+          "description": "2合1：归因分析 + 期权分析",
+          "class": "AttributionOptionsAI",
+          "module": "src.agents.business.validation.attribution_options_ai"
+        }
+      ]
+    },
+    "monitoring": {
+      "name": "监控部",
+      "description": "新闻和资金监控",
+      "agents": [
+        {
+          "id": "info_monitoring_ai",
+          "name": "信息监控AI",
+          "description": "2合1：新闻监控 + 情绪监控",
+          "class": "InfoMonitoringAI",
+          "module": "src.agents.business.monitoring.info_monitoring_ai"
+        },
+        {
+          "id": "capital_monitoring_ai",
+          "name": "资金监控AI",
+          "description": "2合1：资金监控 + 龙虎榜",
+          "class": "CapitalMonitoringAI",
+          "module": "src.agents.business.monitoring.capital_monitoring_ai"
+        }
+      ]
+    },
+    "optimization": {
+      "name": "优化部",
+      "description": "自我进化、配置优化、筹码分析",
+      "agents": [
+        {
+          "id": "self_evolution_ai",
+          "name": "自我进化AI",
+          "description": "3合1：经验积累 + 参数优化 + 模式识别",
+          "class": "SelfEvolutionAI",
+          "module": "src.agents.business.optimization.self_evolution_ai"
+        },
+        {
+          "id": "configuration_optimization_ai",
+          "name": "配置优化AI",
+          "description": "2合1：资产配置 + 机会筛选",
+          "class": "ConfigurationOptimizationAI",
+          "module": "src.agents.business.optimization.configuration_optimization_ai"
+        },
+        {
+          "id": "chip_analysis_ai",
+          "name": "筹码分析AI",
+          "description": "筹码分析（独立保留）",
+          "class": "ChipAnalysisAI",
+          "module": "src.agents.business.optimization.chip_analysis_ai"
+        }
+      ]
+    },
+    "configuration": {
+      "name": "配置部",
+      "description": "资产配置和机会筛选",
+      "agents": [
+        {
+          "id": "asset_allocation_ai",
+          "name": "资产配置AI",
+          "description": "资产配置建议",
+          "class": "AssetAllocationAI",
+          "module": "src.agents.business.configuration.asset_allocation_ai"
+        },
+        {
+          "id": "opportunity_screener",
+          "name": "机会筛选AI",
+          "description": "机会筛选和推荐",
+          "class": "OpportunityScreener",
+          "module": "src.agents.business.configuration.opportunity_screener"
+        }
+      ]
+    }
+  }
+}

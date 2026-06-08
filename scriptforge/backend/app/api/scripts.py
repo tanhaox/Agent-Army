@@ -21,24 +21,21 @@ router = APIRouter(prefix="/scripts", tags=["Scripts"])
 logger = logging.getLogger(__name__)
 
 
-class GuestConfigInput(BaseModel):
-    name: str | None = None
-    age_range: str | None = None
-    occupation: str | None = None
-    personality: str | None = None
-    core_issue: str
-
-
 class GenerateRequest(BaseModel):
     tone_id: str
     persona_id: str
-    guest_config: GuestConfigInput
+    guest_config: dict | list[dict]
     emotion_curve: str = "default"
     strategy_mix: str = "conservative"
     hot_topic: str | None = None
     multi_version: bool = False
     scene_type: str = "entertainment"
     enable_caller_enhancement: bool = False
+    topic: str | None = None
+    required_lines: list[str] | None = None
+    director_roles: list[dict] | None = None
+    director_acts: list[dict] | None = None
+    custom_tone: str | None = None
 
 
 class PatchScriptRequest(BaseModel):
@@ -57,22 +54,35 @@ async def generate_script(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not req.guest_config.core_issue:
+    # Validate guest_config
+    if isinstance(req.guest_config, list):
+        for gc in req.guest_config:
+            if not gc.get("core_issue"):
+                raise HTTPException(status_code=400, detail="Each guest must have core_issue")
+    elif not req.guest_config.get("core_issue"):
         raise HTTPException(status_code=400, detail="guest_config.core_issue is required")
+
+    # Normalize guest_config for downstream consumption
+    raw_guest = req.guest_config if isinstance(req.guest_config, list) else req.guest_config
 
     try:
         result = await script_generator.generate(
             tone_id=req.tone_id,
             persona_id=req.persona_id,
-            guest_config=req.guest_config.model_dump(),
+            guest_config=raw_guest,
             emotion_curve=req.emotion_curve,
             strategy_mix=req.strategy_mix,
             hot_topic=req.hot_topic,
             multi_version=req.multi_version,
             scene_type=req.scene_type,
             enable_caller_enhancement=req.enable_caller_enhancement,
+            topic=req.topic,
+            required_lines=req.required_lines,
             db=db,
             user_id=current_user.id,
+            director_roles=req.director_roles,
+            director_acts=req.director_acts,
+            custom_tone=req.custom_tone,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -119,6 +129,7 @@ async def list_scripts(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
+    keyword: str = Query(default="", description="Search title"),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(ScriptProject)
@@ -130,6 +141,11 @@ async def list_scripts(
     else:
         query = query.where(ScriptProject.status != "archived")
         count_query = count_query.where(ScriptProject.status != "archived")
+
+    if keyword:
+        kw = f"%{keyword}%"
+        query = query.where(ScriptProject.title.ilike(kw))
+        count_query = count_query.where(ScriptProject.title.ilike(kw))
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

@@ -1,10 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, Search, ChevronLeft, ChevronRight, Trash2, Eye, Cookie, CheckCircle, AlertCircle } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { X, Search, ChevronLeft, ChevronRight, Trash2, Eye, Cookie, CheckCircle, AlertCircle, Zap, Inbox, Power, HardDrive } from 'lucide-react';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Spinner from '../components/ui/Spinner';
+import EmptyState from '../components/ui/EmptyState';
 import { toast } from '../components/ui/Toast';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import {
   listStrategies,
   getStrategy,
@@ -64,6 +67,41 @@ function GeneralTab() {
 
   const [emotionCurve, setEmotionCurve] = useState('default');
   const [strategyMix, setStrategyMix] = useState('conservative');
+  const [restartCountdown, setRestartCountdown] = useState<number | null>(null);
+  const [restartConfirm, setRestartConfirm] = useState(false);
+  const [cleanupConfirm, setCleanupConfirm] = useState(false);
+  const [diskInfo, setDiskInfo] = useState<{ uploads_gb: number; disk_total_gb: number; disk_free_gb: number } | null>(null);
+
+  const fetchDiskInfo = useCallback(async () => {
+    try {
+      const res = await fetch('/api/health');
+      const data = await res.json();
+      if (data.checks?.disk?.status === 'ok') {
+        setDiskInfo(data.checks.disk);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { fetchDiskInfo(); }, [fetchDiskInfo]);
+
+  const handleRestart = async () => {
+    setRestartConfirm(false);
+    try {
+      await fetch('/api/admin/restart', { method: 'POST' });
+    } catch {
+      // Expected: backend process exits, connection drops
+    }
+    let remaining = 10;
+    setRestartCountdown(remaining);
+    const timer = setInterval(() => {
+      remaining -= 1;
+      setRestartCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(timer);
+        window.location.reload();
+      }
+    }, 1000);
+  };
 
   useEffect(() => {
     if (settings) {
@@ -121,6 +159,106 @@ function GeneralTab() {
       >
         保存设置
       </Button>
+
+      {/* Backend restart */}
+      <div className="mt-8 pt-6 border-t border-border-default">
+        <h3 className="text-sm font-medium text-text-primary mb-2">服务管理</h3>
+        <p className="text-xs text-text-muted mb-3">重启后端服务将中断所有进行中的任务，请谨慎操作。</p>
+        <Button
+          variant="danger"
+          onClick={() => setRestartConfirm(true)}
+          disabled={restartCountdown !== null}
+        >
+          <Power className="w-4 h-4 mr-1.5" />
+          {restartCountdown !== null ? `正在重启 (${restartCountdown}s)` : '重启后端服务'}
+        </Button>
+      </div>
+
+      {/* Legacy persona cleanup */}
+      <div className="mt-6 pt-6 border-t border-border-default">
+        <h3 className="text-sm font-medium text-text-primary mb-2">数据管理</h3>
+
+        {/* Disk usage info */}
+        {diskInfo && (
+          <div className="mb-4 p-3 bg-bg-card border border-border-default rounded-lg space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-text-muted">uploads/ 目录</span>
+              <span className="text-text-primary font-medium">{diskInfo.uploads_gb} GB</span>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-text-muted">磁盘剩余</span>
+              <span className={`font-medium ${diskInfo.disk_free_gb < 10 ? 'text-error' : diskInfo.disk_free_gb < 50 ? 'text-warning' : 'text-success'}`}>
+                {diskInfo.disk_free_gb} GB / {diskInfo.disk_total_gb} GB
+              </span>
+            </div>
+            <div className="h-1.5 bg-bg-hover rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full ${diskInfo.disk_free_gb < 10 ? 'bg-error' : diskInfo.disk_free_gb < 50 ? 'bg-warning' : 'bg-success'}`}
+                style={{ width: `${Math.min(100, ((diskInfo.disk_total_gb - diskInfo.disk_free_gb) / diskInfo.disk_total_gb) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-text-muted mb-3">删除没有精细特征分析的旧版人设数据，以便重新克隆获取 18 维度分析。</p>
+        <Button
+          variant="danger"
+          onClick={() => setCleanupConfirm(true)}
+        >
+          <Trash2 className="w-4 h-4 mr-1.5" />
+          清空旧版人设
+        </Button>
+        <div className="mt-4 pt-4 border-t border-border-default">
+          <p className="text-xs text-text-muted mb-3">扫描并删除 uploads 目录中不被任何素材记录引用的孤立文件，释放磁盘空间。</p>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/assets/cleanup-orphan-files', { method: 'POST' });
+                const data = await res.json();
+                const freedMB = (data.freed_bytes / 1024 / 1024).toFixed(1);
+                toast('success', `已清理 ${data.deleted_count} 个孤立文件，释放 ${freedMB} MB`);
+                fetchDiskInfo();
+              } catch {
+                toast('error', '清理失败');
+              }
+            }}
+          >
+            <HardDrive className="w-4 h-4 mr-1.5" />
+            清理孤立文件
+          </Button>
+        </div>
+      </div>
+
+      {/* Restart Confirm */}
+      <ConfirmModal
+        open={restartConfirm}
+        title="确认重启后端服务"
+        message="重启将中断所有进行中的任务，确定继续？"
+        confirmText="确认重启"
+        confirmVariant="warning"
+        onConfirm={handleRestart}
+        onCancel={() => setRestartConfirm(false)}
+      />
+
+      {/* Cleanup Legacy Confirm */}
+      <ConfirmModal
+        open={cleanupConfirm}
+        title="确认清空旧版人设"
+        message="将删除所有不含精细特征分析的旧版人设数据，此操作不可恢复。"
+        confirmText="确认删除"
+        onConfirm={async () => {
+          setCleanupConfirm(false);
+          try {
+            const res = await fetch('/api/personas/cleanup-legacy', { method: 'POST' });
+            const data = await res.json();
+            toast('success', `已删除 ${data.deleted_count} 个旧版人设`);
+          } catch {
+            toast('error', '清理失败');
+          }
+        }}
+        onCancel={() => setCleanupConfirm(false)}
+      />
     </div>
   );
 }
@@ -243,9 +381,11 @@ function StrategiesTab() {
           <span className="ml-3 text-sm text-text-secondary">加载策略库...</span>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-12 text-sm text-text-muted">
-          {total === 0 ? '暂无策略数据，请先在"学习中心"提取策略' : '没有匹配的策略'}
-        </div>
+        <EmptyState
+          icon={Zap}
+          title={total === 0 ? '暂无策略数据' : '没有匹配的策略'}
+          description={total === 0 ? '请先在"学习中心"上传素材并提取策略，策略将自动收录到策略库' : '尝试调整筛选条件或搜索关键词'}
+        />
       ) : (
         <div className="border border-border-default rounded-lg overflow-hidden">
           <table className="w-full text-sm">
@@ -392,18 +532,14 @@ function StrategiesTab() {
       )}
 
       {/* Delete Confirmation */}
-      {deleteId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setDeleteId(null)}>
-          <div className="bg-bg-card border border-border-default rounded-lg w-[400px] p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-text-primary">确认删除</h3>
-            <p className="text-sm text-text-secondary">确定要删除此策略吗？此操作不可恢复。</p>
-            <div className="flex gap-3 justify-end">
-              <Button variant="secondary" size="sm" onClick={() => setDeleteId(null)}>取消</Button>
-              <Button variant="danger" size="sm" loading={deleteMut.isPending} onClick={() => deleteMut.mutate(deleteId)}>删除</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        open={!!deleteId}
+        title="确认删除"
+        message="确定要删除此策略吗？此操作不可恢复。"
+        loading={deleteMut.isPending}
+        onConfirm={() => deleteMut.mutate(deleteId!)}
+        onCancel={() => setDeleteId(null)}
+      />
     </div>
   );
 }
@@ -415,6 +551,7 @@ function SensitiveTab() {
   const [category, setCategory] = useState('广告');
   const [severity, setSeverity] = useState('medium');
   const [page, setPage] = useState(1);
+  const [deleteWordId, setDeleteWordId] = useState<string | null>(null);
   const pageSize = 50;
 
   const { data, isLoading } = useQuery({
@@ -545,7 +682,7 @@ function SensitiveTab() {
                   </td>
                   <td className="px-3 py-2">
                     <button
-                      onClick={() => deleteMut.mutate(w.id)}
+                      onClick={() => setDeleteWordId(w.id)}
                       className="text-text-muted hover:text-error text-xs transition-colors"
                     >删除</button>
                   </td>
@@ -557,6 +694,16 @@ function SensitiveTab() {
       ) : (
         <div className="text-center py-12 text-sm text-text-muted">暂无敏感词</div>
       )}
+
+      {/* Delete Word Confirm */}
+      <ConfirmModal
+        open={!!deleteWordId}
+        title="确认删除"
+        message="确定要删除此敏感词吗？"
+        loading={deleteMut.isPending}
+        onConfirm={() => { deleteMut.mutate(deleteWordId!); setDeleteWordId(null); }}
+        onCancel={() => setDeleteWordId(null)}
+      />
     </div>
   );
 }
@@ -847,7 +994,7 @@ function AccountTab() {
 }
 
 // ─── Tab Registry ────────────────────────────────────────────
-const TAB_COMPONENTS: Record<string, () => JSX.Element> = {
+const TAB_COMPONENTS: Record<string, () => React.ReactNode> = {
   general: GeneralTab,
   strategies: StrategiesTab,
   sensitive: SensitiveTab,
@@ -857,8 +1004,21 @@ const TAB_COMPONENTS: Record<string, () => JSX.Element> = {
 };
 
 export default function SettingsPage() {
-  const [active, setActive] = useState('general');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab');
+  const [active, setActive] = useState(tabFromUrl && TAB_COMPONENTS[tabFromUrl] ? tabFromUrl : 'general');
   const TabComponent = TAB_COMPONENTS[active];
+
+  useEffect(() => {
+    if (tabFromUrl && TAB_COMPONENTS[tabFromUrl]) {
+      setActive(tabFromUrl);
+    }
+  }, [tabFromUrl]);
+
+  const handleTabChange = (key: string) => {
+    setActive(key);
+    setSearchParams({ tab: key }, { replace: true });
+  };
 
   return (
     <div className="flex h-[calc(100vh-3.5rem-3rem)]">
@@ -869,7 +1029,7 @@ export default function SettingsPage() {
           {NAV_ITEMS.map((item) => (
             <button
               key={item.key}
-              onClick={() => setActive(item.key)}
+              onClick={() => handleTabChange(item.key)}
               className={`w-full text-left px-3 py-2.5 rounded-md text-sm transition-all duration-150
                 ${active === item.key
                   ? 'bg-bg-hover text-text-primary border-l-2 border-brand -ml-0.5 pl-[10px]'

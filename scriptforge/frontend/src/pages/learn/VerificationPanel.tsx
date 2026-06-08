@@ -26,11 +26,15 @@ interface LineData {
   materialId: string;
 }
 
+export type { LineData };
+
 interface Props {
   materials: MaterialItem[];
   onLock: (verifiedText: string) => void;
   locked: boolean;
   anchorProfile?: import('../../types').AnchorProfile | null;
+  onLineDataChange?: (lineData: LineData[]) => void;
+  initialLineData?: LineData[];
 }
 
 const ROLE_COLORS: Record<string, string> = {
@@ -40,7 +44,7 @@ const ROLE_COLORS: Record<string, string> = {
   '连麦人C': 'text-purple-400 font-semibold',
 };
 
-export default function VerificationPanel({ materials, onLock, locked, anchorProfile }: Props) {
+export default function VerificationPanel({ materials, onLock, locked, anchorProfile, onLineDataChange, initialLineData }: Props) {
   const [roles, setRoles] = useState<string[]>(['主播', '连麦人A']);
   const [activeRole, setActiveRole] = useState('主播');
   const [videoModal, setVideoModal] = useState<{ open: boolean; seconds: number; name: string; src?: string }>({ open: false, seconds: 0, name: '' });
@@ -87,7 +91,12 @@ export default function VerificationPanel({ materials, onLock, locked, anchorPro
     return result;
   }, [materials]);
 
-  const [lineData, setLineData] = useState<LineData[]>(lines);
+  const [lineData, setLineData] = useState<LineData[]>(initialLineData && initialLineData.length > 0 ? initialLineData : lines);
+
+  // Notify parent of lineData changes
+  useEffect(() => {
+    onLineDataChange?.(lineData);
+  }, [lineData, onLineDataChange]);
 
   // Sync when materials change, preserving existing role/emotion annotations
   useEffect(() => {

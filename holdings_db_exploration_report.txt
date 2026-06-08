@@ -1,0 +1,4 @@
+  File "/tmp/full_explore.py", line 42
+    print("
+          ^
+SyntaxError: unterminated string literal (detected at line 42)

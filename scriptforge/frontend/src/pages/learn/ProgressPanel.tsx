@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import {
   Download, FileText, Search, Brain, BarChart3,
   CheckCircle, AlertCircle, Loader2, User, Video,
-  Filter, Trophy, ListChecks,
+  Filter, Trophy, ListChecks, Mic,
 } from 'lucide-react';
 
 export interface ProgressEvent {
@@ -10,7 +10,7 @@ export interface ProgressEvent {
   message: string;
   current?: number;
   total?: number;
-  phase?: 'start' | 'done' | 'failed';
+  phase?: 'start' | 'done' | 'failed' | 'progress';
   title?: string;
   file_size?: number;
   download_seconds?: number;
@@ -38,6 +38,8 @@ export interface ProgressEvent {
   downloaded?: number;
   failed?: number;
   result?: any;
+  error?: string;
+  elapsed?: number;
 }
 
 const STEP_META: Record<string, { icon: typeof Download; label: string }> = {
@@ -47,6 +49,7 @@ const STEP_META: Record<string, { icon: typeof Download; label: string }> = {
   top_selected: { icon: Trophy, label: '选定视频' },
   downloading_videos: { icon: Download, label: '下载视频' },
   extracting_audio: { icon: FileText, label: '提取音频' },
+  building_voice_profile: { icon: Mic, label: '构建声纹档案' },
   transcribing: { icon: ListChecks, label: '转写文字' },
   search_enhancing: { icon: Search, label: '搜索增强' },
   analyzing: { icon: Brain, label: 'AI 深度分析' },
@@ -60,6 +63,7 @@ const STEP_ORDER = [
   'top_selected',
   'downloading_videos',
   'extracting_audio',
+  'building_voice_profile',
   'transcribing',
   'search_enhancing',
   'analyzing',
@@ -67,19 +71,91 @@ const STEP_ORDER = [
 ];
 
 function getOrderedSteps(hasSearch: boolean): string[] {
-  const steps = STEP_ORDER.filter((s) => {
-    if (s === 'search_enhancing') return hasSearch;
-    return true;
-  });
-  return steps;
+  return STEP_ORDER.filter((s) => s !== 'search_enhancing' || hasSearch);
 }
+
+// ── Per-video status derived from parallel pipeline events ──
+
+interface VideoPipelineStatus {
+  index: number;       // 1-based
+  title: string;
+  download: 'pending' | 'active' | 'done' | 'failed';
+  transcribe: 'pending' | 'active' | 'done' | 'failed';
+  fileSize?: number;
+  downloadSeconds?: number;
+  wordCount?: number;
+  downloadError?: string;
+  transcribeError?: string;
+}
+
+function buildVideoStatuses(events: ProgressEvent[]): Map<number, VideoPipelineStatus> {
+  const map = new Map<number, VideoPipelineStatus>();
+
+  for (const ev of events) {
+    if (ev.current == null || !ev.title) continue;
+    const idx = ev.current;
+    if (!map.has(idx)) {
+      map.set(idx, {
+        index: idx,
+        title: ev.title,
+        download: 'pending',
+        transcribe: 'pending',
+      });
+    }
+    const vs = map.get(idx)!;
+
+    if (ev.step === 'downloading_videos') {
+      if (ev.phase === 'start' && vs.download === 'pending') vs.download = 'active';
+      if (ev.phase === 'done') {
+        vs.download = 'done';
+        vs.fileSize = ev.file_size;
+        vs.downloadSeconds = ev.download_seconds;
+      }
+      if (ev.phase === 'failed') {
+        vs.download = 'failed';
+        vs.downloadError = ev.error;
+      }
+    }
+
+    if (ev.step === 'transcribing') {
+      if (ev.phase === 'start' && vs.transcribe === 'pending') vs.transcribe = 'active';
+      if (ev.phase === 'done') {
+        vs.transcribe = 'done';
+        vs.wordCount = ev.word_count;
+      }
+      if (ev.phase === 'failed') {
+        vs.transcribe = 'failed';
+        vs.transcribeError = ev.error;
+      }
+    }
+  }
+
+  return map;
+}
+
+function formatSize(bytes: number | undefined): string {
+  if (bytes == null) return '';
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
+// ── Component ──
 
 interface Props {
   events: ProgressEvent[];
+  connState?: 'connected' | 'reconnecting' | 'polling';
 }
 
-export default function ProgressPanel({ events }: Props) {
+export default function ProgressPanel({ events, connState }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // All hooks must be called before any early returns
+  const videoStatuses = useMemo(() => buildVideoStatuses(events), [events]);
+  const videoList = useMemo(
+    () => Array.from(videoStatuses.values()).sort((a, b) => a.index - b.index),
+    [videoStatuses],
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -92,7 +168,6 @@ export default function ProgressPanel({ events }: Props) {
   const hasSearch = events.some((e) => e.step === 'search_enhancing' || e.step === 'search_done');
   const orderedSteps = getOrderedSteps(hasSearch);
 
-  // Build step status map
   const stepStatus: Record<string, 'pending' | 'active' | 'done'> = {};
   for (const s of orderedSteps) stepStatus[s] = 'pending';
 
@@ -114,32 +189,34 @@ export default function ProgressPanel({ events }: Props) {
     if (step === 'done' || step === 'error') continue;
 
     if (STEP_META[step]) {
-      if (!completedSteps.has(step)) {
-        stepStatus[step] = 'active';
-      }
-      if (ev.phase === 'done') {
-        completedSteps.add(step);
-      }
+      if (!completedSteps.has(step)) stepStatus[step] = 'active';
+      if (ev.phase === 'done') completedSteps.add(step);
     }
   }
 
-  for (const s of completedSteps) {
-    stepStatus[s] = 'done';
-  }
+  for (const s of completedSteps) stepStatus[s] = 'done';
 
   const lastEvent = events[events.length - 1];
   const isDone = lastEvent?.step === 'done';
   const isError = lastEvent?.step === 'error';
 
-  // Progress percentage
   const doneCount = Object.values(stepStatus).filter((s) => s === 'done').length;
   const totalSteps = orderedSteps.length;
   const progress = isDone ? 100 : Math.round((doneCount / totalSteps) * 100);
 
-  // Collect recent messages for display
+  const hasVideoEvents = videoList.length > 0;
+
+  // Summary counts
+  const dlDone = videoList.filter((v) => v.download === 'done').length;
+  const dlActive = videoList.filter((v) => v.download === 'active').length;
+  const dlFailed = videoList.filter((v) => v.download === 'failed').length;
+  const trDone = videoList.filter((v) => v.transcribe === 'done').length;
+  const trActive = videoList.filter((v) => v.transcribe === 'active').length;
+  const trFailed = videoList.filter((v) => v.transcribe === 'failed').length;
+
+  // Recent messages for live log
   const recentMessages = events.slice(-20).filter((e) => e.message && e.step !== 'done' && e.step !== 'error');
 
-  // Get group progress for download/extract/transcribe
   function getGroupProgress(stepKey: string): { current: number; total: number } | null {
     const relevant = events.filter((e) => e.step === stepKey && e.total && e.total > 0);
     if (!relevant.length) return null;
@@ -147,8 +224,23 @@ export default function ProgressPanel({ events }: Props) {
     return { current: last.current || 0, total: last.total };
   }
 
+  // Determine pipeline phase: pre-download, in-pipeline, or post-pipeline
+  const pipelineActive = stepStatus['downloading_videos'] === 'active' ||
+    stepStatus['extracting_audio'] === 'active' ||
+    stepStatus['transcribing'] === 'active';
+  const pipelineDone = stepStatus['downloading_videos'] === 'done' &&
+    stepStatus['transcribing'] === 'done';
+
   return (
     <div className="space-y-4">
+      {/* Connection state banner */}
+      {connState === 'polling' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-yellow-500/10 border border-yellow-500/30 rounded-lg text-sm text-yellow-400">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>实时连接中断，正在通过轮询更新进度...</span>
+        </div>
+      )}
+
       {/* Progress bar */}
       <div className="space-y-1.5">
         <div className="flex justify-between text-xs text-text-muted">
@@ -194,18 +286,149 @@ export default function ProgressPanel({ events }: Props) {
               )}
               <span className={isActive ? 'font-medium' : ''}>{meta.label}</span>
 
-              {/* Inline progress for grouped steps */}
-              {groupProgress && (
+              {groupProgress && !hasVideoEvents && (
                 <span className="ml-auto text-xs tabular-nums">
                   {groupProgress.current}/{groupProgress.total}
                 </span>
               )}
+
+              {isActive && step === 'analyzing' && (() => {
+                const elapsedEvents = events.filter((e) => e.step === 'analyzing' && e.elapsed != null);
+                const last = elapsedEvents[elapsedEvents.length - 1];
+                return last ? <span className="ml-auto text-xs tabular-nums">{last.elapsed}s</span> : null;
+              })()}
             </div>
           );
         })}
       </div>
 
-      {/* Live log: recent messages with auto-scroll */}
+      {/* ── Per-video pipeline view ── */}
+      {hasVideoEvents && (
+        <div className="bg-bg-card border border-border-default rounded-lg p-3 space-y-2">
+          {/* Summary bar */}
+          <div className="flex items-center gap-3 text-xs flex-wrap">
+            <span className="text-text-secondary font-medium">视频处理流水线</span>
+            <span className="text-text-muted">|</span>
+            <span className="flex items-center gap-1">
+              <Download className="w-3 h-3" />
+              下载 {dlDone + dlFailed}/{videoList.length}
+              {dlActive > 0 && <span className="text-brand"> ({dlActive} 进行中)</span>}
+              {dlFailed > 0 && <span className="text-error"> ({dlFailed} 失败)</span>}
+            </span>
+            <span className="text-text-muted">|</span>
+            <span className="flex items-center gap-1">
+              <Mic className="w-3 h-3" />
+              转写 {trDone + trFailed}/{videoList.length}
+              {trActive > 0 && <span className="text-brand"> ({trActive} 进行中)</span>}
+              {trFailed > 0 && <span className="text-error"> ({trFailed} 失败)</span>}
+            </span>
+          </div>
+
+          {/* Video cards */}
+          <div className="space-y-1 max-h-60 overflow-y-auto" ref={pipelineActive ? scrollRef : undefined}>
+            {videoList.map((vs) => (
+              <div
+                key={vs.index}
+                className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded text-xs transition-colors ${
+                  vs.download === 'failed' || vs.transcribe === 'failed'
+                    ? 'bg-error/5'
+                    : vs.transcribe === 'done'
+                    ? 'bg-success/5'
+                    : vs.download === 'active' || vs.transcribe === 'active'
+                    ? 'bg-brand/5'
+                    : 'bg-bg-hover'
+                }`}
+              >
+                {/* Index */}
+                <span className="w-5 text-center text-text-muted font-mono text-[11px] shrink-0">
+                  {vs.index}
+                </span>
+
+                {/* Title */}
+                <span className="flex-1 truncate text-text-primary" title={vs.title}>
+                  {vs.title}
+                </span>
+
+                {/* Download badge */}
+                <span
+                  className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full shrink-0 text-[11px] ${
+                    vs.download === 'done'
+                      ? 'bg-success/10 text-success'
+                      : vs.download === 'active'
+                      ? 'bg-brand/10 text-brand'
+                      : vs.download === 'failed'
+                      ? 'bg-error/10 text-error'
+                      : 'bg-bg-hover text-text-muted'
+                  }`}
+                  title={
+                    vs.download === 'done'
+                      ? `${formatSize(vs.fileSize)} · ${vs.downloadSeconds}s`
+                      : vs.download === 'failed'
+                      ? vs.downloadError
+                      : undefined
+                  }
+                >
+                  {vs.download === 'done' ? (
+                    <CheckCircle className="w-3 h-3" />
+                  ) : vs.download === 'active' ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : vs.download === 'failed' ? (
+                    <AlertCircle className="w-3 h-3" />
+                  ) : (
+                    <Download className="w-3 h-3" />
+                  )}
+                  {vs.download === 'done' && vs.fileSize != null
+                    ? formatSize(vs.fileSize)
+                    : vs.download === 'active'
+                    ? '下载中'
+                    : vs.download === 'failed'
+                    ? '失败'
+                    : '等待'}
+                </span>
+
+                {/* Transcribe badge */}
+                <span
+                  className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full shrink-0 text-[11px] ${
+                    vs.transcribe === 'done'
+                      ? 'bg-success/10 text-success'
+                      : vs.transcribe === 'active'
+                      ? 'bg-brand/10 text-brand'
+                      : vs.transcribe === 'failed'
+                      ? 'bg-error/10 text-error'
+                      : 'bg-bg-hover text-text-muted'
+                  }`}
+                  title={
+                    vs.transcribe === 'done'
+                      ? `${vs.wordCount || 0} 字`
+                      : vs.transcribe === 'failed'
+                      ? vs.transcribeError
+                      : undefined
+                  }
+                >
+                  {vs.transcribe === 'done' ? (
+                    <CheckCircle className="w-3 h-3" />
+                  ) : vs.transcribe === 'active' ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : vs.transcribe === 'failed' ? (
+                    <AlertCircle className="w-3 h-3" />
+                  ) : (
+                    <Mic className="w-3 h-3" />
+                  )}
+                  {vs.transcribe === 'done'
+                    ? `${vs.wordCount || 0}字`
+                    : vs.transcribe === 'active'
+                    ? '转写中'
+                    : vs.transcribe === 'failed'
+                    ? '失败'
+                    : '等待'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Live log */}
       {recentMessages.length > 0 && !isDone && !isError && (
         <div
           ref={scrollRef}
@@ -232,7 +455,7 @@ export default function ProgressPanel({ events }: Props) {
         </div>
       )}
 
-      {/* ASR sub-progress bar — shown during transcription */}
+      {/* ASR sub-progress bar */}
       {(() => {
         const asrEvents = events.filter((e) => e.step === 'transcribing' && e.asr_progress_pct != null);
         const lastAsr = asrEvents[asrEvents.length - 1];

@@ -35,6 +35,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# 数据缓存（股票代码映射等）
+data/*.json
+data/*.csv
+data/*.pkl
+!data/.gitkeep
+
 # 依赖
 node_modules/
 __pycache__/

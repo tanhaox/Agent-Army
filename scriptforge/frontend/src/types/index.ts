@@ -40,6 +40,41 @@ export interface NarrativeStyle {
   pacing_summary: string;
 }
 
+export interface NarrativeModel {
+  opening_style: string;
+  reversal_timing: string;
+  rhythm_summary: string;
+  narrative_units: Array<{
+    name: string;
+    steps: string[];
+    usage_frequency: string;
+  }>;
+  catchphrase_count: number;
+  distinctive_features: string[];
+  completeness_score: number;
+}
+
+export interface LanguageStyleV2 {
+  rhetorical_question_freq: number;
+  interrupt_tendency: number;
+  sharpness: number;
+  self_deprecation: number;
+  humor_type: string;
+  pace: string;
+  max_pause_seconds: number;
+  grab_floor_freq: number;
+  monologue_length: string;
+  empathy_style: string;
+  emotional_volatility: number;
+  emotional_triggers: string[];
+  metaphor_domains: string[];
+  topic_preferences: string[];
+  punchline_density: number;
+  opening_phrase: string | null;
+  transition_phrase: string | null;
+  closing_phrase: string | null;
+}
+
 // 人设详情
 export interface PersonaDetail {
   id: string;
@@ -50,13 +85,22 @@ export interface PersonaDetail {
   sentence_templates: string[] | null;
   core_values: string[] | null;
   language_style: Record<string, string | number> | null;
-  tone_adaptation: Record<string, string> | null;
+  language_style_v2: LanguageStyleV2 | null;
+  tone_adaptation: Record<string, string | number> | null;
   narrative_style: NarrativeStyle | null;
   version: number;
   is_active: boolean;
+  is_template: boolean;
   created_at: string | null;
   slice_count: number;
   version_notes: { version: number; summary: string; added_slices: number }[] | null;
+  source_anchor_name?: string | null;
+  source_anchor_id?: string | null;
+  source_homepage_url?: string | null;
+  narrative_model?: NarrativeModel | null;
+  tags?: string[] | null;
+  lingo_map?: Record<string, string> | null;
+  degraded?: boolean;
 }
 
 // 人设列表
@@ -67,6 +111,13 @@ export interface PersonaListItem {
   version: number;
   is_active: boolean;
   created_at: string | null;
+  source_anchor_name?: string | null;
+  source_anchor_id?: string | null;
+  source_homepage_url?: string | null;
+  source_follower_count?: number | null;
+  narrative_model?: NarrativeModel | null;
+  tags?: string[] | null;
+  lingo_map?: Record<string, string> | null;
 }
 
 export interface PersonaListResponse {
@@ -154,4 +205,88 @@ export interface AnchorProfile {
   homepage_url: string;
   avatar_url?: string | null;
   bio?: string | null;
+}
+
+// 素材资产
+export interface AssetItem {
+  id: string;
+  task_id: string;
+  anchor_name: string;
+  video_title: string;
+  asset_type: 'video' | 'audio' | 'transcript';
+  file_path: string;
+  file_size: number;
+  duration: number;
+  transcription_text: string | null;
+  video_url: string | null;
+}
+
+export interface AssetListResponse {
+  items: AssetItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface AssetGroupStats {
+  anchor_name: string;
+  persona_id: string | null;
+  persona_name: string | null;
+  video_count: number;
+  audio_count: number;
+  transcript_count: number;
+  total_size: number;
+}
+
+// 任务记录
+export interface TaskRecord {
+  id: string;
+  task_id: string;
+  trigger: 'stream' | 'celery' | 'douyin_user_import' | 'batch_retranscribe' | 'batch_transcribe';
+  url: string;
+  anchor_name: string;
+  anchor_avatar?: string | null;
+  follower_count: number;
+  status: 'running' | 'completed' | 'failed';
+  error_message?: string | null;
+  video_count: number;
+  downloaded_count: number;
+  transcribed_count: number;
+  persona_id?: string | null;
+  persona_name?: string | null;
+  result_summary?: { current_step?: string; message?: string; progress_pct?: number } | null;
+  created_at: string;
+}
+
+export interface TaskRecordDetail extends TaskRecord {
+  result_summary: Record<string, unknown> | null;
+}
+
+export interface TaskRecordListResponse {
+  items: TaskRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// 编导要求
+export interface DirectorRole {
+  id?: string;
+  role_type: 'anchor' | 'caller' | 'extra';
+  name: string;
+  position?: string;
+  function?: string;
+  persona_id?: string;
+  persona_name?: string;
+  storyline?: string;
+  perspective?: 'first_person_experience' | 'first_person_participant' | 'third_person';
+  sort_order?: number;
+}
+
+export interface DirectorAct {
+  id?: string;
+  title: string;
+  task: string;
+  participants: string[];
+  sort_order?: number;
 }

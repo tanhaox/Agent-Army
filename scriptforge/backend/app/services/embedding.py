@@ -8,11 +8,19 @@ Configure via EMBEDDING_PROVIDER in settings/env.
 """
 import hashlib
 import logging
+import os
 from abc import ABC, abstractmethod
 
 import numpy as np
 
 from app.core.config import settings
+
+# Force HuggingFace mirror before any HF imports
+os.environ.setdefault("HF_HUB_CACHE", os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "models", "huggingface",
+))
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 logger = logging.getLogger(__name__)
 

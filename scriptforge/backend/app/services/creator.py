@@ -140,15 +140,23 @@ class CreatorService:
         reference = await self._get_reference_strategies(requirements)
         prompt = _build_persona_prompt(requirements, reference)
         user_message = "请根据以上要求，设计一个完整的网红人设档案。"
-        result = await self._call_deepseek(prompt, user_message, temperature=0.9)
+        try:
+            result = await self._call_deepseek(prompt, user_message, temperature=0.9)
+        except Exception as e:
+            logger.warning("Persona creation failed, returning fallback: %s", e)
+            return _fallback_persona(requirements)
         logger.info("Created persona: %s", result.get("persona_name", "unknown"))
         return result
 
     async def create_guests(self, topic: str, count: int = 20) -> list[dict]:
         prompt = _build_guest_prompt(topic, count)
         user_message = f"请生成 {count} 个关于「{topic}」主题的差异化连线人角色。"
-        result = await self._call_deepseek(prompt, user_message, temperature=0.8)
-        guests = result.get("guests", [])
+        try:
+            result = await self._call_deepseek(prompt, user_message, temperature=0.8)
+            guests = result.get("guests", [])
+        except Exception as e:
+            logger.warning("Guest creation failed, returning fallback: %s", e)
+            guests = _fallback_guests(topic, min(count, 5))
         logger.info("Created %d guests for topic: %s", len(guests), topic)
         return guests
 
@@ -200,6 +208,33 @@ class CreatorService:
         finally:
             if own_session:
                 await db.close()
+
+
+def _fallback_persona(requirements: str) -> dict:
+    """Return a placeholder persona when DeepSeek is unavailable."""
+    return {
+        "persona_name": "降级人设",
+        "global_style": "AI 服务暂时不可用，此为占位人设，请稍后重试",
+        "language_style": {"tone": "待分析", "vocabulary": "待分析", "rhythm": "待分析", "habits": "待分析"},
+        "catchphrases": ["（待分析）"],
+        "reaction_patterns": {"greeting": "待分析", "question": "待分析", "praise": "待分析", "criticism": "待分析"},
+        "sentence_templates": [],
+        "core_values": [],
+        "tone_adaptation": {"high_energy": "待分析", "low_energy": "待分析", "emotional": "待分析"},
+        "degraded": True,
+    }
+
+
+def _fallback_guests(topic: str, count: int) -> list[dict]:
+    """Return preset guest templates when DeepSeek is unavailable."""
+    templates = [
+        {"name": "热情粉丝", "personality": "外向热情，容易激动", "core_issue": f"对{topic}有很多疑问", "speaking_style": "快节奏，感叹多"},
+        {"name": "理性分析", "personality": "冷静理性，喜欢追根究底", "core_issue": f"想深入了解{topic}的本质", "speaking_style": "有条理，逻辑清晰"},
+        {"name": "感性共鸣", "personality": "感情丰富，容易共情", "core_issue": f"在{topic}上有切身经历", "speaking_style": "叙述式，情感丰富"},
+        {"name": "质疑挑战", "personality": "独立思考，不轻易信服", "core_issue": f"对{topic}的主流观点持怀疑态度", "speaking_style": "反问多，直接"},
+        {"name": "沉默寡言", "personality": "内向少言，但观点深刻", "core_issue": f"对{topic}有独特见解但不太会表达", "speaking_style": "短句为主，偶尔爆金句"},
+    ]
+    return [{**t, "tags": ["降级"], "degraded": True} for t in templates[:count]]
 
 
 creator_service = CreatorService()

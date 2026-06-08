@@ -23,4 +23,3 @@ class User(Base, BaseMixin):
     personas: Mapped[list["Persona"]] = relationship(back_populates="creator")  # noqa: F821
     guest_identities: Mapped[list["GuestIdentity"]] = relationship(back_populates="creator")  # noqa: F821
     script_projects: Mapped[list["ScriptProject"]] = relationship(back_populates="creator")  # noqa: F821
-    learning_materials: Mapped[list["LearningMaterial"]] = relationship(back_populates="uploader")  # noqa: F821

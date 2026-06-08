@@ -1,9 +1,9 @@
 """
-增强版Agent状态页 - Phase 2 重构
+增强版Agent状态页 - v2.0 8部门制精简架构
 
 创建日期: 2026-03-14
 设计师: OMC Team Designer
-版本: v1.0
+版本: v2.0 (8部门制精简版)
 
 包含:
 - Agent搜索和筛选
@@ -68,8 +68,8 @@ def render_enhanced_agent_status():
     st.markdown("---")
 
     # 计算真实的Agent状态
-    total_agents = 35  # 设计总数
-    completed_agents = 11  # 已开发数量
+    total_agents = 24  # v2.0 设计总数（精简43%）
+    completed_agents = 11  # 已开发数量（管理2+进化3+业务6）
 
     # 统计管理层Agent状态
     running_count = 0
@@ -367,27 +367,27 @@ def render_enhanced_agent_status():
 
     create_info_card(
         title="业务层Agent状态",
-        content="✅ 0-1 MVP已完成 6个核心Agent + 自我进化系统3个AI，覆盖6大军团。所有Agent均处于空闲状态，随时可以执行任务。",
+        content="✅ v2.0已完成 6个核心Agent + 自我进化系统3个AI + 管理2个，覆盖8大部门。所有Agent均处于空闲状态，随时可以执行任务。",
         icon="ℹ️",
         color="success"
     )
 
     st.markdown("")
 
-    # 6大军团（使用tabs）
+    # 8大业务部门（使用tabs）
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📰 热点捕捉军团 (3/4)",
-        "🏗️ 产业分析军团 (1/4)",
-        "📊 个股挖掘军团 (1/4)",
-        "🎯 目标预测军团 (1/4)",
-        "💰 策略执行军团 (1/4)",
-        "📈 结果验证军团 (1/4)"
+        "📰 热点捕捉部门 (3/4)",
+        "🏗️ 产业分析部门 (1/4)",
+        "📊 个股挖掘部门 (1/4)",
+        "🎯 目标预测部门 (1/4)",
+        "💰 策略执行部门 (1/4)",
+        "📈 结果验证部门 (1/4)"
     ])
 
-    # 热点捕捉军团
+    # 热点捕捉部门
     with tab1:
         render_agent_legion(
-            legion_name="热点捕捉军团",
+            legion_name="热点捕捉部门",
             agents=[
                 {
                     "name": "市场情绪AI",
@@ -413,10 +413,10 @@ def render_enhanced_agent_status():
             ]
         )
 
-    # 产业分析军团
+    # 产业分析部门
     with tab2:
         render_agent_legion(
-            legion_name="产业分析军团",
+            legion_name="产业分析部门",
             agents=[
                 {
                     "name": "竞争格局AI",
@@ -428,10 +428,10 @@ def render_enhanced_agent_status():
             ]
         )
 
-    # 个股挖掘军团
+    # 个股挖掘部门
     with tab3:
         render_agent_legion(
-            legion_name="个股挖掘军团",
+            legion_name="个股挖掘部门",
             agents=[
                 {
                     "name": "财务健康AI",
@@ -443,10 +443,10 @@ def render_enhanced_agent_status():
             ]
         )
 
-    # 目标预测军团
+    # 目标预测部门
     with tab4:
         render_agent_legion(
-            legion_name="目标预测军团",
+            legion_name="目标预测部门",
             agents=[
                 {
                     "name": "综合评分AI",
@@ -458,10 +458,10 @@ def render_enhanced_agent_status():
             ]
         )
 
-    # 策略执行军团
+    # 策略执行部门
     with tab5:
         render_agent_legion(
-            legion_name="策略执行军团",
+            legion_name="策略执行部门",
             agents=[
                 {
                     "name": "风险控制AI",
@@ -473,10 +473,10 @@ def render_enhanced_agent_status():
             ]
         )
 
-    # 结果验证军团
+    # 结果验证部门
     with tab6:
         render_agent_legion(
-            legion_name="结果验证军团",
+            legion_name="结果验证部门",
             agents=[
                 {
                     "name": "回测分析AI",

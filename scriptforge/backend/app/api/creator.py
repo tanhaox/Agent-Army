@@ -98,6 +98,7 @@ async def save_created_persona(
         core_values=data.get("core_values", []),
         language_style=data.get("language_style", {}),
         tone_adaptation=data.get("tone_adaptation", {}),
+        lingo_map=data.get("lingo_map") or {},
         version=1,
         version_notes=[{"version": 1, "summary": "由角色生成器创建", "created_at": now}],
     )

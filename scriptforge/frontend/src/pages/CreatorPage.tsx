@@ -9,6 +9,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Spinner from '../components/ui/Spinner';
 import { toast } from '../components/ui/Toast';
+import DegradedBanner from '../components/ui/DegradedBanner';
 
 type Tab = 'persona' | 'guests' | 'fusion';
 
@@ -231,6 +232,7 @@ export default function CreatorPage() {
 
             {generatedPersona && !personaMut.isPending && (
               <div className="space-y-4">
+                {generatedPersona.degraded && <DegradedBanner />}
                 <div className="bg-bg-card border border-border-default rounded-lg p-5">
                   <PersonaDisplay persona={generatedPersona} />
                 </div>
@@ -284,6 +286,7 @@ export default function CreatorPage() {
 
             {generatedGuests.length > 0 && !guestMut.isPending && (
               <>
+                {generatedGuests.some((g) => g.degraded) && <DegradedBanner />}
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-text-muted">已生成 {generatedGuests.length} 个连线人</span>
                   <Button size="sm" variant="ghost" onClick={handleExportGuests}>
@@ -378,6 +381,7 @@ export default function CreatorPage() {
 
             {fusedPersona && !fusionMut.isPending && (
               <div className="space-y-4">
+                {fusedPersona.degraded && <DegradedBanner />}
                 <div className="bg-bg-card border border-border-default rounded-lg p-5">
                   <PersonaDisplay persona={fusedPersona} />
                 </div>

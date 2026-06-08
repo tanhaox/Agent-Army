@@ -52,6 +52,21 @@ async def close_deepseek_client() -> None:
         logger.info("DeepSeek client connection pool closed")
 
 
+def reset_client_sync() -> None:
+    """Reset the module-level client so it can be reused in a fresh asyncio.run()."""
+    global _client
+    if _client is not None:
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_client.aclose())
+            loop.close()
+        except Exception:
+            pass
+        _client = None
+        logger.debug("DeepSeek client reset for new event loop")
+
+
 @retry(
     retry=retry_if_exception_type((
         AIServiceServerError,
@@ -180,10 +195,29 @@ class DeepSeekClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            # Fallback: try to extract JSON from markdown-wrapped content
+            # Fallback 1: extract JSON from markdown-wrapped content
             match = re.search(r"\{[\s\S]*\}", content)
             if match:
-                return json.loads(match.group())
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+            # Fallback 2: repair with json_repair
+            try:
+                from json_repair import repair_json
+                repaired = repair_json(content)
+                return json.loads(repaired) if isinstance(repaired, str) else repaired
+            except Exception:
+                pass
+            # Fallback 3: repair the regex-extracted block
+            if match:
+                try:
+                    from json_repair import repair_json
+                    repaired = repair_json(match.group())
+                    return json.loads(repaired) if isinstance(repaired, str) else repaired
+                except Exception:
+                    pass
+            logger.error("All JSON repair attempts failed. Content preview: %s", content[:200])
             raise AIServiceError("Failed to parse AI response as JSON")
 
     @staticmethod

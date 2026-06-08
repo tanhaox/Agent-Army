@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Users } from 'lucide-react';
+import { Search, Users, ExternalLink } from 'lucide-react';
 import { listPersonas } from '../../services/persona';
 import type { PersonaListItem } from '../../types';
 import Spinner from '../../components/ui/Spinner';
+import EmptyState from '../../components/ui/EmptyState';
 
 interface Props {
   selected: string | null;
@@ -11,6 +13,7 @@ interface Props {
 }
 
 export default function PersonaList({ selected, onSelect }: Props) {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
 
   const { data, isLoading } = useQuery({
@@ -43,12 +46,14 @@ export default function PersonaList({ selected, onSelect }: Props) {
         {isLoading ? (
           <div className="flex justify-center py-8"><Spinner className="text-brand" /></div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-8 text-center">
-            <Users className="w-8 h-8 text-text-muted mx-auto mb-2" />
-            <p className="text-xs text-text-muted">
-              {search ? '未找到匹配的人设' : '还没有人设，去学习中心上传切片并分析'}
-            </p>
-          </div>
+          <EmptyState
+            icon={Users}
+            title={search ? '未找到匹配的人设' : '还没有人设'}
+            description={search ? '尝试其他关键词搜索' : '前往学习中心上传素材，AI 将自动分析并生成人设档案'}
+            actions={search ? undefined : [
+              { label: '前往学习中心', onClick: () => navigate('/learn') },
+            ]}
+          />
         ) : (
           items.map((p) => (
             <button
@@ -61,11 +66,18 @@ export default function PersonaList({ selected, onSelect }: Props) {
             >
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-full bg-bg-card flex items-center justify-center text-xs text-text-muted font-medium shrink-0">
-                  {p.name[0]}
+                  {p.source_anchor_name ? p.source_anchor_name[0] : p.name[0]}
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm text-text-primary truncate">{p.name}</p>
-                  <p className="text-xs text-text-muted">v{p.version}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-text-muted">v{p.version}</span>
+                    {p.source_anchor_name && (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-brand/80 bg-brand/10 rounded px-1 py-0.5">
+                        {p.source_anchor_name}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </button>

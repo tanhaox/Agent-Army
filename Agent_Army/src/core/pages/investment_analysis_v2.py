@@ -7,25 +7,82 @@
 3. 智能输入框（支持代码/名称/拼音）
 4. 全宽布局优化
 5. 新手友好的引导提示
+6. 详细的执行日志记录（v2.0.3新增）
 """
 
 import streamlit as st
 import asyncio
 import time
 import json
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+# 导入日志系统
+from src.core.logger import get_logger
+
+# 创建页面专用日志器
+logger = get_logger("InvestmentAnalysis")
 
 
 def render_newbie_guide():
     """渲染新手引导提示"""
     st.info("""
     💡 **如何开始？**
-    1. 输入6位股票代码（如：600519）或股票名称（如：贵州茅台）
-    2. 点击"🔍 开始分析"按钮
-    3. 等待2-3分钟，报告会自动展示在下方 ⬇️
+    1. 输入 **6位股票代码**（推荐）：如 600519、601669
+    2. 或输入 **股票名称**：如 贵州茅台、中国电建、伊利股份（支持50+常见股票）
+    3. 点击"🔍 开始分析"按钮
+    4. 等待2-3分钟，报告会自动展示在下方 ⬇️
+
+    📋 **常见股票代码参考**：
+    - 600519 贵州茅台  |  601669 中国电建
+    - 000858 五粮液    |  600887 伊利股份
+    - 002594 比亚迪    |  300750 宁德时代
     """)
+
+
+def convert_stock_name_to_code(stock_name: str) -> Optional[str]:
+    """
+    将股票名称转换为股票代码（使用 AKShare）
+
+    Args:
+        stock_name: 股票名称
+
+    Returns:
+        股票代码，如果找不到返回 None
+    """
+    try:
+        # 使用 AKShare 映射工具
+        from src.utils.stock_code_mapper import convert_stock_name_to_code_v2
+
+        code = convert_stock_name_to_code_v2(stock_name)
+
+        if code:
+            return code
+        else:
+            st.warning(f"""
+            ⚠️ 未找到股票 '{stock_name}' 的代码
+
+            💡 **建议**：
+            - 直接输入 **6位股票代码**（推荐）
+            - 确认股票名称正确（不含空格或特殊字符）
+
+            📋 **常见代码参考**：
+            - 600519 贵州茅台  |  601669 中国电建
+            - 000858 五粮液    |  600887 伊利股份
+            - 002594 比亚迪    |  300750 宁德时代
+            """)
+            return None
+
+    except Exception as e:
+        st.error(f"❌ 股票名称转换失败: {str(e)}")
+        return None
+        return None
+
+    except Exception as e:
+        st.error(f"❌ 股票名称转换失败: {str(e)}")
+        return None
 
 
 def render_smart_input() -> str:
@@ -56,8 +113,12 @@ def render_smart_input() -> str:
         user_input = st.text_input(
             "股票代码或名称",
             value=default_code,
-            placeholder="支持：6位代码 / 股票名称 / 拼音缩写",
-            help="示例：600519 或 贵州茅台 或 GZMT",
+            placeholder="支持：6位代码 / 股票名称",
+            help="""示例：
+• 6位代码：600519, 601669, 000858
+• 股票名称：贵州茅台, 中国电建, 五粮液, 伊利股份, 比亚迪
+
+支持50+常见股票名称自动转换（避免API限流）""",
             key="smart_stock_input"
         )
 
@@ -65,34 +126,52 @@ def render_smart_input() -> str:
         start_button = st.button("🔍 开始分析", type="primary", key="start_analysis_v2")
 
     # 智能识别输入类型
+    auto_start = False  # 是否自动开始分析
+
     if user_input:
         if user_input.isdigit() and len(user_input) == 6:
             # 6位数字 - 股票代码
             stock_code = user_input
             st.caption(f"✅ 识别为股票代码: {stock_code}")
+            auto_start = True  # 自动开始
         elif any('\u4e00' <= char <= '\u9fff' for char in user_input):
-            # 包含中文 - 股票名称
-            # TODO: 实现名称转代码的功能
-            st.warning(f"⚠️ 识别为股票名称: {user_input}")
-            st.info("💡 请输入6位股票代码（如：600519）")
-            stock_code = None
+            # 包含中文 - 股票名称，自动转换
+            with st.spinner(f"🔄 正在查找 '{user_input}' 的股票代码..."):
+                converted_code = convert_stock_name_to_code(user_input)
+                if converted_code:
+                    stock_code = converted_code
+                    st.success(f"✅ 已自动转换: {user_input} → {stock_code}")
+                    st.caption(f"💡 将使用代码 {stock_code} 进行分析")
+                    auto_start = True  # 自动开始
+                else:
+                    st.warning(f"⚠️ 未找到股票 '{user_input}' 的代码")
+                    st.info("💡 请尝试输入6位股票代码（如：600519）")
+                    stock_code = None
         else:
-            # 其他 - 可能是拼音缩写
-            st.warning(f"⚠️ 无法识别: {user_input}")
-            st.info("💡 请输入6位股票代码")
+            # 其他 - 可能是拼音缩写或错误输入
+            st.warning(f"⚠️ 无法识别输入: {user_input}")
+            st.info("💡 请输入6位股票代码（如：600519）或股票名称（如：贵州茅台）")
             stock_code = None
     else:
         stock_code = None
 
-    # 点击开始分析
-    if start_button:
+    # 点击开始分析 或 自动触发
+    if start_button or (auto_start and stock_code):
         if stock_code:
+            # 设置分析状态
             st.session_state.analyzing = True
             st.session_state.stock_code = stock_code
             st.session_state.analysis_start_time = time.time()
+            # 设置当前页面标志（确保 rerun 后仍在分析页面）
+            st.session_state.current_page = "analysis"
+            if auto_start:
+                st.info("🚀 正在自动开始分析...")
             st.rerun()
         else:
             st.error("❌ 请输入有效的股票代码")
+            # 确保页面参数正确
+            st.session_state.current_page = "analysis"
+            st.rerun()
 
     return stock_code if start_button and stock_code else None
 
@@ -108,6 +187,18 @@ def render_analysis_progress(stock_code: str):
     st.markdown(f"#### 步骤2：分析进度 - {stock_code}")
     st.markdown("---")
 
+    # 显示总体进度提示
+    st.info("""
+    📊 **分析进行中...**
+
+    预计耗时：2-3分钟
+    - 步骤1: 产业链分析（约30-60秒）
+    - 步骤2: 基本面分析（约60-90秒）
+    - 步骤3: 生成报告（约10-20秒）
+
+    💡 请耐心等待，分析完成后报告会自动展示在下方
+    """)
+
     # 初始化步骤状态
     if "step1_status" not in st.session_state:
         st.session_state.step1_status = "pending"
@@ -116,52 +207,96 @@ def render_analysis_progress(stock_code: str):
         st.session_state.step1_data = None
         st.session_state.step2_data = None
         st.session_state.step3_data = None
+        st.session_state.analysis_start_time = time.time()  # 记录开始时间
+
+    # 显示已用时间（实时计时器）
+    if st.session_state.get("analysis_start_time"):
+        elapsed = time.time() - st.session_state.analysis_start_time
+        st.metric("⏱️ 已用时间", f"{elapsed:.1f}秒")
 
     # 步骤1：产业链分析
     if st.session_state.step1_status == "pending":
+        # 显示即将开始的提示
+        st.info("🚀 正在初始化分析引擎，请稍候...")
         st.session_state.step1_status = "running"
+        time.sleep(0.5)  # 短暂延迟，让用户看到提示
         st.rerun()
 
     if st.session_state.step1_status == "running":
-        with st.container():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown("**🔄 步骤1: 产业链分析**")
-            with col2:
-                st.caption("⏳ 执行中...")
+        # 显示进度条和状态
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        status_text.text("🔄 正在初始化产业链分析器...")
+        progress_bar.progress(10)
 
         # 执行分析
         try:
+            status_text.text("🔄 正在加载分析模块...")
+            progress_bar.progress(20)
+
             from src.agents.business.industry_analyzers import IndustryChainAnalyzer
             from src.core.config import ConfigManager
+
+            status_text.text("🔄 正在配置分析参数...")
+            progress_bar.progress(30)
 
             config_manager = ConfigManager("./config")
             analyzer = IndustryChainAnalyzer(config=config_manager.get("industry_analyzer", {}))
 
+            status_text.text("🔄 正在执行产业链分析（预计30-60秒）...")
+            progress_bar.progress(40)
+
+            logger.info("Executing industry analysis", stock_code=stock_code)
             start_time = time.time()
-            result = analyzer.analyze(stock_code)
+            result_obj = asyncio.run(analyzer.analyze(stock_code))
             elapsed_time = time.time() - start_time
+            logger.info("Industry analysis completed", elapsed_time=elapsed_time, stock_code=stock_code)
+
+            status_text.text("Processing results...")
+            progress_bar.progress(70)
+
+            # 将 Pydantic 模型转换为字典
+            result = result_obj.dict() if hasattr(result_obj, 'dict') else result_obj
 
             # Commander 预审
             if st.session_state.get("commander_agent"):
-                commander = st.session_state.commander_agent
-                precheck = commander.precheck_report(
-                    agent="产业链分析AI",
-                    report_data=result,
-                    report_type="industry_analysis"
-                )
-                result["precheck_status"] = precheck.get("status", "pending")
-                result["quality_score"] = precheck.get("quality_score", 0)
+                try:
+                    status_text.text("🔄 正在进行质量审核...")
+                    progress_bar.progress(80)
+
+                    # 使用 asyncio.run 运行异步函数
+                    precheck = asyncio.run(
+                        st.session_state.commander_agent.precheck_report(
+                            agent_name="产业链分析AI",
+                            report_type="industry",
+                            report_data=result
+                        )
+                    )
+                    result["precheck_status"] = precheck.get("status", "pending")
+                    result["quality_score"] = precheck.get("quality_score", 0)
+                except Exception as e:
+                    st.warning(f"⚠️ Commander预审失败: {str(e)}")
+                    result["precheck_status"] = "failed"
+                    result["quality_score"] = 0
             else:
                 result["precheck_status"] = "skipped"
                 result["quality_score"] = 0
 
+            progress_bar.progress(100)
+            status_text.text("✅ 步骤1完成！")
+
             result["elapsed_time"] = elapsed_time
             st.session_state.step1_data = result
             st.session_state.step1_status = "completed"
+
+            time.sleep(0.5)  # 让用户看到完成状态
+            st.success(f"✅ 步骤1完成！耗时 {elapsed_time:.1f}秒")
             st.rerun()
 
         except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
             st.session_state.step1_status = "failed"
             st.session_state.step1_data = {
                 "error": str(e),
@@ -171,6 +306,8 @@ def render_analysis_progress(stock_code: str):
                     "查看日志了解详细错误"
                 ]
             }
+            st.error(f"❌ 步骤1失败: {str(e)}")
+            st.info("💡 建议检查：\n- 网络连接是否正常\n- API密钥是否配置\n- 查看日志文件: logs/agent_army.log")
             st.rerun()
 
     # 显示步骤1结果
@@ -207,54 +344,91 @@ def render_analysis_progress(stock_code: str):
 
     # 步骤2：基本面分析
     if st.session_state.step2_status == "running":
-        with st.container():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown("**🔄 步骤2: 基本面分析**")
-            with col2:
-                st.caption("⏳ 执行中...")
+        # 显示进度条和状态
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        status_text.text("🔄 正在初始化基本面分析器...")
+        progress_bar.progress(10)
 
         # 执行分析
         try:
+            status_text.text("🔄 正在加载分析模块...")
+            progress_bar.progress(20)
+
             from src.agents.business.fundamental_analyzer import FundamentalAnalyzer
             from src.core.config import ConfigManager
+
+            status_text.text("🔄 正在配置分析参数...")
+            progress_bar.progress(30)
 
             config_manager = ConfigManager("./config")
             analyzer = FundamentalAnalyzer(config=config_manager.get("fundamental_analyzer", {}))
 
+            status_text.text("🔄 正在执行基本面分析（预计30-60秒）...")
+            progress_bar.progress(40)
+
+            logger.info("Executing industry analysis", stock_code=stock_code)
             start_time = time.time()
-            result = analyzer.analyze(stock_code)
+            result_obj = asyncio.run(analyzer.analyze(stock_code))
             elapsed_time = time.time() - start_time
+            logger.info("Industry analysis completed", elapsed_time=elapsed_time, stock_code=stock_code)
+
+            status_text.text("Processing results...")
+            progress_bar.progress(70)
+
+            # 将 Pydantic 模型转换为字典
+            result = result_obj.dict() if hasattr(result_obj, 'dict') else result_obj
 
             # Commander 预审
             if st.session_state.get("commander_agent"):
-                commander = st.session_state.commander_agent
-                precheck = commander.precheck_report(
-                    agent="基本面分析AI",
-                    report_data=result,
-                    report_type="fundamental_analysis"
-                )
-                result["precheck_status"] = precheck.get("status", "pending")
-                result["quality_score"] = precheck.get("quality_score", 0)
+                try:
+                    status_text.text("🔄 正在进行质量审核...")
+                    progress_bar.progress(80)
+
+                    # 使用 asyncio.run 运行异步函数
+                    precheck = asyncio.run(
+                        st.session_state.commander_agent.precheck_report(
+                            agent_name="基本面分析AI",
+                            report_type="fundamental",
+                            report_data=result
+                        )
+                    )
+                    result["precheck_status"] = precheck.get("status", "pending")
+                    result["quality_score"] = precheck.get("quality_score", 0)
+                except Exception as e:
+                    st.warning(f"⚠️ Commander预审失败: {str(e)}")
+                    result["precheck_status"] = "failed"
+                    result["quality_score"] = 0
             else:
                 result["precheck_status"] = "skipped"
                 result["quality_score"] = 0
 
+            progress_bar.progress(100)
+            status_text.text("✅ 步骤2完成！")
+
             result["elapsed_time"] = elapsed_time
             st.session_state.step2_data = result
             st.session_state.step2_status = "completed"
+
+            time.sleep(0.5)
+            st.success(f"✅ 步骤2完成！耗时 {elapsed_time:.1f}秒")
             st.rerun()
 
         except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
             st.session_state.step2_status = "failed"
             st.session_state.step2_data = {
                 "error": str(e),
                 "suggestions": [
                     "检查网络连接",
-                    "确认 Tushare API 密钥已配置",
+                    "确认数据源可访问",
                     "查看日志了解详细错误"
                 ]
             }
+            st.error(f"❌ 步骤2失败: {str(e)}")
+            st.info("💡 建议检查：\n- 网络连接是否正常\n- API密钥是否配置\n- 查看日志文件: logs/agent_army.log")
             st.rerun()
 
     # 显示步骤2结果
@@ -291,19 +465,28 @@ def render_analysis_progress(stock_code: str):
 
     # 步骤3：生成最终报告
     if st.session_state.step3_status == "running":
-        with st.container():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown("**🔄 步骤3: 生成最终报告**")
-            with col2:
-                st.caption("⏳ 执行中...")
+        # 显示进度条和状态
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        status_text.text("🔄 正在初始化报告生成器...")
+        progress_bar.progress(10)
 
         # 执行报告生成
         try:
+            status_text.text("🔄 正在加载工作流模块...")
+            progress_bar.progress(20)
+
             from src.workflows.investment_analysis_workflow import InvestmentAnalysisWorkflow
             from src.core.config import ConfigManager
 
+            status_text.text("🔄 正在配置报告参数...")
+            progress_bar.progress(30)
+
             config_manager = ConfigManager("./config")
+
+            status_text.text("🔄 正在整合分析结果...")
+            progress_bar.progress(40)
 
             # 整合步骤1和步骤2的结果
             step1_result = st.session_state.step1_data
@@ -312,6 +495,9 @@ def render_analysis_progress(stock_code: str):
             workflow = InvestmentAnalysisWorkflow(config=config_manager.get("workflow", {}))
 
             start_time = time.time()
+
+            status_text.text("🔄 正在生成最终报告（预计10-20秒）...")
+            progress_bar.progress(50)
 
             # 生成最终报告
             final_report = {
@@ -336,15 +522,31 @@ def render_analysis_progress(stock_code: str):
                 }
             }
 
+            status_text.text("🔄 正在进行最终审核...")
+            progress_bar.progress(80)
+
             elapsed_time = time.time() - start_time
             final_report["elapsed_time"] = elapsed_time
+
+            progress_bar.progress(100)
+            status_text.text("✅ 步骤3完成！")
 
             st.session_state.step3_data = final_report
             st.session_state.step3_status = "completed"
             st.session_state.analyzing = False  # 分析完成
+
+            # 计算总耗时
+            if st.session_state.get("analysis_start_time"):
+                total_elapsed = time.time() - st.session_state.analysis_start_time
+
+            time.sleep(0.5)
+            st.success(f"🎉 分析完成！总耗时 {total_elapsed:.1f}秒")
+            st.balloons()
             st.rerun()
 
         except Exception as e:
+            progress_bar.empty()
+            status_text.empty()
             st.session_state.step3_status = "failed"
             st.session_state.step3_data = {
                 "error": str(e),
@@ -355,6 +557,8 @@ def render_analysis_progress(stock_code: str):
                 ]
             }
             st.session_state.analyzing = False
+            st.error(f"❌ 步骤3失败: {str(e)}")
+            st.info("💡 建议检查：\n- 前两步是否成功完成\n- 数据是否完整\n- 查看日志文件: logs/agent_army.log")
             st.rerun()
 
 
@@ -395,8 +599,12 @@ def render_final_report(stock_code: str):
     st.markdown("#### 步骤3：分析报告")
     st.markdown("---")
 
-    # 成功提示
-    st.success("🎉 分析完成！报告已自动展示在下方 ⬇️")
+    # 成功提示和总耗时
+    if st.session_state.get("analysis_start_time"):
+        total_elapsed = time.time() - st.session_state.analysis_start_time
+        st.success(f"🎉 分析完成！总耗时 {total_elapsed:.1f}秒，报告已自动展示在下方 ⬇️")
+    else:
+        st.success("🎉 分析完成！报告已自动展示在下方 ⬇️")
 
     # 获取报告数据
     report_data = st.session_state.step3_data

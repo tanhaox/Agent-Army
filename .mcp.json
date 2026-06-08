@@ -190,5 +190,9 @@
       "chrome-devtools-mcp@latest",
       "--browser-url=http://127.0.0.1:9222"
     ]
+  },
+  "tushare": {
+    "type": "sse",
+    "url": "https://api.tushare.pro/mcp/?token=b868cd20179623c5fb162c8a61569885ecdf6155528cf8807f216162"
   }
 }

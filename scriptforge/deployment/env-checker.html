@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScriptForge 环境检查器</title>
+<style>
+  :root {
+    --bg-primary: #0A0A0A;
+    --bg-card: #1A1A1A;
+    --bg-hover: #242424;
+    --border: #2A2A2A;
+    --text-primary: #ECECEC;
+    --text-secondary: #888888;
+    --text-muted: #555555;
+    --brand: #6366F1;
+    --brand-hover: #818CF8;
+    --success: #10B981;
+    --error: #EF4444;
+    --warning: #F59E0B;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+  .container { max-width: 720px; width: 100%; }
+  .header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+  .logo {
+    width: 56px; height: 56px;
+    background: var(--brand);
+    border-radius: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin-bottom: 16px;
+  }
+  .header h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+  .header p { color: var(--text-secondary); font-size: 14px; }
+
+  .check-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+    transition: border-color 0.2s;
+  }
+  .check-card:hover { border-color: #3A3A3A; }
+  .check-card.pass { border-color: var(--success); }
+  .check-card.fail { border-color: var(--error); }
+
+  .check-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .check-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .check-icon {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    background: var(--bg-hover);
+  }
+  .check-name { font-weight: 600; font-size: 15px; }
+  .check-desc { color: var(--text-secondary); font-size: 13px; margin-top: 2px; }
+
+  .status-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .status-pending { background: var(--bg-hover); color: var(--text-secondary); }
+  .status-pass { background: rgba(16,185,129,0.15); color: var(--success); }
+  .status-fail { background: rgba(239,68,68,0.15); color: var(--error); }
+
+  .check-body { margin-top: 12px; }
+
+  .cmd-block {
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    position: relative;
+  }
+  .cmd-block code {
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 13px;
+    color: var(--brand-hover);
+    word-break: break-all;
+    display: block;
+  }
+  .cmd-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.15s;
+  }
+  .copy-btn:hover { background: var(--brand); color: white; border-color: var(--brand); }
+
+  .input-area { margin-top: 12px; }
+  .input-area textarea {
+    width: 100%;
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12px;
+    resize: vertical;
+    min-height: 80px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .input-area textarea:focus { border-color: var(--brand); }
+  .input-area textarea::placeholder { color: var(--text-muted); }
+
+  .verify-btn {
+    margin-top: 8px;
+    background: var(--brand);
+    color: white;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  .verify-btn:hover { background: var(--brand-hover); }
+
+  .guide {
+    margin-top: 16px;
+    padding: 16px;
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .guide h4 { color: var(--error); margin-bottom: 8px; font-size: 13px; }
+  .guide a { color: var(--brand-hover); text-decoration: none; }
+  .guide a:hover { text-decoration: underline; }
+  .guide code {
+    background: rgba(255,255,255,0.08);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Consolas', monospace;
+    font-size: 12px;
+  }
+
+  .summary {
+    text-align: center;
+    margin-top: 32px;
+    padding: 24px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  .summary.ready {
+    border-color: var(--success);
+    background: rgba(16,185,129,0.08);
+  }
+  .summary.not-ready {
+    border-color: var(--warning);
+    background: rgba(245,158,11,0.08);
+  }
+  .summary h2 { font-size: 20px; margin-bottom: 8px; }
+  .summary p { color: var(--text-secondary); font-size: 14px; }
+
+  .step-hint {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: rgba(99,102,241,0.1);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--brand-hover);
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <div class="logo">SF</div>
+    <h1>ScriptForge 环境检查器</h1>
+    <p>在安装 ScriptForge 前，请确保以下环境依赖已正确安装</p>
+  </div>
+
+  <!-- Check 1: Docker Desktop -->
+  <div class="check-card" id="card-docker">
+    <div class="check-header">
+      <div class="check-title">
+        <div class="check-icon">🐳</div>
+        <div>
+          <div class="check-name">Docker Desktop</div>
+          <div class="check-desc">容器运行时，ScriptForge 的核心依赖</div>
+        </div>
+      </div>
+      <span class="status-badge status-pending" id="status-docker">待检测</span>
+    </div>
+    <div class="check-body" id="body-docker">
+      <div class="step-hint">
+        点击下方按钮复制命令，在 <strong>PowerShell</strong> 或 <strong>CMD</strong> 中执行，然后将输出结果粘贴到下方文本框。
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-label">检测命令</div>
+        <code>docker --version</code>
+        <button class="copy-btn" onclick="copyCmd('docker --version', this)">复制</button>
+      </div>
+      <div class="input-area">
+        <textarea id="output-docker" placeholder="将命令执行结果粘贴到此处..." oninput="checkResult('docker')"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Check 2: NVIDIA Driver -->
+  <div class="check-card" id="card-nvidia">
+    <div class="check-header">
+      <div class="check-title">
+        <div class="check-icon">🖥️</div>
+        <div>
+          <div class="check-name">NVIDIA 显卡驱动</div>
+          <div class="check-desc">GPU 加速语音转写（可选，无 GPU 时使用 CPU 模式）</div>
+        </div>
+      </div>
+      <span class="status-badge status-pending" id="status-nvidia">待检测</span>
+    </div>
+    <div class="check-body" id="body-nvidia">
+      <div class="step-hint">
+        如果没有 NVIDIA 显卡，可跳过此检查。ScriptForge 将使用 CPU 模式运行，转写速度较慢。
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-label">检测命令</div>
+        <code>nvidia-smi</code>
+        <button class="copy-btn" onclick="copyCmd('nvidia-smi', this)">复制</button>
+      </div>
+      <div class="input-area">
+        <textarea id="output-nvidia" placeholder="将命令执行结果粘贴到此处...&#10;无 NVIDIA 显卡可留空跳过" oninput="checkResult('nvidia')"></textarea>
+        <button class="verify-btn" onclick="skipCheck('nvidia')" style="background:var(--bg-hover);color:var(--text-secondary);margin-left:8px">跳过（无 NVIDIA 显卡）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Check 3: NVIDIA Container Toolkit -->
+  <div class="check-card" id="card-toolkit">
+    <div class="check-header">
+      <div class="check-title">
+        <div class="check-icon">🔧</div>
+        <div>
+          <div class="check-name">NVIDIA Container Toolkit</div>
+          <div class="check-desc">Docker 内 GPU 访问支持（可选，依赖上方显卡驱动）</div>
+        </div>
+      </div>
+      <span class="status-badge status-pending" id="status-toolkit">待检测</span>
+    </div>
+    <div class="check-body" id="body-toolkit">
+      <div class="step-hint">
+        此检查需要先完成 Docker Desktop 检查。无 NVIDIA 显卡可跳过。
+      </div>
+      <div class="cmd-block">
+        <div class="cmd-label">检测命令</div>
+        <code style="font-size:12px">docker run --rm --gpus all nvidia/cuda:12.4.0-runtime-ubuntu22.04 nvidia-smi</code>
+        <button class="copy-btn" onclick="copyCmd('docker run --rm --gpus all nvidia/cuda:12.4.0-runtime-ubuntu22.04 nvidia-smi', this)">复制</button>
+      </div>
+      <div class="input-area">
+        <textarea id="output-toolkit" placeholder="将命令执行结果粘贴到此处...&#10;首次运行会下载约 500MB 镜像&#10;无 NVIDIA 显卡可留空跳过" oninput="checkResult('toolkit')"></textarea>
+        <button class="verify-btn" onclick="skipCheck('toolkit')" style="background:var(--bg-hover);color:var(--text-secondary);margin-left:8px">跳过（无 NVIDIA 显卡）</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary" id="summary">
+    <h2 id="summary-title" style="color:var(--text-muted)">等待检测结果...</h2>
+    <p id="summary-desc">请依次点击上方"复制"按钮，在终端执行命令并粘贴结果</p>
+  </div>
+
+</div>
+
+<script>
+const checks = {
+  docker:  { keyword: 'Docker version', required: true },
+  nvidia:  { keyword: 'NVIDIA-SMI', required: false },
+  toolkit: { keyword: 'NVIDIA-SMI', required: false },
+};
+const results = { docker: null, nvidia: null, toolkit: null };
+
+function copyCmd(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = '复制'; }, 1500);
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = '复制'; }, 1500);
+  });
+}
+
+function checkResult(name) {
+  const output = document.getElementById('output-' + name).value.trim();
+  if (!output) { setPending(name); return; }
+
+  const passed = output.includes(checks[name].keyword);
+  results[name] = passed;
+  const card = document.getElementById('card-' + name);
+  const badge = document.getElementById('status-' + name);
+
+  // Remove existing guide
+  const existingGuide = card.querySelector('.guide');
+  if (existingGuide) existingGuide.remove();
+
+  if (passed) {
+    card.className = 'check-card pass';
+    badge.className = 'status-badge status-pass';
+    badge.textContent = '通过';
+  } else {
+    card.className = 'check-card fail';
+    badge.className = 'status-badge status-fail';
+    badge.textContent = '未通过';
+    showGuide(name, card);
+  }
+  updateSummary();
+}
+
+function skipCheck(name) {
+  results[name] = 'skipped';
+  const card = document.getElementById('card-' + name);
+  const badge = document.getElementById('status-' + name);
+  card.className = 'check-card';
+  badge.className = 'status-badge status-pass';
+  badge.textContent = '已跳过';
+  const existingGuide = card.querySelector('.guide');
+  if (existingGuide) existingGuide.remove();
+  updateSummary();
+}
+
+function setPending(name) {
+  results[name] = null;
+  const card = document.getElementById('card-' + name);
+  const badge = document.getElementById('status-' + name);
+  card.className = 'check-card';
+  badge.className = 'status-badge status-pending';
+  badge.textContent = '待检测';
+  const existingGuide = card.querySelector('.guide');
+  if (existingGuide) existingGuide.remove();
+  updateSummary();
+}
+
+function showGuide(name, card) {
+  const guides = {
+    docker: `<h4>安装指引</h4>
+      <p>1. 访问 <a href="https://www.docker.com/products/docker-desktop" target="_blank">Docker Desktop 下载页面</a></p>
+      <p>2. 下载 Windows (AMD64) 版本并安装</p>
+      <p>3. 安装完成后重启电脑</p>
+      <p>4. 启动 Docker Desktop，等待引擎就绪</p>
+      <p>5. 重新运行本检查器验证</p>`,
+
+    nvidia: `<h4>安装指引</h4>
+      <p>1. 访问 <a href="https://www.nvidia.com/download/index.aspx" target="_blank">NVIDIA 驱动下载页面</a></p>
+      <p>2. 选择你的显卡型号，下载并安装最新驱动</p>
+      <p>3. 安装完成后重启电脑</p>
+      <p>4. 重新运行本检查器验证</p>
+      <p style="margin-top:8px;color:var(--text-muted)">如果没有 NVIDIA 显卡，可点击"跳过"按钮，ScriptForge 将使用 CPU 模式。</p>`,
+
+    toolkit: `<h4>安装指引</h4>
+      <p>1. 打开 <strong>PowerShell</strong>（管理员模式）</p>
+      <p>2. 运行：<code>winget install NVIDIA.ContainerToolkit</code></p>
+      <p>3. 或者从 <a href="https://github.com/NVIDIA/nvidia-container-toolkit/releases" target="_blank">GitHub Releases</a> 下载安装</p>
+      <p>4. 安装完成后重启 Docker Desktop</p>
+      <p>5. 重新运行本检查器验证</p>
+      <p style="margin-top:8px;color:var(--text-muted)">如果没有 NVIDIA 显卡，可点击"跳过"按钮。</p>`,
+  };
+  const div = document.createElement('div');
+  div.className = 'guide';
+  div.innerHTML = guides[name];
+  card.appendChild(div);
+}
+
+function updateSummary() {
+  const el = document.getElementById('summary');
+  const title = document.getElementById('summary-title');
+  const desc = document.getElementById('summary-desc');
+
+  const dockerOk = results.docker === true;
+  const nvidiaOk = results.nvidia === true || results.nvidia === 'skipped';
+  const toolkitOk = results.toolkit === true || results.toolkit === 'skipped';
+  const allChecked = results.docker !== null && results.nvidia !== null && results.toolkit !== null;
+
+  if (!allChecked) {
+    el.className = 'summary';
+    title.style.color = 'var(--text-muted)';
+    title.textContent = '等待检测结果...';
+    desc.textContent = '请依次完成上方所有检查项';
+    return;
+  }
+
+  if (dockerOk && nvidiaOk && toolkitOk) {
+    el.className = 'summary ready';
+    title.style.color = 'var(--success)';
+    title.textContent = '环境就绪！可以安装 ScriptForge 了';
+    const hasGpu = results.nvidia === true && results.toolkit === true;
+    desc.textContent = hasGpu
+      ? '所有检查项已通过，GPU 加速已就绪。请双击 setup.bat 开始安装。'
+      : '核心依赖已就绪（CPU 模式）。如需 GPU 加速，请安装 NVIDIA 显卡驱动。';
+  } else {
+    el.className = 'summary not-ready';
+    title.style.color = 'var(--warning)';
+    title.textContent = '请先完成以上检查项';
+    const missing = [];
+    if (!dockerOk) missing.push('Docker Desktop（必需）');
+    if (!nvidiaOk) missing.push('NVIDIA 显卡驱动（可选）');
+    if (!toolkitOk) missing.push('NVIDIA Container Toolkit（可选）');
+    desc.textContent = '未通过：' + missing.join('、');
+  }
+}
+</script>
+</body>
+</html>

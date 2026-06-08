@@ -83,7 +83,7 @@ class VideoImporter:
 
     def _download_douyin(self, url: str) -> str:
         from app.services.douyin_service import DouyinDownloader
-        downloader = DouyinDownloader(output_dir=str(self.output_dir))
+        downloader = DouyinDownloader(output_dir=str(self.output_dir), on_progress=self.on_progress)
         return downloader.download_video(url)
 
     def _download_ytdlp(self, url: str) -> str:

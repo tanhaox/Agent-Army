@@ -1,0 +1,76 @@
+{
+  "version": "2.0",
+  "state_machine": {
+    "Pending": {
+      "name": "待处理",
+      "description": "投资者输入，等待总司令识别",
+      "next_state": "Commander",
+      "actor": "投资者",
+      "timeout": null
+    },
+    "Commander": {
+      "name": "总司令识别",
+      "description": "总司令识别意图，提取股票代码",
+      "next_state": "Research",
+      "actor": "总司令",
+      "timeout": 10
+    },
+    "Research": {
+      "name": "研究部分析",
+      "description": "研究部分析产业链和宏观环境（2个AI并行）",
+      "next_state": "Analysis",
+      "actor": "研究部",
+      "timeout": 60
+    },
+    "Analysis": {
+      "name": "分析部分析",
+      "description": "分析部分析基本面和估值（3个AI并行）",
+      "next_state": "Review",
+      "actor": "分析部",
+      "timeout": 90
+    },
+    "Review": {
+      "name": "质量审核",
+      "description": "总司令审核分析方案质量",
+      "next_state": "Prediction",
+      "next_state_reject": "Research",
+      "actor": "总司令",
+      "timeout": 15
+    },
+    "Prediction": {
+      "name": "预测部计算",
+      "description": "预测部计算目标价和评分（3个AI并行）",
+      "next_state": "Strategy",
+      "actor": "预测部",
+      "timeout": 60
+    },
+    "Strategy": {
+      "name": "策略部分析",
+      "description": "策略部分析买卖时机和仓位（4个AI并行）",
+      "next_state": "Validation",
+      "actor": "策略部",
+      "timeout": 60
+    },
+    "Validation": {
+      "name": "验证部验证",
+      "description": "验证部进行预测验证和回测（2个AI并行）",
+      "next_state": "Report",
+      "actor": "验证部",
+      "timeout": 45
+    },
+    "Report": {
+      "name": "生成报告",
+      "description": "总司令汇总所有结果，生成投资报告",
+      "next_state": "Done",
+      "actor": "总司令",
+      "timeout": 20
+    },
+    "Done": {
+      "name": "完成",
+      "description": "任务完成，报告归档到报告库",
+      "next_state": null,
+      "actor": "报告库",
+      "timeout": null
+    }
+  }
+}

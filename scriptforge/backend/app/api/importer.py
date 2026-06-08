@@ -5,8 +5,8 @@ import os
 import sys
 import time
 import uuid
+from pathlib import Path
 
-from celery.result import AsyncResult
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -18,6 +18,86 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/import", tags=["Import"])
 
 
+# ── Sync ASR runner (for thread-pool execution in parallel pipeline) ──
+def _run_asr_sync(audio_path: str, timeout: int = 600) -> dict | None:
+    """Run ASR subprocess synchronously and return parsed result dict."""
+    import subprocess as _sp
+    from pathlib import Path as _P
+
+    _asr_worker = _P(__file__).resolve().parent.parent / "services" / "asr_worker.py"
+
+    # Use venv python to ensure all dependencies are available
+    _venv_python = _P(__file__).resolve().parent.parent.parent / ".venv-py312" / "Scripts" / "python.exe"
+    _python = str(_venv_python) if _venv_python.exists() else sys.executable
+
+    proc = _sp.Popen(
+        [_python, str(_asr_worker), audio_path],
+        stdout=_sp.PIPE, stderr=_sp.PIPE,
+        encoding="utf-8", errors="replace",
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except _sp.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError(f"ASR worker timed out after {timeout}s")
+
+    if proc.returncode != 0:
+        err = stderr[:200] if stderr else "unknown error"
+        raise RuntimeError(f"ASR worker exit {proc.returncode}: {err}")
+
+    # Parse stdout lines — last "done" event contains the full result
+    for line in reversed(stdout.strip().split("\n")):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if data.get("phase") == "done":
+                return {
+                    "text": data["text"],
+                    "segments": data["segments"],
+                    "duration": data["duration"],
+                }
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
+# ── Asset saving helper (async, for streaming/online path) ──
+async def _save_asset_async(
+    task_id: str,
+    anchor_name: str,
+    video_title: str,
+    asset_type: str,
+    file_path: str,
+    file_size: int = 0,
+    duration: float = 0.0,
+    transcription_text: str | None = None,
+):
+    """Insert an asset record — usable inside an existing async context."""
+    from app.core.database import async_session_factory
+    from app.models.asset import Asset, AssetType
+
+    try:
+        async with async_session_factory() as session:
+            asset = Asset(
+                task_id=task_id,
+                anchor_name=anchor_name,
+                video_title=video_title[:500],
+                asset_type=AssetType(asset_type),
+                file_path=file_path,
+                file_size=file_size,
+                duration=duration,
+                transcription_text=transcription_text,
+            )
+            session.add(asset)
+            await session.commit()
+    except Exception as e:
+        logger.warning("Failed to save asset record: %s", e)
+
+
 class ImportRequest(BaseModel):
     url: str
 
@@ -25,19 +105,11 @@ class ImportRequest(BaseModel):
 class DouyinUserRequest(BaseModel):
     url: str = Field(..., description="抖音用户主页链接")
     count: int = Field(default=5, ge=1, le=20, description="下载视频数量")
+    exclude_persona_id: str | None = Field(default=None, description="排除此人设已处理的视频")
 
 
 class DouyinUserProfileRequest(BaseModel):
     url: str = Field(..., description="抖音用户主页链接")
-
-
-def _is_celery_available() -> bool:
-    try:
-        from app.core.celery import celery_app
-        celery_app.connection().ensure_connection(max_retries=1)
-        return True
-    except Exception:
-        return False
 
 
 @router.post("/url")
@@ -52,18 +124,9 @@ async def import_from_url(req: ImportRequest):
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    if _is_celery_available():
-        try:
-            from app.tasks.importer_tasks import import_video_task
-            task = import_video_task.delay(url)
-            return {"task_id": task.id, "status": "PENDING", "message": "视频下载和转写已开始"}
-        except Exception as e:
-            logger.warning("Celery dispatch failed, falling back to sync: %s", e)
-
     try:
         from app.services.importer import VideoImporter, VideoImportError
-        importer = VideoImporter()
-        result = importer.import_and_transcribe(url)
+        result = await asyncio.to_thread(VideoImporter().import_and_transcribe, url)
         return {
             "task_id": str(uuid.uuid4()),
             "status": "SUCCESS",
@@ -72,34 +135,57 @@ async def import_from_url(req: ImportRequest):
     except VideoImportError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        logger.exception("Sync import failed for %s", url)
+        logger.exception("Import failed for %s", url)
         raise HTTPException(status_code=500, detail=f"导入失败: {e}")
 
 
 @router.get("/task/{task_id}")
 async def get_import_task_status(task_id: str):
-    try:
-        uuid.UUID(task_id)
-    except ValueError:
-        pass
+    """Poll task status from TaskRecord with step-level progress details."""
+    from sqlalchemy import select
+    from app.core.database import get_db
+    from app.models.task_record import TaskRecord
 
-    task_result = AsyncResult(task_id)
-    state = task_result.state
+    async for db in get_db():
+        row = (await db.execute(
+            select(TaskRecord).where(TaskRecord.task_id == task_id)
+        )).scalar_one_or_none()
+        break
 
-    if state == "PENDING":
-        return {"task_id": task_id, "status": "pending"}
-    elif state == "PROCESSING":
-        return {"task_id": task_id, "status": "processing", "meta": task_result.info}
-    elif state == "SUCCESS":
-        return {"task_id": task_id, "status": "success", "result": task_result.result}
-    elif state == "FAILURE":
-        try:
-            error_msg = str(task_result.info)
-        except Exception:
-            error_msg = "任务执行失败"
-        return {"task_id": task_id, "status": "failed", "error": error_msg}
+    if not row:
+        return {"task_id": task_id, "status": "not_found"}
+
+    rs = row.result_summary or {}
+    status = row.status
+
+    if status == "running":
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "step": rs.get("step", ""),
+            "message": rs.get("message", ""),
+            "current": rs.get("current"),
+            "total": rs.get("total"),
+            "progress_pct": rs.get("progress_pct"),
+            "meta": rs,
+            "profile": rs.get("profile"),
+            "follower_count": rs.get("follower_count"),
+        }
+    elif status == "completed":
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "result_summary": rs,
+        }
+    elif status == "failed":
+        return {
+            "task_id": task_id,
+            "status": "failed",
+            "error": row.error_message or rs.get("error", "任务执行失败"),
+            "meta": rs,
+        }
     else:
-        return {"task_id": task_id, "status": state.lower()}
+        return {"task_id": task_id, "status": status}
 
 
 @router.post("/douyin-user-profile")
@@ -154,6 +240,63 @@ def import_douyin_user_videos(req: DouyinUserRequest):
         raise HTTPException(status_code=500, detail=f"导入失败: {e}")
 
 
+@router.post("/douyin-user/task")
+async def submit_douyin_user_task(req: DouyinUserRequest):
+    """提交异步任务：下载并处理抖音用户视频。
+
+    立即返回 task_id，后台 asyncio 任务执行完整流水线：
+    获取信息 → 翻页搜索 → 下载 → 转写 → AI分析 → 保存人设 → 生成策略
+
+    前端通过 GET /api/import/task/{task_id} 轮询进度。
+    """
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL 不能为空")
+
+    try:
+        from app.tasks.importer_tasks import process_douyin_user_task
+        task_id = str(uuid.uuid4())
+        asyncio.create_task(asyncio.to_thread(process_douyin_user_task, url, req.count, task_id))
+        return {
+            "task_id": task_id,
+            "status": "queued",
+            "message": f"任务已提交，将处理 Top {req.count} 视频",
+        }
+    except Exception as e:
+        logger.exception("Failed to submit douyin user task")
+        raise HTTPException(status_code=500, detail=f"任务提交失败: {e}")
+
+
+@router.get("/douyin-user/tasks")
+async def list_douyin_user_tasks():
+    """列出当前活跃的 douyin-user 处理任务。"""
+    try:
+        from sqlalchemy import select
+        from app.core.database import get_db
+        from app.models.task_record import TaskRecord
+
+        tasks = []
+        async for db in get_db():
+            rows = (await db.execute(
+                select(TaskRecord).where(
+                    TaskRecord.trigger == "douyin_user_import",
+                    TaskRecord.status == "running",
+                ).order_by(TaskRecord.created_at.desc())
+            )).scalars().all()
+            for r in rows:
+                tasks.append({
+                    "task_id": r.task_id,
+                    "status": "processing",
+                    "url": r.url,
+                })
+            break
+
+        return {"tasks": tasks, "count": len(tasks)}
+    except Exception as e:
+        logger.warning("Failed to list tasks: %s", e)
+        return {"tasks": [], "count": 0, "error": str(e)}
+
+
 def _sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -198,10 +341,64 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
     async def event_generator():
         import subprocess as _sp
         from pathlib import Path as _P
+        from app.core.database import async_session_factory as _async_sf
+        from app.models.task_record import TaskRecord as _TR
 
         _procs: list[_sp.Popen] = []  # Track subprocesses for cleanup on disconnect
         url = req.url.strip()
         count = req.count
+        task_id = str(uuid.uuid4())
+
+        # Create TaskRecord at start
+        try:
+            async with _async_sf() as _tr_db:
+                _tr = _TR(
+                    task_id=task_id, trigger="stream", url=url,
+                    status="running",
+                )
+                _tr_db.add(_tr)
+                await _tr_db.commit()
+        except Exception as _tr_err:
+            logger.warning("Failed to create TaskRecord: %s", _tr_err)
+
+        def _update_task_record(**kwargs):
+            """Schedule a TaskRecord update (fire-and-forget via asyncio.create_task)."""
+            async def _do():
+                try:
+                    from sqlalchemy import select as _sa_select
+                    async with _async_sf() as _tr_db:
+                        _row = (await _tr_db.execute(
+                            _sa_select(_TR).where(_TR.task_id == task_id)
+                        )).scalar_one_or_none()
+                        if _row:
+                            for k, v in kwargs.items():
+                                setattr(_row, k, v)
+                            await _tr_db.commit()
+                except Exception as e:
+                    logger.warning("Failed to update TaskRecord: %s", e)
+            asyncio.create_task(_do())
+
+        # ── Live counters for incremental TaskRecord updates (Bug 2 fix) ──
+        _live_dl_count = 0
+        _live_tr_count = 0
+
+        def _increment_task_counts(dl: bool = False, tr: bool = False):
+            """Increment downloaded_count / transcribed_count on TaskRecord."""
+            nonlocal _live_dl_count, _live_tr_count
+            updates: dict = {}
+            if dl:
+                _live_dl_count += 1
+                updates["downloaded_count"] = _live_dl_count
+                updates["result_summary"] = {"current_step": "downloading", "message": f"已下载 {_live_dl_count}/{total or '?'}", "progress_pct": min(20 + _live_dl_count * 8, 50)}
+            if tr:
+                _live_tr_count += 1
+                updates["transcribed_count"] = _live_tr_count
+                updates["result_summary"] = {"current_step": "transcribing", "message": f"已转写 {_live_tr_count}/{total or '?'}", "progress_pct": min(50 + _live_tr_count * 8, 70)}
+            if updates:
+                _update_task_record(**updates)
+
+        # === Step 0: 返回 task_id ===
+        yield _sse({"step": "task_init", "task_id": task_id, "message": "任务已启动"})
 
         # === Step 1: 获取博主信息 ===
         yield _sse({"step": ProgressStep.FETCHING_PROFILE, "message": "正在获取博主信息..."})
@@ -217,12 +414,46 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
                 "profile": profile,
                 "follower_count": follower_count,
             })
+            _update_task_record(
+                anchor_name=profile.get("anchor_name", ""),
+                anchor_avatar=profile.get("avatar_url"),
+                follower_count=follower_count,
+                result_summary={"current_step": "profile_done", "message": f"博主: {profile.get('anchor_name', '')}", "progress_pct": 10},
+            )
         except Exception as e:
             yield _sse({"step": ProgressStep.ERROR, "message": f"获取博主信息失败: {e}"})
+            _update_task_record(status="failed", error_message=str(e)[:500])
             return
+
+        anchor_name = profile.get("anchor_name", "") if profile else ""
 
         # === Step 2-4: 获取视频列表 + 筛选排序 + Top N（流式 Popen） ===
         yield _sse({"step": ProgressStep.FETCHING_VIDEO_LIST, "message": "正在搜索视频列表..."})
+
+        # 查询已处理的视频 ID（补充素材模式）
+        exclude_ids: set[str] = set()
+        if req.exclude_persona_id:
+            try:
+                from sqlalchemy import select as _ex_select
+                from app.models.persona_slice import PersonaSlice as _PSlice
+                async with _async_sf() as _edb:
+                    _rows = await _edb.execute(
+                        _ex_select(_PSlice.source_url)
+                        .where(_PSlice.persona_id == uuid.UUID(req.exclude_persona_id))
+                        .where(_PSlice.source_url.isnot(None))
+                    )
+                    for (_src_url,) in _rows.all():
+                        if _src_url and "/video/" in _src_url:
+                            _aid = _src_url.rsplit("/", 1)[-1].split("?")[0]
+                            exclude_ids.add(_aid)
+                if exclude_ids:
+                    yield _sse({
+                        "step": "exclude_loaded",
+                        "message": f"已排除 {len(exclude_ids)} 个已学习视频",
+                        "excluded_count": len(exclude_ids),
+                    })
+            except Exception as _ex:
+                logger.warning("Failed to load exclude list: %s", _ex)
 
         _worker = _P(__file__).resolve().parent.parent / "services" / "douyin_video_list_worker.py"
         _log_dir = _P(__file__).resolve().parent.parent.parent / "logs"
@@ -231,10 +462,13 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
         video_ids = []
 
         # Use Popen for real-time stdout streaming (same pattern as ASR)
+        _exclude_arg = ",".join(exclude_ids) if exclude_ids else ""
         _proc = await asyncio.to_thread(
             _sp.Popen,
             [sys.executable, str(_worker),
-             profile.get("sec_uid") or profile.get("anchor_id") or "", str(count)],
+             profile.get("sec_uid") or profile.get("anchor_id") or "",
+             str(count),
+             _exclude_arg],
             stdout=_sp.PIPE,
             stderr=_sp.PIPE,
             encoding="utf-8",
@@ -281,10 +515,15 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
                     "selected_count": data["selected_count"],
                     "top_videos": data.get("top_videos", []),
                 })
+                _update_task_record(
+                    video_count=data["selected_count"],
+                    result_summary={"current_step": "top_selected", "message": f"已选定 {data['selected_count']} 个视频", "progress_pct": 20},
+                )
             elif step == "done":
                 video_ids = data.get("video_ids", [])
             elif step == "error":
                 yield _sse({"step": ProgressStep.ERROR, "message": data["error"]})
+                _update_task_record(status="failed", error_message=data["error"][:500])
                 return
 
         _proc.wait(timeout=10)
@@ -293,10 +532,12 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
             stderr = _proc.stderr.read() if _proc.stderr else ""
             logger.error("Video list worker failed (exit %d): %s", _proc.returncode, stderr[:200])
             yield _sse({"step": ProgressStep.ERROR, "message": "获取视频列表失败，详情请查看 logs/playwright.log"})
+            _update_task_record(status="failed", error_message=f"Video list worker exit {_proc.returncode}")
             return
 
         if not video_ids:
             yield _sse({"step": ProgressStep.ERROR, "message": "该用户暂无公开视频或 cookies 已过期"})
+            _update_task_record(status="failed", error_message="该用户暂无公开视频或 cookies 已过期")
             return
 
         yield _sse({
@@ -304,262 +545,232 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
             "message": f"视频列表搜索完成，共选定 {len(video_ids)} 个视频",
             "total": len(video_ids),
         })
+        _update_task_record(video_count=len(video_ids))
 
-        # === Steps 5-7: 下载 → 提取音频 → 转写（逐个视频） ===
-        results = []
+        # === Steps 5-7: Two-pass pipeline: Download ALL → Build Voice Profile → Batch Transcribe ===
+        results: list = []
         total = len(video_ids)
+        event_queue: asyncio.Queue = asyncio.Queue()
+        downloaded_audios: list[dict] = []  # Collected for voice profile + batch transcription
 
-        for i, vid in enumerate(video_ids):
+        download_sem = asyncio.Semaphore(3)
+        transcribe_sem = asyncio.Semaphore(1)
+
+        # ── Phase 1: Download ALL videos (no transcription yet) ──
+        async def download_one_video(idx: int, vid: dict):
+            """Download one video, save video+audio assets, collect for batch transcription."""
             title = vid.get("desc", "") or vid.get("aweme_id", "")
             video_duration = vid.get("duration", 0)
 
-            # --- Step 5: 下载视频 ---
-            yield _sse({
+            await event_queue.put({
                 "step": ProgressStep.DOWNLOADING_VIDEOS,
-                "message": f"正在下载视频 {i + 1}/{total}：《{title[:30]}》...",
-                "current": i + 1,
-                "total": total,
-                "title": title,
-                "phase": "start",
+                "message": f"[{idx + 1}/{total}] 开始下载：《{title[:30]}》...",
+                "current": idx + 1, "total": total, "title": title, "phase": "start",
             })
 
-            start_time = time.time()
             audio_path = None
             try:
-                audio_path = await asyncio.to_thread(downloader.download_video, vid["url"])
-                download_time = time.time() - start_time
+                async with download_sem:
+                    start_time = time.time()
+                    audio_path = await asyncio.to_thread(downloader.download_video, vid["url"])
+                    download_time = time.time() - start_time
 
-                # Check mp4 file size for display
-                mp4_path = audio_path.replace(".wav", ".mp4") if audio_path.endswith(".wav") else audio_path
-                file_size = os.path.getsize(mp4_path) if os.path.exists(mp4_path) else 0
+                mp4_path = audio_path.replace(".wav", ".mp4") if audio_path and audio_path.endswith(".wav") else audio_path
+                file_size = os.path.getsize(mp4_path) if mp4_path and os.path.exists(mp4_path) else 0
 
-                yield _sse({
+                await _save_asset_async(
+                    task_id=task_id, anchor_name=anchor_name,
+                    video_title=title, asset_type="video",
+                    file_path=mp4_path, file_size=file_size, duration=video_duration,
+                )
+                if audio_path and os.path.exists(audio_path):
+                    await _save_asset_async(
+                        task_id=task_id, anchor_name=anchor_name,
+                        video_title=title, asset_type="audio",
+                        file_path=audio_path, file_size=os.path.getsize(audio_path),
+                        duration=video_duration,
+                    )
+
+                await event_queue.put({
                     "step": ProgressStep.DOWNLOADING_VIDEOS,
-                    "message": f"视频 {i + 1}/{total} 下载完成（{_format_size(file_size)}，耗时 {download_time:.1f} 秒）",
-                    "current": i + 1,
-                    "total": total,
-                    "phase": "done",
-                    "file_size": file_size,
-                    "download_seconds": round(download_time, 1),
+                    "message": f"[{idx + 1}/{total}] 下载完成：《{title[:30]}》（{_format_size(file_size)}，{download_time:.1f}s）",
+                    "current": idx + 1, "total": total, "title": title, "phase": "done",
+                    "file_size": file_size, "download_seconds": round(download_time, 1),
                 })
+                _increment_task_counts(dl=True)
+
+                await event_queue.put({
+                    "step": ProgressStep.EXTRACTING_AUDIO,
+                    "message": f"[{idx + 1}/{total}] 音频已提取",
+                    "current": idx + 1, "total": total, "phase": "done",
+                })
+
+                # Collect for batch transcription
+                downloaded_audios.append({
+                    "idx": idx, "vid": vid, "title": title,
+                    "audio_path": audio_path, "duration": video_duration,
+                })
+
             except Exception as e:
                 logger.error("Failed to download video %s: %s", vid.get("aweme_id"), e)
                 results.append({
-                    "index": i + 1,
-                    "aweme_id": vid.get("aweme_id", ""),
-                    "desc": vid.get("desc", ""),
-                    "source_url": vid["url"],
-                    "status": "failed",
-                    "error": str(e),
+                    "index": idx + 1, "aweme_id": vid.get("aweme_id", ""),
+                    "desc": vid.get("desc", ""), "source_url": vid["url"],
+                    "author": vid.get("author", ""), "duration": vid.get("duration", 0),
+                    "play_count": vid.get("play_count", 0),
+                    "status": "failed", "error": str(e),
                 })
-                yield _sse({
+                await event_queue.put({
                     "step": ProgressStep.DOWNLOADING_VIDEOS,
-                    "message": f"视频 {i + 1}/{total} 下载失败: {str(e)[:60]}",
-                    "current": i + 1,
-                    "total": total,
-                    "phase": "failed",
+                    "message": f"[{idx + 1}/{total}] 下载失败：《{title[:30]}》— {str(e)[:60]}",
+                    "current": idx + 1, "total": total, "phase": "failed", "error": str(e),
                 })
+
+            await event_queue.put({"step": "_download_done", "index": idx})
+
+        # Launch all downloads in parallel
+        download_tasks = [
+            asyncio.create_task(download_one_video(i, vid))
+            for i, vid in enumerate(video_ids)
+        ]
+
+        # Stream download events
+        dl_completed = 0
+        while dl_completed < total:
+            event = await event_queue.get()
+            if event.get("step") == "_download_done":
+                dl_completed += 1
                 continue
+            yield _sse(event)
 
-            # --- Step 6: 提取音频（已在 download_video 内完成） ---
+        await asyncio.gather(*download_tasks, return_exceptions=True)
+
+        # ── Phase 2: Build voice profile ──
+        VOICE_PROFILE_THRESHOLD = 8
+        audio_paths = [a["audio_path"] for a in downloaded_audios if a.get("audio_path")]
+        voice_profile_built = False
+
+        if len(audio_paths) >= VOICE_PROFILE_THRESHOLD:
             yield _sse({
-                "step": ProgressStep.EXTRACTING_AUDIO,
-                "message": f"正在提取音频 {i + 1}/{total}...",
-                "current": i + 1,
-                "total": total,
-                "phase": "start",
+                "step": "building_voice_profile",
+                "message": f"正在构建声纹档案（基于 {len(audio_paths)} 个音频）...",
+                "audio_count": len(audio_paths),
             })
+            try:
+                from app.services.voice_profile_builder import build_voice_profile
+                await asyncio.to_thread(build_voice_profile, anchor_name, audio_paths)
+                voice_profile_built = True
+                yield _sse({
+                    "step": "building_voice_profile",
+                    "message": f"声纹档案构建完成（{len(audio_paths)} 个音频），将用于精确说话人识别",
+                    "voice_profile_built": True,
+                })
+            except Exception as e:
+                logger.warning("Voice profile build failed in SSE stream: %s", e)
+                yield _sse({
+                    "step": "building_voice_profile",
+                    "message": f"声纹档案构建失败，将使用聚类模式（{str(e)[:60]}）",
+                    "voice_profile_built": False,
+                })
+        else:
             yield _sse({
-                "step": ProgressStep.EXTRACTING_AUDIO,
-                "message": f"音频 {i + 1}/{total} 提取完成",
-                "current": i + 1,
-                "total": total,
-                "phase": "done",
+                "step": "building_voice_profile",
+                "message": f"音频数量不足（{len(audio_paths)} 个，需 ≥{VOICE_PROFILE_THRESHOLD}），使用聚类模式识别",
+                "voice_profile_built": False,
             })
 
-            # --- Step 7: 转写（在子进程中运行，流式读取进度） ---
-            duration_str = _format_duration(video_duration) if video_duration > 0 else ""
-            yield _sse({
+        # ── Phase 3: Batch transcribe ALL audio ──
+        tr_event_queue: asyncio.Queue = asyncio.Queue()
+
+        async def transcribe_one_audio(audio_info: dict):
+            """Transcribe one audio with speaker diarization, save transcript asset."""
+            idx = audio_info["idx"]
+            vid = audio_info["vid"]
+            title = audio_info["title"]
+            audio_path = audio_info["audio_path"]
+            video_duration = audio_info["duration"]
+
+            await tr_event_queue.put({
                 "step": ProgressStep.TRANSCRIBING,
-                "message": f"正在转写 {i + 1}/{total}{f'（视频时长 {duration_str}）' if duration_str else ''}...",
-                "current": i + 1,
-                "total": total,
+                "message": f"[{idx + 1}/{len(downloaded_audios)}] 开始转写：《{title[:30]}》...",
+                "current": idx + 1, "total": len(downloaded_audios), "phase": "start",
                 "video_duration": video_duration,
-                "phase": "start",
             })
 
             transcription = None
             try:
-                _asr_worker = _P(__file__).resolve().parent.parent / "services" / "asr_worker.py"
-                asr_start = time.time()
+                async with transcribe_sem:
+                    asr_result = await asyncio.to_thread(_run_asr_sync, audio_path, 600)
 
-                # Use Popen to read stdout line by line for progress
-                proc = _sp.Popen(
-                    [sys.executable, str(_asr_worker), audio_path],
-                    stdout=_sp.PIPE,
-                    stderr=_sp.PIPE,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                _procs.append(proc)
-
-                asr_result_data = None
-                asr_failed = False
-
-                def _read_asr_lines():
-                    lines = []
-                    for line in proc.stdout:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        lines.append(line)
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        yield data
-
-                    proc.wait(timeout=60)
-                    # Return all lines for final parsing
-                    return lines
-
-                async def _stream_asr():
-                    nonlocal asr_result_data, asr_failed
-                    loop = asyncio.get_event_loop()
-
-                    def _read_next():
-                        lines = []
-                        try:
-                            for line in proc.stdout:
-                                s = line.strip()
-                                if s:
-                                    lines.append(s)
-                        except Exception:
-                            pass
-                        return lines
-
-                    while proc.poll() is None:
-                        batch = await asyncio.to_thread(_read_next, )
-                        if not batch:
-                            await asyncio.sleep(0.5)
-                            continue
-
-                        for raw_line in batch:
-                            try:
-                                data = json.loads(raw_line)
-                            except json.JSONDecodeError:
-                                continue
-
-                            if data.get("phase") == "loading_model":
-                                yield _sse({
-                                    "step": ProgressStep.TRANSCRIBING,
-                                    "message": f"转写 {i + 1}/{total}：正在加载语音识别模型...",
-                                    "current": i + 1,
-                                    "total": total,
-                                    "asr_sub_phase": "loading",
-                                })
-                            elif data.get("phase") == "model_loaded":
-                                yield _sse({
-                                    "step": ProgressStep.TRANSCRIBING,
-                                    "message": f"转写 {i + 1}/{total}：模型已加载，开始识别...",
-                                    "current": i + 1,
-                                    "total": total,
-                                    "asr_sub_phase": "transcribing",
-                                })
-                            elif data.get("phase") == "transcribing":
-                                yield _sse({
-                                    "step": ProgressStep.TRANSCRIBING,
-                                    "message": f"转写 {i + 1}/{total}：{data.get('message', '')}",
-                                    "current": i + 1,
-                                    "total": total,
-                                    "asr_sub_phase": "transcribing",
-                                    "asr_progress_pct": data.get("progress_pct", 0),
-                                    "asr_char_count": data.get("char_count", 0),
-                                    "asr_elapsed": data.get("elapsed_seconds", 0),
-                                    "asr_current_time": data.get("current_time", 0),
-                                    "asr_total_duration": data.get("total_duration", 0),
-                                })
-                            elif data.get("phase") == "done":
-                                asr_result_data = data
-                            elif data.get("error"):
-                                asr_failed = True
-                                yield _sse({
-                                    "step": ProgressStep.TRANSCRIBING,
-                                    "message": f"转写 {i + 1}/{total} 失败: {data['error'][:60]}",
-                                    "current": i + 1,
-                                    "total": total,
-                                    "phase": "failed",
-                                })
-
-                    # Drain remaining lines after process exits
-                    remaining = proc.stdout.read()
-                    for raw_line in remaining.strip().split("\n"):
-                        raw_line = raw_line.strip()
-                        if not raw_line:
-                            continue
-                        try:
-                            data = json.loads(raw_line)
-                        except json.JSONDecodeError:
-                            continue
-                        if data.get("phase") == "done":
-                            asr_result_data = data
-                        elif data.get("error"):
-                            asr_failed = True
-
-                # Stream ASR progress events
-                async for sse_event in _stream_asr():
-                    yield sse_event
-
-                asr_time = time.time() - asr_start
-
-                if asr_result_data and not asr_failed:
+                if asr_result:
                     transcription = {
-                        "text": asr_result_data["text"],
-                        "segments": asr_result_data["segments"],
-                        "duration": asr_result_data["duration"],
+                        "text": asr_result["text"],
+                        "segments": asr_result["segments"],
+                        "duration": asr_result["duration"],
                     }
-                    word_count = len(asr_result_data["text"])
-                    yield _sse({
+                    word_count = len(asr_result["text"])
+
+                    await _save_asset_async(
+                        task_id=task_id, anchor_name=anchor_name,
+                        video_title=title, asset_type="transcript",
+                        file_path=audio_path or "",
+                        duration=asr_result.get("duration", 0),
+                        transcription_text=asr_result["text"],
+                    )
+
+                    await tr_event_queue.put({
                         "step": ProgressStep.TRANSCRIBING,
-                        "message": f"转写 {i + 1}/{total} 完成（识别 {word_count} 字，耗时 {asr_time:.1f} 秒）",
-                        "current": i + 1,
-                        "total": total,
-                        "phase": "done",
+                        "message": f"[{idx + 1}/{len(downloaded_audios)}] 转写完成：《{title[:30]}》（{word_count}字）",
+                        "current": idx + 1, "total": len(downloaded_audios), "phase": "done",
                         "word_count": word_count,
-                        "asr_seconds": round(asr_time, 1),
                     })
-                elif not asr_failed:
-                    logger.warning("ASR worker produced no result for %s", vid["aweme_id"])
-                    yield _sse({
+                    _increment_task_counts(tr=True)
+                else:
+                    await tr_event_queue.put({
                         "step": ProgressStep.TRANSCRIBING,
-                        "message": f"转写 {i + 1}/{total} 失败（ASR 无输出）",
-                        "current": i + 1,
-                        "total": total,
-                        "phase": "failed",
+                        "message": f"[{idx + 1}/{len(downloaded_audios)}] 转写失败（无输出）：《{title[:30]}》",
+                        "current": idx + 1, "total": len(downloaded_audios), "phase": "failed",
                     })
+
             except Exception as e:
                 logger.warning("Transcription failed for %s: %s", vid["aweme_id"], e)
-                yield _sse({
+                await tr_event_queue.put({
                     "step": ProgressStep.TRANSCRIBING,
-                    "message": f"转写 {i + 1}/{total} 失败: {str(e)[:50]}",
-                    "current": i + 1,
-                    "total": total,
-                    "phase": "failed",
+                    "message": f"[{idx + 1}/{len(downloaded_audios)}] 转写失败：《{title[:30]}》— {str(e)[:50]}",
+                    "current": idx + 1, "total": len(downloaded_audios), "phase": "failed",
                 })
 
             results.append({
-                "index": i + 1,
-                "aweme_id": vid["aweme_id"],
-                "desc": vid["desc"],
-                "source_url": vid["url"],
-                "author": vid.get("author", ""),
-                "duration": vid.get("duration", 0),
+                "index": idx + 1, "aweme_id": vid.get("aweme_id", ""),
+                "desc": vid.get("desc", ""), "source_url": vid["url"],
+                "author": vid.get("author", ""), "duration": vid.get("duration", 0),
                 "play_count": vid.get("play_count", 0),
                 "audio_path": audio_path,
                 "transcription": transcription,
                 "status": "downloaded",
             })
 
+            await tr_event_queue.put({"step": "_tr_done", "index": idx})
+
+        # Launch all transcriptions in parallel
+        transcribe_tasks = [
+            asyncio.create_task(transcribe_one_audio(info))
+            for info in downloaded_audios
+        ]
+
+        # Stream transcription events
+        tr_completed = 0
+        tr_total = len(downloaded_audios)
+        while tr_completed < tr_total:
+            event = await tr_event_queue.get()
+            if event.get("step") == "_tr_done":
+                tr_completed += 1
+                continue
+            yield _sse(event)
+
+        await asyncio.gather(*transcribe_tasks, return_exceptions=True)
+
+        # ── 汇总 ──
         has_transcription = any(r.get("transcription") for r in results if r["status"] == "downloaded")
         yield _sse({
             "step": "transcribe_done",
@@ -596,6 +807,7 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
 
         # === Step 9: AI 深度分析 ===
         yield _sse({"step": ProgressStep.ANALYZING, "message": "正在进行 AI 深度分析..."})
+        _update_task_record(result_summary={"current_step": "analyzing", "message": "AI 深度分析中...", "progress_pct": 75})
 
         downloaded = [r for r in results if r["status"] == "downloaded" and r.get("transcription")]
         if not downloaded:
@@ -604,11 +816,137 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
                 yield _sse({"step": ProgressStep.ANALYZING, "message": "ASR 不可用，基于视频描述进行 AI 分析..."})
                 try:
                     from app.services.persona_analyzer import persona_analyzer
-                    analysis = await persona_analyzer.analyze_slices(desc_slices)
-                    narrative = await persona_analyzer.analyze_narrative(desc_slices)
+                    _desc_task = asyncio.ensure_future(asyncio.gather(
+                        persona_analyzer.analyze_slices(desc_slices, anchor_name=anchor_name),
+                        persona_analyzer.analyze_narrative(desc_slices),
+                    ))
+                    _elapsed = 0
+                    while not _desc_task.done():
+                        done, _ = await asyncio.wait({_desc_task}, timeout=8.0)
+                        if _desc_task in done:
+                            break
+                        _elapsed += 8
+                        yield _sse({
+                            "step": ProgressStep.ANALYZING,
+                            "message": f"AI 深度分析进行中...（已用时 {_elapsed} 秒）",
+                            "phase": "progress",
+                            "elapsed": _elapsed,
+                        })
+                    analysis, narrative = _desc_task.result()
                 except Exception as e:
-                    yield _sse({"step": ProgressStep.ERROR, "message": f"AI 分析失败: {e}"})
-                    return
+                    logger.warning("AI analysis degraded (desc-only, SSE stream): %s", e)
+                    from app.services.persona_analyzer import _build_minimal_persona
+                    analysis = _build_minimal_persona("\n".join(desc_slices[:3]), anchor_name)
+                    narrative = {"pacing_summary": "叙事分析暂不可用", "narrative_units": []}
+
+                # 保存人设到数据库（基于视频描述，无转写切片）
+                persona_id = None
+                try:
+                    from app.core.database import async_session_factory
+                    from app.models.persona import Persona
+                    from app.models.user import User
+                    from sqlalchemy import select as sa_select
+
+                    async with async_session_factory() as db:
+                        user_result = await db.execute(
+                            sa_select(User).where(User.is_active.is_(True)).limit(1)
+                        )
+                        user = user_result.scalar()
+                        if user is None:
+                            user = User(
+                                id=uuid.uuid4(),
+                                username="demo_user",
+                                email="demo@scriptforge.local",
+                                hashed_password="",
+                                plan_type="free",
+                                quota_total=5,
+                                quota_used=0,
+                            )
+                            db.add(user)
+                            await db.flush()
+
+                        name = f"{anchor_name}的直播风格" if anchor_name else analysis.get("name", "未命名")
+                        source_anchor_id = profile.get("sec_uid") or profile.get("anchor_id") or ""
+                        source_homepage_url = profile.get("homepage_url") or url
+                        existing_result = await db.execute(
+                            sa_select(Persona).where(Persona.name == name)
+                        )
+                        persona = existing_result.scalar_one_or_none()
+
+                        if persona:
+                            persona.global_style = analysis.get("global_style", persona.global_style)
+                            persona.catchphrases = analysis.get("catchphrases", persona.catchphrases)
+                            persona.reaction_patterns = analysis.get("reaction_patterns", persona.reaction_patterns)
+                            persona.sentence_templates = analysis.get("sentence_templates", persona.sentence_templates)
+                            persona.core_values = analysis.get("core_values", persona.core_values)
+                            persona.language_style = analysis.get("language_style", persona.language_style)
+                            persona.language_style_v2 = analysis.get("language_style_v2", persona.language_style_v2)
+                            persona.tone_adaptation = analysis.get("tone_adaptation", persona.tone_adaptation)
+                            persona.lingo_map = analysis.get("lingo_map") or persona.lingo_map or {}
+                            persona.narrative_style = narrative
+                            persona.version += 1
+                            await db.flush()
+                        else:
+                            persona = Persona(
+                                name=name,
+                                global_style=analysis.get("global_style", ""),
+                                catchphrases=analysis.get("catchphrases", []),
+                                reaction_patterns=analysis.get("reaction_patterns", {}),
+                                sentence_templates=analysis.get("sentence_templates", []),
+                                core_values=analysis.get("core_values", []),
+                                language_style=analysis.get("language_style", {}),
+                                language_style_v2=analysis.get("language_style_v2"),
+                                tone_adaptation=analysis.get("tone_adaptation", {}),
+                                narrative_style=narrative,
+                                lingo_map=analysis.get("lingo_map") or {},
+                                source_anchor_name=anchor_name or None,
+                                source_anchor_id=source_anchor_id or None,
+                                source_homepage_url=source_homepage_url or None,
+                                source_follower_count=follower_count or None,
+                            )
+                            from app.core.security import set_owner
+                            set_owner(persona, user)
+                            db.add(persona)
+                            await db.flush()
+
+                        # Save desc-based slices
+                        from app.models.persona_slice import PersonaSlice
+                        for ds in desc_slices:
+                            if ds and len(ds.strip()) > 10:
+                                slice_obj = PersonaSlice(
+                                    persona_id=persona.id,
+                                    original_text=ds.strip(),
+                                    source_url="",
+                                    analyzed=True,
+                                )
+                                db.add(slice_obj)
+
+                        # Build narrative model
+                        from app.services.persona_analyzer import build_narrative_model
+                        desc_total_len = sum(len(d.strip()) for d in desc_slices if d)
+                        nm = build_narrative_model(persona, slice_count=len(desc_slices), total_text_length=desc_total_len)
+                        if nm:
+                            persona.narrative_model = nm
+
+                        await db.commit()
+                        persona_id = str(persona.id)
+                        analysis["persona_id"] = persona_id
+                        logger.info("Persona saved (desc-only): %s (%s) slices=%d", persona.name, persona_id, len(desc_slices))
+
+                        # Rename voice profile from anchor_name to persona_id
+                        if voice_profile_built and persona_id:
+                            try:
+                                vp_dir = Path(__file__).resolve().parent.parent.parent / "voice_profiles"
+                                safe = anchor_name.replace("/", "_").replace("\\", "_")
+                                old = vp_dir / f"{safe}.npy"
+                                new = vp_dir / f"{persona_id}.npy"
+                                if old.exists() and not new.exists():
+                                    old.rename(new)
+                                    logger.info("Renamed voice profile: %s -> %s", old.name, new.name)
+                            except Exception as e:
+                                logger.warning("Failed to rename voice profile (desc-only): %s", e)
+                except Exception as e:
+                    logger.error("Failed to save persona to DB (desc-only): %s", e)
 
                 yield _sse({
                     "step": ProgressStep.DONE,
@@ -621,23 +959,167 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
                         "materials": results,
                         "follower_count": follower_count,
                         "asr_note": "语音转写不可用，分析基于视频标题和描述",
+                        "persona_id": persona_id,
                     },
                 })
+                _update_task_record(
+                    status="completed",
+                    persona_id=persona_id,
+                    persona_name=f"{anchor_name}的直播风格" if anchor_name else analysis.get("name", ""),
+                    result_summary={"current_step": "done", "message": "处理完成", "progress_pct": 100},
+                )
             else:
                 yield _sse({"step": ProgressStep.ERROR, "message": "没有可分析的有效素材"})
+                _update_task_record(status="failed", error_message="没有可分析的有效素材")
             return
 
         slices = [r["transcription"]["text"] for r in downloaded if r.get("transcription")]
 
         try:
             from app.services.persona_analyzer import persona_analyzer
-            analysis, narrative = await asyncio.gather(
-                persona_analyzer.analyze_slices(slices),
+            _analysis_task = asyncio.ensure_future(asyncio.gather(
+                persona_analyzer.analyze_slices(slices, anchor_name=anchor_name),
                 persona_analyzer.analyze_narrative(slices),
-            )
+            ))
+            _elapsed = 0
+            while not _analysis_task.done():
+                done, _ = await asyncio.wait({_analysis_task}, timeout=8.0)
+                if _analysis_task in done:
+                    break
+                _elapsed += 8
+                yield _sse({
+                    "step": ProgressStep.ANALYZING,
+                    "message": f"AI 深度分析进行中...（已用时 {_elapsed} 秒）",
+                    "phase": "progress",
+                    "elapsed": _elapsed,
+                })
+            analysis, narrative = _analysis_task.result()
         except Exception as e:
-            yield _sse({"step": ProgressStep.ERROR, "message": f"AI 分析失败: {e}"})
-            return
+            logger.warning("AI analysis degraded (SSE stream): %s", e)
+            from app.services.persona_analyzer import _build_minimal_persona
+            analysis = _build_minimal_persona("\n".join(slices[:3]), anchor_name)
+            narrative = {"pacing_summary": "叙事分析暂不可用", "narrative_units": []}        # === Step 9.5: 保存人设到数据库 ===
+        persona_id = None
+        try:
+            from app.core.database import async_session_factory
+            from app.models.persona import Persona
+            from app.models.persona_slice import PersonaSlice
+            from app.models.user import User
+            from sqlalchemy import select as sa_select
+
+            async with async_session_factory() as db:
+                # 获取或创建用户
+                user_result = await db.execute(
+                    sa_select(User).where(User.is_active.is_(True)).limit(1)
+                )
+                user = user_result.scalar()
+                if user is None:
+                    user = User(
+                        id=uuid.uuid4(),
+                        username="demo_user",
+                        email="demo@scriptforge.local",
+                        hashed_password="",
+                        plan_type="free",
+                        quota_total=5,
+                        quota_used=0,
+                    )
+                    db.add(user)
+                    await db.flush()
+
+                # 检查是否已存在同名 persona
+                name = f"{anchor_name}的直播风格" if anchor_name else analysis.get("name", "未命名")
+                source_anchor_id = profile.get("sec_uid") or profile.get("anchor_id") or ""
+                source_homepage_url = profile.get("homepage_url") or url
+                existing_result = await db.execute(
+                    sa_select(Persona).where(Persona.name == name)
+                )
+                persona = existing_result.scalar_one_or_none()
+
+                if persona:
+                    persona.global_style = analysis.get("global_style", persona.global_style)
+                    persona.catchphrases = analysis.get("catchphrases", persona.catchphrases)
+                    persona.reaction_patterns = analysis.get("reaction_patterns", persona.reaction_patterns)
+                    persona.sentence_templates = analysis.get("sentence_templates", persona.sentence_templates)
+                    persona.core_values = analysis.get("core_values", persona.core_values)
+                    persona.language_style = analysis.get("language_style", persona.language_style)
+                    persona.language_style_v2 = analysis.get("language_style_v2", persona.language_style_v2)
+                    persona.tone_adaptation = analysis.get("tone_adaptation", persona.tone_adaptation)
+                    persona.lingo_map = analysis.get("lingo_map") or persona.lingo_map or {}
+                    persona.narrative_style = narrative
+                    persona.version += 1
+                    await db.flush()
+                    action = "updated"
+                else:
+                    persona = Persona(
+                        name=name,
+                        global_style=analysis.get("global_style", ""),
+                        catchphrases=analysis.get("catchphrases", []),
+                        reaction_patterns=analysis.get("reaction_patterns", {}),
+                        sentence_templates=analysis.get("sentence_templates", []),
+                        core_values=analysis.get("core_values", []),
+                        language_style=analysis.get("language_style", {}),
+                        language_style_v2=analysis.get("language_style_v2"),
+                        tone_adaptation=analysis.get("tone_adaptation", {}),
+                        narrative_style=narrative,
+                        lingo_map=analysis.get("lingo_map") or {},
+                        source_anchor_name=anchor_name or None,
+                        source_anchor_id=source_anchor_id or None,
+                        source_homepage_url=source_homepage_url or None,
+                        source_follower_count=follower_count or None,
+                    )
+                    from app.core.security import set_owner
+                    set_owner(persona, user)
+                    db.add(persona)
+                    await db.flush()
+                    action = "created"
+
+                persona_id = str(persona.id)
+
+                # 保存每个转写切片
+                slice_count_for_nm = 0
+                total_text_len = 0
+                for r in downloaded:
+                    if r.get("transcription") and r["transcription"].get("text"):
+                        txt = r["transcription"]["text"]
+                        slice_obj = PersonaSlice(
+                            persona_id=persona.id,
+                            original_text=txt,
+                            source_url=r.get("source_url", ""),
+                            analyzed=True,
+                        )
+                        db.add(slice_obj)
+                        slice_count_for_nm += 1
+                        total_text_len += len(txt)
+
+                # Build narrative model
+                from app.services.persona_analyzer import build_narrative_model
+                nm = build_narrative_model(persona, slice_count=slice_count_for_nm, total_text_length=total_text_len)
+                if nm:
+                    persona.narrative_model = nm
+
+                await db.commit()
+                analysis["persona_id"] = persona_id
+                logger.info("Persona saved: %s (%s) action=%s slices=%d",
+                            persona.name, persona_id, action, len(downloaded))
+
+                # Rename voice profile from anchor_name to persona_id
+                if voice_profile_built and persona_id:
+                    try:
+                        vp_dir = Path(__file__).resolve().parent.parent.parent / "voice_profiles"
+                        safe = anchor_name.replace("/", "_").replace("\\", "_")
+                        old = vp_dir / f"{safe}.npy"
+                        new = vp_dir / f"{persona_id}.npy"
+                        if old.exists() and not new.exists():
+                            old.rename(new)
+                            logger.info("Renamed voice profile: %s -> %s", old.name, new.name)
+                    except Exception as e:
+                        logger.warning("Failed to rename voice profile: %s", e)
+        except Exception as e:
+            logger.error("Failed to save persona to DB: %s", e)
+            yield _sse({
+                "step": "save_warning",
+                "message": f"人设分析完成但保存失败: {e}",
+            })
 
         # === Step 10: 生成报告 ===
         yield _sse({"step": ProgressStep.GENERATING_REPORT, "message": "正在生成人设报告和策略卡片..."})
@@ -653,6 +1135,32 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
             strategy_res = {"extracted": 0, "results": []}
 
         # === Done ===
+        try:
+            from sqlalchemy import select as _done_sel
+            async with _async_sf() as _done_db:
+                _done_row = (await _done_db.execute(
+                    _done_sel(_TR).where(_TR.task_id == task_id)
+                )).scalar_one_or_none()
+                if _done_row:
+                    _done_row.status = "completed"
+                    _done_row.video_count = len(video_ids)
+                    _done_row.downloaded_count = len([r for r in results if r["status"] == "downloaded"])
+                    _done_row.transcribed_count = len([r for r in results if r.get("transcription")])
+                    _done_row.persona_id = persona_id
+                    _done_row.persona_name = f"{anchor_name}的直播风格" if anchor_name else analysis.get("name", "")
+                    _done_row.result_summary = {
+                        "current_step": "done",
+                        "message": "全部处理完成",
+                        "progress_pct": 100,
+                        "profile": {"name": anchor_name, "followers": follower_count},
+                        "materials_count": len(results),
+                        "persona_id": persona_id,
+                        "strategy_count": strategy_res.get("extracted", 0),
+                    }
+                    await _done_db.commit()
+                    logger.info("Task %s marked completed", task_id)
+        except Exception as e:
+            logger.error("Failed to mark task completed: %s", e)
         yield _sse({
             "step": ProgressStep.DONE,
             "message": "全部处理完成",
@@ -663,6 +1171,7 @@ async def douyin_user_import_stream(req: DouyinUserRequest):
                 "strategies": strategy_res,
                 "materials": results,
                 "follower_count": follower_count,
+                "persona_id": persona_id,
             },
         })
 
