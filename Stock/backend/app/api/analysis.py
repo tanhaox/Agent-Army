@@ -254,7 +254,7 @@ async def add_stock_manual(req: AddStockRequest):
             VALUES (:d, :s, :n, 'ADD', 0, :mkt)
             ON CONFLICT (scan_date, symbol) DO NOTHING
         """), {"d": scan_date, "s": sym, "n": name,
-               "mkt": "上海A股" if sym.endswith(".SH") else "深圳A股"})
+               "mkt": "主板" if sym.endswith(".SH") or sym.startswith(("0","6")) else ("创业板" if sym.startswith("300") or sym.startswith("301") or sym.startswith("688") else "主板")})
         await s.commit()
 
     async with async_session_factory() as s:
