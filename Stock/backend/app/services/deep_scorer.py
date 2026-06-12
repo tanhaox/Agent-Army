@@ -216,6 +216,7 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
 
     # 5. Build fingerprints + classify
     # v4.5: 用代码前缀 + 名称关键词做主分类 (fingerprint/stock_basic均缺失)
+    # v4.6: 添加 board 前缀 (主板/创业板), 目标10种原型
     archetype_map: dict[str, str] = {}
     try:
         from app.services.fingerprint_builder import build_fingerprints
@@ -223,7 +224,8 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
         fingerprints = await build_fingerprints(symbols)
         archetype_map = await classify_stocks(symbols, fingerprints)
         unique_archs = set(archetype_map.values())
-        if len(unique_archs) <= 1:
+        # v4.6: 如果全是 fallback 原型, 用代码+名称回退以获取更多样性
+        if len(unique_archs) <= 1 or all(a == "large_bluechip" for a in unique_archs):
             raise ValueError("Need diverse archetypes")
     except Exception as e:
         # 所有symbols去重后用代码前缀+名称分类
@@ -236,13 +238,24 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
             name, ind = name_map.get(s, ("", ""))
             code = s[:3] if s else ""
 
-            # 按代码前缀 + 名称关键词分类
+            # -- 确定 board (主板/创业板/科创板/北交所) --
+            if code.startswith(("8","4")):
+                board = ""  # 北交所/新三板不分board前缀
+            elif code.startswith("688"):
+                board = ""  # 科创板不分board前缀
+            elif code.startswith(("300","301")):
+                board = "创业板_"
+            else:
+                board = "主板_"
+
+            # -- 按代码前缀 + 名称关键词分类 --
             if code.startswith("8") or code.startswith("4"):
                 arch = "small_speculative"  # 北交所/新三板
             elif code.startswith("688"):
-                arch = "growth_tech"  # 科创板
+                arch = "growth_tech"  # 科创板 (创业板_growth_tech 变体)
+                board = "创业板_"
             elif code.startswith("300") or code.startswith("301"):
-                arch = "growth_tech"  # 创业板
+                arch = "growth_tech"  # 创业板科技
             elif name and any(kw in name for kw in ["银行","保险","证券","金融","信托","白酒","食品","饮料","家电","乳业"]):
                 arch = "large_bluechip"
             elif name and any(kw in name for kw in ["石油","石化","煤炭","有色","钢铁","化工","稀土","锂业","矿业","黄金","铜","铝","水泥","玻璃","纸","化纤","能源","燃气","港口","公路","铁路","航空"]):
@@ -257,9 +270,12 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
                 arch = "large_bluechip"  # 主板默认
             else:
                 arch = "growth_tech"
-            archetype_map[s] = arch
+            archetype_map[s] = board + arch
 
-        logger.info(f"Code+name archetype distribution: {dict((a, list(archetype_map.values()).count(a)) for a in set(archetype_map.values()))}")
+        dist = {}
+        for v in archetype_map.values():
+            dist[v] = dist.get(v, 0) + 1
+        logger.info(f"Code+name archetype distribution: {dist}")
 
     # 6. Resolve weights + beliefs per archetype
     weights_map: dict[str, dict] = {}
