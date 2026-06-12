@@ -249,6 +249,16 @@ async def get_wave_prediction(symbol: str = Query(...)):
     return {"status": "success", "data": result}
 
 
+@router.get("/zigzag-trend")
+async def get_zigzag_trend(symbol: str = Query(..., description="股票代码")):
+    """ZigZag 趋势线 — 同花顺趋势自动线复刻 (5%偏差)."""
+    from app.services.zigzag_trendline import compute_zigzag_signal
+    result = await compute_zigzag_signal(symbol.strip().upper())
+    if result is None:
+        return {"status": "error", "detail": "数据不足"}
+    return {"status": "success", "data": result}
+
+
 @router.get("/status")
 async def get_status():
     """AlphaFlow 系统状态."""

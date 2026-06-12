@@ -20,12 +20,11 @@
 - **现象**: 声明在函数定义之后，与 `_ambush_cache`（行 9）风格不一致
 - **修复**: 将 `_pattern_cache` 声明移到 `preload_patterns` 函数之前
 
-## RESIDUAL-003: `alphaflow_pool_service.py` 是空心 stub
+## RESIDUAL-003: `alphaflow_pool_service.py` 是空心 stub ✅ RESOLVED v4.7
 
 - **来源**: Phase 5 验证
-- **文件**: `app/services/alphaflow_pool_service.py`（仅 13 行）
-- **现象**: 鹅检测 + wave_features + CREATE TABLE goose_archive 仍在 `api/alphaflow.py get_pool()` 行 80-125 中
-- **修复**: 将鹅检测逻辑（daily_kline 查询 → wave_features → gain>100 → goose_archive INSERT → DELETE from pool）移入 `alphaflow_pool_service.py` 的 `get_pool_with_maintenance()` 函数
+- **文件**: `app/services/alphaflow_pool_service.py`
+- **状态**: ✅ 已于 v4.7 解决 — 信号计算/Big Fairy/两期扫描全部在该文件中实现
 
 ## RESIDUAL-004: `holdings.py` auto_holding_strategy 未提取
 
@@ -64,4 +63,4 @@
 
 ---
 
-*积累状态: **8 条** — 全部标记为 Phase 8*
+*积累状态: **7 条待处理 + 1 条已解决** — 标记为 Phase 8*

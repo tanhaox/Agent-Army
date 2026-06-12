@@ -30,9 +30,9 @@ def parse_files():
                     line = line.strip().upper()
                     if not line: continue
                     if '.' not in line:
-                        if line.startswith(('0','3')): line += '.SZ'
-                        elif line.startswith('6'): line += '.SH'
-                        else: continue
+                        from app.utils.stock_code import normalize_ts_code
+                        line = normalize_ts_code(line)
+                        if not line
                     codes.append(line)
             if file_date not in results:
                 results[file_date] = []

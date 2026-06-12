@@ -310,23 +310,30 @@ def _build_chip_section(chip: dict) -> str:
     lines.append(f"    锁死区间(当前横盘): ¥{zl['low']:.2f} - ¥{zl['high']:.2f}")
     lines.append(f"    上方套牢区:         ¥{zo['low']:.2f} - ¥{zo['high']:.2f}")
     lines.append(f"    下方支撑区:         ¥{zb['low']:.2f} - ¥{zb['high']:.2f}")
-    lines.append(f"  成交量分布: "
-                 f"锁死区{ab['vol_lock_pct']:.0f}% | "
-                 f"套牢区{ab['vol_over_pct']:.0f}% | "
-                 f"支撑区{ab['vol_below_pct']:.0f}%")
-    lines.append(f"  吸收率: {ab['ar_ratio']*100:.0f}% "
-                 f"(锁死区成交量 / (锁死区+套牢区)成交量)")
+    lines.append(f"  筹码集中度: "
+                 f"锁死区{ab.get('chips_lock_pct', ab.get('vol_lock_pct', 0)):.0f}% | "
+                 f"套牢区{ab.get('chips_over_pct', ab.get('vol_over_pct', 0)):.0f}% | "
+                 f"支撑区{ab.get('chips_below_pct', ab.get('vol_below_pct', 0)):.0f}%")
+    lines.append(f"  集中度比率: {ab['ar_ratio']*100:.0f}% "
+                 f"(锁死区筹码 / (锁死区+套牢区)筹码)")
 
     trend = ab.get('trend', '?')
     lines.append(f"  趋势: {trend} ({ab.get('verdict', '?')})")
 
-    # 分时段
+    # 分时段 (cyq 趋势 — 新段格式含 winner_rate/cost_50pct)
     segs = ab.get('segments', [])
     if len(segs) >= 2:
-        ar_timeline = " → ".join(
-            f"{s['ar_ratio']*100:.0f}%" for s in segs[-5:]
-        )
-        lines.append(f"  分段吸收率趋势: {ar_timeline}")
+        # 旧 ar_ratio 段 → 新 cyq winner_rate 段
+        if 'ar_ratio' in segs[-1]:
+            ar_timeline = " → ".join(
+                f"{s['ar_ratio']*100:.0f}%" for s in segs[-5:]
+            )
+            lines.append(f"  分段吸收趋势: {ar_timeline}")
+        elif 'winner_rate' in segs[-1]:
+            wr_timeline = " → ".join(
+                f"{s['winner_rate']:.0f}%" for s in segs[-5:]
+            )
+            lines.append(f"  获利盘趋势: {wr_timeline}")
 
     lines.append(f"  {chip.get('summary', '')}")
 

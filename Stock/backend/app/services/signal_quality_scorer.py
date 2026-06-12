@@ -183,15 +183,18 @@ async def backfill_signal_history():
                     ret_t1, ret_t2, ret_t3, ret_t5, max_gain_pct, max_loss_pct,
                     outcome_label, deception_type,
                     relative_position, sector_direction, sector_lifecycle,
-                    sector_rank_5d, market_5d, predicted_return, predicted_win_prob)
+                    sector_rank_5d, market_5d, predicted_return, predicted_win_prob,
+                    strategy_label)
                 VALUES (:s, :d, :sc, :a, :m, :p, :ph, :pl, :pw,
                     :r1, :r2, :r3, :r5, :mg, :ml, :o, :dt,
-                    :rp, :sdir, :slc, :sr5, :m5d, :pret, :pwp)
+                    :rp, :sdir, :slc, :sr5, :m5d, :pret, :pwp,
+                    :strat)
             """), {
                 "s": sym, "d": sd, "sc": score, "a": arch, "m": mkt,
                 "p": push_30d.get(key, 1), "ph": price_high, "pl": price_low, "pw": price_width,
                 "r1": ret_t1, "r2": ret_t2, "r3": ret_t3, "r5": ret_t5,
                 "mg": max_gain, "ml": max_loss, "o": outcome, "dt": deception,
+                "strat": "S2",  # Phase 61: 默认 S2 (T+5 收益率)——后续可从 strategy_map 推导
                 "rp": enrichment.get((sym, sd), {}).get("relative_position"),
                 "sdir": enrichment.get((sym, sd), {}).get("sector_direction"),
                 "slc": enrichment.get((sym, sd), {}).get("sector_lifecycle"),

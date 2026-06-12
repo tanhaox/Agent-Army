@@ -119,7 +119,7 @@ export default function AlphaFlowPage() {
     }
     setScanning(false);
   };
-  const toggleDetail=async(tsCode:string)=>{if(expanded===tsCode){setExpanded(null);setLockDetail(null);setCompReport(null);return}setExpanded(tsCode);setDetailLoading(true);setCompReport(null);try{const r=await api.get('/alphaflow/lock-detail',{params:{symbol:tsCode}});setLockDetail(r.data)}catch{setLockDetail(null)}setDetailLoading(false)};
+  const toggleDetail=async(tsCode:string)=>{if(expanded===tsCode){setExpanded(null);setLockDetail(null);setCompReport(null);return}setExpanded(tsCode);setDetailLoading(true);setCompReport(null);try{const r=await api.get('/alphaflow/lock-detail',{params:{symbol:tsCode}});const d=r.data;if(d&&typeof d==='object'&&!d.error){setLockDetail(d)}else{setLockDetail({error:d?.error||d?.detail||'无数据'})}}catch(e:any){setLockDetail({error:e?.message||'加载失败'})}setDetailLoading(false)};
   const loadComp=async(tsCode:string)=>{setCompLoading(true);setCompReport(null);try{const r=await api.get('/analysis/comprehensive',{params:{symbol:tsCode}});setCompReport(r.data.data)}catch(e:any){setCompReport({error:e?.response?.data?.detail||'Failed'})}setCompLoading(false)};
 
   const rowH={borderTop:`1px solid ${C.border}`,cursor:'pointer',height:40};

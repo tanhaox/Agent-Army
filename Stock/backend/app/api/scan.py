@@ -204,8 +204,8 @@ async def trigger_scan(skip_download: bool = Query(default=False)):
                 await progress_cb("deep_score", 0, 1, extra="开始12维深度评分...")
                 try:
                     from app.services.deep_scorer import deep_analyze
-                    async def deep_cb(step, total, label):
-                        await progress_cb("deep_score", step, total, extra=label)
+                    async def deep_cb(phase, current, total, message=""):
+                        await progress_cb("deep_score", current, total, extra=message)
                     async with async_session_factory() as s:
                         scored = await deep_analyze(s, scan_date=sd, progress_cb=deep_cb)
                     await progress_cb("deep_score", 1, 1,

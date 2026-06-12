@@ -397,6 +397,26 @@ async def task_sync_sector_min_kline():
     return {"status": "done"}
 
 
+async def task_sync_chip_perf():
+    """Step 8.5: Sync Tushare cyq_perf to daily_chip_perf table (daily, after kline)."""
+    from scripts.sync_chip_perf import sync_day
+    today_str = date.today().strftime("%Y%m%d")
+    n = await sync_day(today_str)
+    if n > 0:
+        logger.info(f"Chip perf: +{n} rows")
+    return {"inserted": n}
+
+
+async def task_sync_limit_list():
+    """Step 8.6: Sync Tushare limit_list (daily limit-up/limit-down/broken-board)."""
+    from scripts.sync_limit_list import sync_day
+    today_str = date.today().strftime("%Y%m%d")
+    n = await sync_day(today_str)
+    if n > 0:
+        logger.info(f"Limit list: +{n} records")
+    return {"inserted": n}
+
+
 async def task_verify_recommendations():
     """Step 8: Backfill real T+2/T+5/T+15 returns from daily_kline for unverified recommendations."""
     from scripts.verify_recommendations import main

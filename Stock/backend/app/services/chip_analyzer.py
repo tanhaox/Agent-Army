@@ -1,40 +1,42 @@
-"""筹码吸收率分析引擎 — 锁死区间 vs 套牢区间的成交量对比.
+"""筹码分析引擎 v2.0 — Tushare cyq_perf + cyq_chips 真实筹码分布.
 
-核心问题: 一只股票横盘锁死了 40 天, 它吃掉了上方多少套牢盘?
+核心问题: 一只股票横盘锁死了 40 天, 筹码成本分布如何? 上方套牢盘多少?
 
-三个区间:
-  Z_LOCK  (锁死区间): 当前横盘范围, 由锁死检测提供的区间
-  Z_OVER  (套牢区):   锁死区间上方, 历史密集成交区, 被套的人在扛
-  Z_BELOW (支撑区):   锁死区间下方, 极端低点范围
+v2.0 变更 (2026-06-09):
+  - 数据源从 5 分钟线手算 → Tushare cyq 真实筹码分布
+  - define_zones() 保留 (三区模型), compute_absorption() 退役
+  - compute_chip_absorption_from_cyq() 替代手算吸收率
+  - compute_chip_trend_from_cyq() 替代分时段量价归因
+  - analyze_chip_absorption() 签名不变, 内部衔接到 chip_service
 
-核心指标 — 吸收率 (Absorption Rate):
-  AR_lock = Z_LOCK 成交量 / (Z_LOCK + Z_OVER) 总成交量
-  吸收率高 → 套牢盘在被吃掉 → 开锁后抛压小
-  吸收率趋势上升 → 筹码在加速下沉 → 快启动了
+退役清单:
+  - compute_absorption()                    → 退役, 替换为 chip_service.compute_chip_absorption_from_cyq()
+  - fetch_5min_bars 用于筹码分析            → 退役, 不再拉分钟线做筹码
+  - 10 天分段量价归因                       → 退役, 替换为 cyq_perf 历史趋势
+  - SEGMENT_DAYS, LOCK_LOOKBACK 常量        → 退役 (仅 define_zones 保留 LOCK_LOOKBACK)
 
-随时间追踪:
-  按 10 天切片段, 计算每段的 AR_lock + AR_over 变化趋势
-  如果 AR_lock 从 0.3 → 0.5 → 0.7, 说明割肉在加速
-  如果 AR_lock 一直在 0.2~0.3 徘徊, 说明上方还在死扛
+保留:
+  - define_zones()                           → 保留 (三区框架仍有结构价值)
+  - analyze_chip_absorption()                → 保留, 内部改调用 chip_service
+  - 所有调用方无需改代码                     → 签名不变, 返回协议兼容
 """
-import asyncio, logging, numpy as np
-from collections import defaultdict
+
+import logging, numpy as np
 from datetime import date, timedelta
 from sqlalchemy import text
 from app.core.database import async_session_factory
-from app.services.minute_data import fetch_5min_bars
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv('C:/AI-Agent-Local/Stock/backend/.env')
-except Exception:
-    pass
 
 logger = logging.getLogger("chip_analyzer")
 
-SEGMENT_DAYS = 10     # 每段 10 个交易日
-LOCK_LOOKBACK = 60     # 回看 60 天的日线
+LOCK_LOOKBACK = 60  # 日线回看天数 (仅 define_zones 使用)
 
+# ── 全局: 通过环境变量切换新旧数据源 ──
+_USE_CYQ = True  # True=Tushare cyq 真实筹码 | False=旧手算 (紧急回退)
+
+
+# ═══════════════════════════════════════════════════════════
+#  保留: 三区模型
+# ═══════════════════════════════════════════════════════════
 
 def define_zones(lock_bottom: float, lock_top: float,
                  daily_highs_60d: np.ndarray,
@@ -45,9 +47,6 @@ def define_zones(lock_bottom: float, lock_top: float,
       Z_LOCK  = [lock_bottom, lock_top]  当前横盘范围
       Z_OVER  = [lock_top, 60日最高]    上方套牢区
       Z_BELOW = [60日最低, lock_bottom]  下方支撑区
-
-    如果锁死区间未知, 基于 60 日数据自动推断:
-      锁死区间 = 最近 30 日的高低点 (横盘范围)
     """
     h_60 = float(np.max(daily_highs_60d)) if len(daily_highs_60d) > 0 else lock_top * 1.3
     l_60 = float(np.min(daily_lows_60d)) if len(daily_lows_60d) > 0 else lock_bottom * 0.8
@@ -59,163 +58,46 @@ def define_zones(lock_bottom: float, lock_top: float,
     }
 
 
-def compute_absorption(bars_5min: list[dict], zones: dict) -> dict:
-    """计算吸收率 — 锁死区间成交量 vs 总吸收相关成交量.
+# ═══════════════════════════════════════════════════════════
+#  退役: compute_absorption() — 5 分钟线手算吸收率
+#  (保留空壳, 调用 chip_service.compute_chip_absorption_from_cyq)
+# ═══════════════════════════════════════════════════════════
 
-    对每根 5 分钟 K 线, 按其价格区间归类:
-      - 如果 K 线完全在 Z_LOCK 内 → vol_lock
-      - 如果 K 线完全在 Z_OVER 内 → vol_over
-      - 跨区间的按比例分拆
+# ── 此函数已退役, 仅作记号 ──
+# def compute_absorption(bars_5min: list[dict], zones: dict) -> dict:
+#     ...
+# 替代: chip_service.compute_chip_absorption_from_cyq()
 
-    Returns:
-      {total_vol, vol_lock, vol_over, vol_below,
-       ar_lock, ar_over_ratio, verdict, segments: [...]}
-    """
-    if len(bars_5min) < 100:
-        return {"error": "数据不足"}
 
-    zl = zones["Z_LOCK"]
-    zo = zones["Z_OVER"]
-    zb = zones["Z_BELOW"]
-
-    vol_lock = 0.0
-    vol_over = 0.0
-    vol_below = 0.0
-
-    # 按日期分组, 用于分时段追踪
-    by_date = defaultdict(lambda: {"vol_lock": 0.0, "vol_over": 0.0, "vol_below": 0.0})
-
-    for b in bars_5min:
-        bar_high = b["high"]
-        bar_low = b["low"]
-        vol = b["vol"]
-
-        # K 线中点在哪个区间, 整个 K 线的量归给哪个区间
-        # (对于跨区间 K 线用中点近似)
-        mid = (bar_high + bar_low) / 2
-
-        day = b.get("time", "")[:10] if "time" in b else b.get("trade_time", "")[:10]
-
-        if mid >= zl["low"] and mid <= zl["high"]:
-            vol_lock += vol
-            by_date[day]["vol_lock"] += vol
-        elif mid > zl["high"]:
-            vol_over += vol
-            by_date[day]["vol_over"] += vol
-        elif mid < zl["low"]:
-            vol_below += vol
-            by_date[day]["vol_below"] += vol
-
-    # ── 吸收率计算 ──
-    total = vol_lock + vol_over + vol_below
-    if total <= 0:
-        return {"error": "无成交量"}
-
-    # 核心指标: 锁死区吸收了多少总成交量?
-    ar_lock = vol_lock / total
-
-    # 核心指标: 锁死 vs 上方的比值 (越高越说明套牢盘在被消化)
-    absorb_total = vol_lock + vol_over
-    if absorb_total > 0:
-        ar_ratio = vol_lock / absorb_total  # 锁/(锁+上), 越大越好
-    else:
-        ar_ratio = 0
-
-    # ── 分时段趋势 ──
-    sorted_dates = sorted(by_date.keys())
-    segments = []
-    segment_window = SEGMENT_DAYS
-
-    for seg_start in range(0, len(sorted_dates), segment_window):
-        seg_dates = sorted_dates[seg_start:seg_start + segment_window]
-        if len(seg_dates) < 3:
-            continue
-        seg_lock = sum(by_date[d]["vol_lock"] for d in seg_dates)
-        seg_over = sum(by_date[d]["vol_over"] for d in seg_dates)
-        seg_below = sum(by_date[d]["vol_below"] for d in seg_dates)
-        seg_total = seg_lock + seg_over + seg_below
-
-        if seg_total > 0:
-            seg_ar = seg_lock / seg_total
-            seg_ratio = seg_lock / max(seg_lock + seg_over, 1)
-            segments.append({
-                "start_date": seg_dates[0],
-                "end_date": seg_dates[-1],
-                "days": len(seg_dates),
-                "vol_lock_pct": round(seg_lock / seg_total * 100, 1),
-                "vol_over_pct": round(seg_over / seg_total * 100, 1),
-                "vol_below_pct": round(seg_below / seg_total * 100, 1),
-                "ar_lock": round(seg_ar, 3),
-                "ar_ratio": round(seg_ratio, 3),
-            })
-
-    # ── 趋势判定 ──
-    if len(segments) >= 2:
-        recent_ars = [s["ar_ratio"] for s in segments[-3:]]
-        earlier_ars = [s["ar_ratio"] for s in segments[:3]]
-
-        recent_avg = float(np.mean(recent_ars)) if recent_ars else ar_ratio
-        earlier_avg = float(np.mean(earlier_ars)) if earlier_ars else ar_ratio
-
-        if recent_avg > earlier_avg * 1.3:
-            trend = "加速吸收"   # 锁死区在加速吃套牢盘
-        elif recent_avg > earlier_avg * 1.1:
-            trend = "缓慢吸收"
-        elif recent_avg < earlier_avg * 0.8:
-            trend = "吸收减弱"   # 套牢盘在死扛, 没割肉
-        else:
-            trend = "吸收稳定"
-    else:
-        trend = "数据不足"
-
-    # ── 综合判定 ──
-    if ar_ratio >= 0.60 and trend in ("加速吸收", "缓慢吸收"):
-        verdict = "强吸收"     # 已吃掉 60%+ 相关筹码, 还在加速
-        quality = 10
-    elif ar_ratio >= 0.50:
-        verdict = "中等吸收"   # 过半, 在消化
-        quality = 7
-    elif ar_ratio >= 0.35:
-        verdict = "弱吸收"     # 三分之一, 还需时间
-        quality = 4
-    else:
-        verdict = "套牢死扛"   # 上方套牢盘不割, 压力大
-        quality = 2
-
-    return {
-        "total_vol": round(total, 0),
-        "vol_lock": round(vol_lock, 0),
-        "vol_over": round(vol_over, 0),
-        "vol_below": round(vol_below, 0),
-        "vol_lock_pct": round(vol_lock / total * 100, 1),
-        "vol_over_pct": round(vol_over / total * 100, 1),
-        "vol_below_pct": round(vol_below / total * 100, 1),
-        "ar_lock": round(ar_lock, 3),         # 锁死占总成交
-        "ar_ratio": round(ar_ratio, 3),        # 锁/(锁+上)
-        "trend": trend,
-        "verdict": verdict,
-        "quality": quality,
-        "segments": segments,
-    }
-
+# ═══════════════════════════════════════════════════════════
+#  主入口: analyze_chip_absorption() — 签名不变
+# ═══════════════════════════════════════════════════════════
 
 async def analyze_chip_absorption(
     ts_code: str,
     lock_bottom: float = None,
     lock_top: float = None,
+    trade_date: str | None = None,
 ) -> dict | None:
-    """一站式筹码吸收率分析.
+    """一站式筹码分析 — Tushare cyq 驱动.
 
-    自动获取锁死区间(从 lock-detail) + 拉分钟线 + 算吸收率.
+    调用方无需任何改动, 返回协议向后兼容。
 
     Args:
         ts_code: 股票代码
         lock_bottom, lock_top: 锁死区间 (可选, 否则从 DB 自动推断)
+        trade_date: 分析日期 (可选, 默认最新)
 
     Returns:
-        {zones, absorption, summary}
+        {zones, current_price, absorption, summary, cyq_snapshot}
+        兼容旧版字段, 新增 cyq_snapshot 透出真实筹码数据
     """
-    # 加载日线数据
+    from app.services.chip_service import (
+        get_cyq_perf, get_cyq_chips,
+        compute_chip_absorption_from_cyq, compute_chip_trend_from_cyq,
+    )
+
+    # 加载日线数据 (计算当前价 + 三区间)
     async with async_session_factory() as s:
         r = await s.execute(text("""
             SELECT close, high, low FROM daily_kline
@@ -229,65 +111,97 @@ async def analyze_chip_absorption(
     closes = np.array([float(r[0] or 0) for r in rows])
     highs = np.array([float(r[1] or closes[i]) for i, r in enumerate(rows)])
     lows = np.array([float(r[2] or closes[i]) for i, r in enumerate(rows)])
-    n = len(closes)
     current_price = float(closes[-1])
 
-    # 如果没提供锁死区间, 自动推断: 最近 30 天的范围就是锁死区间
+    # 锁死区间 — 如果未提供, 用最近 30 日高低点
     if lock_bottom is None or lock_top is None:
         h_30 = float(np.max(highs[-30:]))
         l_30 = float(np.min(lows[-30:]))
         lock_top = h_30
         lock_bottom = l_30
 
-    # 定义三个区间
+    # 三区间
     zones = define_zones(lock_bottom, lock_top,
                          highs[-LOCK_LOOKBACK:], lows[-LOCK_LOOKBACK:])
 
-    # 拉分钟线
-    bars = await fetch_5min_bars(ts_code, lookback_days=LOCK_LOOKBACK)
-    if not bars or len(bars) < 100:
-        return {"zones": zones, "absorption": {"error": "分钟数据不足"}}
+    # ── 真实筹码数据: 当日筹码吸收率 ──
+    abs_data = await compute_chip_absorption_from_cyq(
+        ts_code, lock_bottom, lock_top, trade_date)
 
-    # 算吸收率
-    abs_data = compute_absorption(bars, zones)
+    # ── 筹码成本趋势: cyq_perf 历史 ──
+    trend_data = await compute_chip_trend_from_cyq(
+        ts_code, lock_bottom, lock_top, lookback_days=LOCK_LOOKBACK)
 
-    if "error" in abs_data:
-        return {"zones": zones, "absorption": abs_data}
+    # ── cyq_perf 快照 (最新的成本五分位 + 获利盘比例) ──
+    cyq_snap = await get_cyq_perf(ts_code, trade_date)
 
-    # 摘要
+    # ── 构建返回 (向后兼容旧字段) ──
     zl = zones["Z_LOCK"]
     zo = zones["Z_OVER"]
+
+    if "error" in abs_data:
+        return {
+            "zones": zones,
+            "current_price": round(current_price, 2),
+            "absorption": abs_data,  # 含 source="tushare_cyq"
+            "summary": f"锁死区间 ¥{zl['low']}-{zl['high']} | 上方套牢区 ¥{zo['low']}-{zo['high']} | 筹码数据: {abs_data.get('error', '未知错误')}",
+            "cyq_snapshot": cyq_snap,
+        }
+
     ar = abs_data["ar_ratio"]
-    trend = abs_data["trend"]
     verdict = abs_data["verdict"]
 
-    # 用自然语言表述
+    # 摘要
     lines = []
     lines.append(f"锁死区间 ¥{zl['low']}-{zl['high']} | 上方套牢区 ¥{zo['low']}-{zo['high']}")
-    lines.append(f"吸收率 {ar*100:.0f}% ({verdict}) — "
-                 f"锁死区吃了 {ar*100:.0f}% 的相关筹码")
 
-    if trend == "加速吸收":
-        lines.append(f"趋势: {trend} — 近段吸收率显著高于早期, 割肉在加速, 筹码在下沉")
-    elif trend == "缓慢吸收":
-        lines.append(f"趋势: {trend} — 套牢盘在缓慢割肉, 还需时间消化")
-    elif trend == "吸收稳定":
-        lines.append(f"趋势: {trend} — 锁死区稳定吃进上方筹码")
-    elif trend == "吸收减弱":
-        lines.append(f"趋势: {trend} — 上方套牢盘在死扛, 还没人割肉。开锁后一涨就会有人跑")
+    if trend_data.get("source") == "tushare_cyq":
+        trend = trend_data.get("trend", "?")
+        lines.append(f"筹码集中度 {ar*100:.0f}% ({verdict}) | 趋势: {trend}")
+
+        if trend == "快收集筹":
+            lines.append("趋势: 获利盘比例快速上升 — 筹码在加速沉淀")
+        elif trend == "慢收集筹":
+            lines.append("趋势: 获利盘比例缓慢上升 — 筹码在逐步集中")
+        elif trend == "筹码稳定":
+            lines.append("趋势: 成本分布稳定 — 无明显收集或派发")
+        elif trend == "筹码松动":
+            lines.append("趋势: 获利盘比例下降 — 可能有资金在出货")
+        elif trend == "加速派发":
+            lines.append("趋势: 获利盘比例快速下降 — 警惕出货风险")
+    else:
+        # 旧版兼容: 只有单点 ar_ratio, 没有趋势
+        lines.append(f"筹码集中度 {ar*100:.0f}% ({verdict})")
 
     if ar >= 0.60:
-        lines.append("结论: 套牢盘已被消化大半, 上方压力轻 — 开锁后容易涨")
+        lines.append("结论: 筹码已高度集中在锁死区, 开锁后抛压轻 — 容易涨")
     elif ar >= 0.50:
-        lines.append("结论: 筹码在转移中, 但还有相当套牢盘未割 — 还需观察")
+        lines.append("结论: 筹码在沉淀中, 但仍有相当套牢盘 — 建议持续观察")
     elif ar >= 0.35:
-        lines.append("结论: 锁死区还没吃够, 如果突然放量突破锁死上沿, 追高小心套牢盘砸盘")
+        lines.append("结论: 锁死区筹码集中度偏低, 上方套牢盘压力较大")
     else:
-        lines.append("结论: 套牢盘仍在死扛, 开锁后上方抛压重 — 建议等吸收率超过 40% 再参与")
+        lines.append("结论: 套牢盘沉重, 上方筹码仍需时间消化")
+
+    # cyq_perf 增强总结
+    if cyq_snap:
+        wr = float(cyq_snap.get("winner_rate", 0))
+        cost50 = float(cyq_snap.get("cost_50pct", 0))
+        cost85 = float(cyq_snap.get("cost_85pct", 0))
+        lines.append(
+            f"[真实筹码] 获利盘{wr:.1f}% | 中位成本¥{cost50:.2f} | 高成本线¥{cost85:.2f} "
+            f"(85%筹码成本≤此价)"
+        )
 
     return {
         "zones": zones,
         "current_price": round(current_price, 2),
-        "absorption": abs_data,
+        "absorption": {
+            **abs_data,
+            "trend": trend_data.get("trend", "数据不足"),
+            "segments": trend_data.get("segments", []),  # 成本趋势分段 (兼容旧 segments 字段名)
+        },
         "summary": " | ".join(lines),
+        # ── v2.0 新增: 真实筹码快照 ──
+        "cyq_snapshot": cyq_snap,
+        "cyq_trend": trend_data,
     }

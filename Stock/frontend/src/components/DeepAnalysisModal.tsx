@@ -10,7 +10,65 @@ export default function DeepAnalysisModal({ symbols, scores, stockNames, open, o
   const [results, setResults] = useState<any[]>([]);
   const [error, setError] = useState('');
   useEffect(() => { if (!open || symbols.length === 0) return; setLoading(true); setError(''); setResults([]);
-    api.post('/llm/deep-analysis', { symbols, scores }).then(r => { setResults(r.data.data || []); onComplete(r.data.data || []); }).catch(e => setError(e?.response?.data?.message || '失败')).finally(() => setLoading(false));
+    // v4.4: 改为调用 /llm/auto-analyze SSE 流式端点 (旧 /llm/deep-analysis 路由不存在)
+    const params = new URLSearchParams();
+    params.set('symbols', symbols.join(','));
+    const eventSource = new EventSource(`${import.meta.env.BASE_URL}api/llm/auto-analyze?symbols=${encodeURIComponent(symbols.join(','))}`);
+    // SSE endpoints need POST, use fetch with streaming
+    const controller = new AbortController();
+    fetch('/api/llm/auto-analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols }),
+      signal: controller.signal,
+    }).then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No stream');
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const allResults: any[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'progress' && event.result) {
+                const existing = allResults.find(r => r.symbol === event.result.symbol);
+                if (existing) {
+                  Object.assign(existing, event.result);
+                } else {
+                  allResults.push(event.result);
+                }
+                setResults([...allResults]);
+              }
+              if (event.type === 'done') {
+                const mapped = event.individual.map((r: any) => ({
+                  symbol: r.symbol,
+                  name: r.name,
+                  status: r.status === 'success' ? 'completed' : 'failed',
+                  original_score: scores[r.symbol] || 0,
+                  adjusted_score: scores[r.symbol] || 0,
+                  signals: [...(r.positive_signals || []).map((s: any) => ({ direction: 'positive', description: s.description || JSON.stringify(s) })),
+                           ...(r.negative_signals || []).map((s: any) => ({ direction: 'negative', description: s.description || JSON.stringify(s) }))],
+                  report: '',
+                }));
+                setResults(mapped);
+                onComplete(mapped);
+              }
+            } catch {}
+          }
+        }
+      }
+    }).catch(e => {
+      if (e.name !== 'AbortError') setError(e?.message || '分析失败');
+    }).finally(() => setLoading(false));
+    return () => controller.abort();
   }, [open, symbols.length]);
 
   const C = { bg: '#f8f9fa', bg2: '#f0f1f3', border: '#e5e7eb', text: '#1f2937', muted: '#6b7280', accent: '#6366f1' };

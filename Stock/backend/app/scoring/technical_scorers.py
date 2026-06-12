@@ -219,8 +219,15 @@ def score_bbi(kline_df) -> dict:
         elif i > 0 and closes[i] < bbi[i] and closes[i-1] >= bbi[i-1]:
             cross_signal -= 1  # 死叉
 
-    # 综合评分
-    dev_score = np.clip(5.0 + latest_dev * 0.8, 0, 10)
+    # 综合评分 — v2: 方向修正
+    # 偏离方向: close > BBI → 多头但可能追高; close < BBI → 空头但可能超跌
+    # 低价在 BBI 下方 = 便宜的买入点 → 给高分; 高溢价在 BBI 上方 = 追高风险 → 低调分
+    # 核心: 偏离越大越危险(无论方向), 但向下偏离(买入机会)比向上偏离(追高风险)扣分少
+    abs_dev = abs(latest_dev)
+    if latest_dev < 0:  # 价格在 BBI 下方 → 可能存在买入机会
+        dev_score = np.clip(5.0 + abs_dev * 0.5, 3, 9)  # 向下偏离加分但封顶 9
+    else:  # 价格在 BBI 上方 → 偏强但追高有风险
+        dev_score = np.clip(5.0 - latest_dev * 0.8, 0, 8)
     slope_bonus = np.clip(slope * 0.5, -2, 2)
     cross_bonus = np.clip(cross_signal * 0.5, -1, 1)
     score = dev_score + slope_bonus + cross_bonus

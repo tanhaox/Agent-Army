@@ -321,19 +321,19 @@ async def scan_weekly_signals(
     logger.info("方案 B Phase 1.5: 开始周线信号扫描...")
     cutoff = trade_date - timedelta(days=400)  # 200 个交易日 ≈ 400 日历日
 
-    # 如果未指定股票列表，加载全市场
+    # 如果未指定股票列表，加载全市场（上界约束防止回扫时引入未来数据）
     if symbols is None:
         r = await session.execute(text(
-            "SELECT DISTINCT ts_code FROM daily_kline WHERE trade_date >= :cut"
-        ), {"cut": cutoff})
+            "SELECT DISTINCT ts_code FROM daily_kline WHERE trade_date >= :cut AND trade_date <= :trade_date"
+        ), {"cut": cutoff, "trade_date": trade_date})
         symbols = [row[0] for row in r.fetchall()]
 
-    # 批量加载 K 线
+    # 批量加载 K 线（上界约束防止回扫时引入未来数据）
     r = await session.execute(text("""
         SELECT ts_code, trade_date, open, high, low, close, volume
-        FROM daily_kline WHERE ts_code = ANY(:codes) AND trade_date >= :cutoff
+        FROM daily_kline WHERE ts_code = ANY(:codes) AND trade_date >= :cutoff AND trade_date <= :trade_date
         ORDER BY ts_code, trade_date
-    """), {"codes": symbols, "cutoff": cutoff})
+    """), {"codes": symbols, "cutoff": cutoff, "trade_date": trade_date})
     raw_rows = r.fetchall()
 
     df_dict: dict[str, list] = {}
@@ -556,12 +556,12 @@ async def scan_all_stocks(session: AsyncSession, min_level: int = 1, progress_ca
     except Exception:
         pass  # ths_member 表可能不存在
 
-    # 批量加载 K 线数据
+    # 批量加载 K 线数据（上界约束防止回扫时引入未来数据）
     result = await session.execute(text("""
         SELECT ts_code, trade_date, open, high, low, close, volume
-        FROM daily_kline WHERE ts_code = ANY(:codes) AND trade_date >= :cutoff
+        FROM daily_kline WHERE ts_code = ANY(:codes) AND trade_date >= :cutoff AND trade_date <= :ref_date
         ORDER BY ts_code, trade_date
-    """), {"codes": all_codes, "cutoff": cutoff})
+    """), {"codes": all_codes, "cutoff": cutoff, "ref_date": ref_date})
     rows = result.fetchall()
 
     if progress_callback:
@@ -725,10 +725,12 @@ async def scan_all_stocks(session: AsyncSession, min_level: int = 1, progress_ca
             logger.warning(f"K线数据滞后 {(date.today() - scan_date).days} 天 (最新: {scan_date})，扫描结果可能非最新")
 
     if progress_callback:
+        l5_count = sum(1 for r in results if r['level'] == 'L5')
+        l4_count = sum(1 for r in results if r['level'] == 'L4')
         l3_count = sum(1 for r in results if r['level'] == 'L3')
         l2_count = sum(1 for r in results if r['level'] == 'L2')
         await progress_callback("scan", total, total,
-                                extra=f"扫描完成: {len(results)} 信号 (L3:{l3_count} L2:{l2_count}) | 过滤: 数据不足{skipped_kline} 异常{skipped_error} 无信号{skipped_no_signal}")
+                                extra=f"扫描完成: {len(results)} 信号 (L5:{l5_count} L4:{l4_count} L3:{l3_count} L2:{l2_count}) | 过滤: 数据不足{skipped_kline} 异常{skipped_error} 无信号{skipped_no_signal}")
 
     if results:
         await save_scan_results(session, results, scan_date)

@@ -62,7 +62,7 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
                a.win_probability, a.downside_risk, a.signal_quality,
                COALESCE(a.trend_score, 0) as trend_score,
                COALESCE(a.entry_score, 0) as entry_score,
-               COALESCE(a.market, '主板') as market,
+               COALESCE(s.market, '主板') as market,
                a.details
         FROM analysis_scores a
         LEFT JOIN scan_results s ON a.symbol=s.symbol AND a.scan_date=s.scan_date

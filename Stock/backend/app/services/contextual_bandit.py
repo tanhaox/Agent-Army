@@ -1,6 +1,9 @@
 """上下文Bandit — 根据市场状态选择最优策略臂 (S1/S2/S3).
 
 使用 Thompson Sampling 从历史奖励中采样，选择预期收益最高的策略.
+
+Status: P2 — select_arm() implemented, update() method needed for complete feedback loop.
+Currently not connected to any scheduler or API endpoint.
 """
 import logging, random
 import numpy as np

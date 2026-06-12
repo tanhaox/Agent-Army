@@ -540,11 +540,16 @@ async def _sync_fx(name: str, field: str):
 
 
 async def _sync_gz_index(name: str, field: str):
-    """同步国债收益率."""
+    """同步国债收益率 — gz_index 数据只到 2019年."""
     rows = await call_tushare("gz_index", {
         "start_date": (date.today() - timedelta(days=90)).strftime("%Y%m%d"),
         "end_date": date.today().strftime("%Y%m%d"),
     }, f"trade_date,{field}")
+
+    # gz_index 数据只到 2019年，如果最近 90天没数据，用全部数据中最新的一条
+    if not rows:
+        rows = await call_tushare("gz_index", {}, f"trade_date,{field}")
+
     if not rows:
         return 0
     async with async_session_factory() as s:
@@ -602,7 +607,10 @@ async def _sync_shibor_spread():
 # ══════════════════════════════════════════════════════════════════════
 
 async def get_macro_snapshot(session=None) -> dict[str, dict]:
-    """获取最新宏观快照: {indicator: {period, value, direction, signal}}"""
+    """获取最新宏观快照: {indicator: {period, value, direction, signal}}
+
+    v4.8: 增加 prev_value 和 change 字段, 用于前端显示涨跌方向.
+    """
     async def _query(s):
         r = await s.execute(text("""
             SELECT DISTINCT ON (indicator) indicator, period, value
@@ -611,17 +619,33 @@ async def get_macro_snapshot(session=None) -> dict[str, dict]:
         """))
         return r.fetchall()
 
+    # 批量获取每个 indicator 的前一期值
+    async def _prev_query(s, indicators):
+        prev_map = {}
+        for ind in indicators:
+            r = await s.execute(text("""
+                SELECT value FROM macro_cache
+                WHERE indicator = :ind ORDER BY period DESC OFFSET 1 LIMIT 1
+            """), {"ind": ind})
+            row = r.fetchone()
+            if row and row[0] is not None:
+                prev_map[ind] = float(row[0])
+        return prev_map
+
     if session:
         rows = await _query(session)
+        prev_map = await _prev_query(session, [row[0] for row in rows])
     else:
         async with async_session_factory() as s:
             rows = await _query(s)
+            prev_map = await _prev_query(s, [row[0] for row in rows])
 
     snapshot = {}
     for row in rows:
         name = row[0]
         cfg = INDICATORS.get(name, {})
         val = float(row[2]) if row[2] is not None else 0.0
+        prev_val = prev_map.get(name)
 
         # Determine direction (bullish/bearish/neutral) based on indicator type
         direction = "neutral"
@@ -635,12 +659,16 @@ async def get_macro_snapshot(session=None) -> dict[str, dict]:
             else:
                 direction = "bullish" if val < 2.0 else ("neutral" if val < 4.0 else "bearish")
 
-        snapshot[name] = {
+        entry = {
             "period": str(row[1]),
             "value": round(val, 4),
             "direction": direction,
             "unit": cfg.get("unit", ""),
         }
+        if prev_val is not None:
+            entry["prev_value"] = round(prev_val, 4)
+            entry["change"] = round(val - prev_val, 4)
+        snapshot[name] = entry
     return snapshot
 
 

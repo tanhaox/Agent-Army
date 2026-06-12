@@ -276,7 +276,7 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
                 if lr["in_lock"]:
                     lock_map[ts_code] = lr
                 scanned += 1
-                if scanned % 2000 == 0:
+                if scanned % 500 == 0:
                     logger.info(f"  Lock scan: {scanned}/{len(all_stocks)}, in_lock={len(lock_map)}")
                     if progress_callback:
                         await progress_callback("lock", scanned, len(all_stocks),
@@ -355,9 +355,28 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
     new_probs = {}
     lock_codes = list(lock_map.keys())
 
+    # ★ v4.9: 已入池股票即使已突破 (state=breakout_up), 也跑 XGBoost 维持池内评分
+    pool_stash: dict[str, dict] = {}
+    if restrict_symbols:
+        try:
+            async with async_session_factory() as s:
+                r = await s.execute(text(
+                    "SELECT ts_code, current_prob, COALESCE(micro_score,0), tier FROM alphaflow_pool"
+                ))
+                pool_stash = {}
+                for row in r.fetchall():
+                    ts, prob, micro, tier = row[0], float(row[1] or 0), row[2] or 0, row[3]
+                    if ts not in lock_codes:
+                        pool_stash[ts] = {"prob": prob, "micro": micro, "tier": tier}
+        except Exception:
+            pool_stash = {}
+    if pool_stash:
+        logger.info(f"  Pool-restricted scan: adding {len(pool_stash)} non-locked pool stocks for XGBoost")
+
     # ★ V3: 预加载 TG 管线 composite_score 作为第48维反哺特征
     tg_score_map: dict[str, float] = {}
-    if lock_codes:
+    all_feat_codes = lock_codes + list(pool_stash.keys())
+    if all_feat_codes:
         try:
             async with async_session_factory() as s:
                 r = await s.execute(text("""
@@ -372,15 +391,20 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
             logger.debug(f"TG score preload failed: {e}")
 
     # ★ 预计算 stock→sector 映射 (用于板块锁死期%特征)
+    # v4.9: 用 Tushare stock_basic.industry 替代 ths_member.ths_name
     stock_sector_map: dict[str, dict] = {}
-    if sec_index_map and lock_codes:
+    if sec_index_map and all_feat_codes:
         try:
-            async with async_session_factory() as s:
-                r = await s.execute(text("""
-                    SELECT DISTINCT ON (ts_code) ts_code, ths_name
-                    FROM ths_member WHERE ts_code = ANY(:codes) AND out_date IS NULL
-                """), {"codes": lock_codes})
-                ths_map = {row[0]: row[1] for row in r.fetchall() if row[1]}
+            from app.services.tushare_common import call_tushare as _cts
+            ind_map: dict[str, str] = {}
+            # 分批拉取 Tushare industry
+            for batch_start in range(0, len(all_feat_codes), 500):
+                batch = all_feat_codes[batch_start:batch_start+500]
+                rows = await _cts("stock_basic", {"ts_code": ",".join(batch)}, "ts_code,industry")
+                for r in (rows or []):
+                    code = r.get("ts_code", "")
+                    if code and r.get("industry"):
+                        ind_map[code] = r["industry"]
             # SW一级行业 → 指数代码映射 (28个一级行业)
             SW_L1_MAP = {
                 "银行": "801780.SI", "综合": "801230.SI", "食品饮料": "801120.SI",
@@ -394,21 +418,27 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
                 "通信": "801770.SI", "传媒": "801760.SI", "钢铁": "801040.SI",
                 "煤炭": "801950.SI", "石油石化": "801960.SI",
             }
-            for ts_code in lock_codes:
-                ths_name = ths_map.get(ts_code, "")
-                # 匹配 SW 一级行业
+            for ts_code in all_feat_codes:
+                ind_name = ind_map.get(ts_code, "")
                 for l1_name, idx_code in SW_L1_MAP.items():
-                    if l1_name in (ths_name or ""):
+                    if l1_name in (ind_name or ""):
                         if idx_code in sec_index_map:
                             stock_sector_map[ts_code] = sec_index_map[idx_code]
                         break
-            logger.info(f"  Sector mapping: {len(stock_sector_map)}/{len(lock_codes)} stocks matched")
+            logger.info(f"  Sector mapping: {len(stock_sector_map)}/{len(all_feat_codes)} stocks matched (via stock_basic.industry)")
         except Exception as e:
             logger.warning(f"Stock-sector mapping failed: {e}")
-    logger.info(f"XGBoost scoring: {len(lock_codes)} lock candidates")
+    logger.info(f"XGBoost scoring: {len(lock_codes)} lock + {len(pool_stash)} pool-stash")
+
+    # 合并评分队列: lock_codes + pool_stash
+    score_queue = list(lock_codes)
+    for ts in pool_stash:
+        if ts not in score_queue:
+            score_queue.append(ts)
+
     if progress_callback:
-        await progress_callback("xgb", 0, len(lock_codes), f"XGBoost评分中 ({len(lock_codes)}只)...")
-    for idx, ts_code in enumerate(lock_codes):
+        await progress_callback("xgb", 0, len(score_queue), f"XGBoost评分中 ({len(score_queue)}只)...")
+    for idx, ts_code in enumerate(score_queue):
         try:
             idx_map_for_stock = idx_399006 if (ts_code.startswith('300') or ts_code.startswith('301') or ts_code.startswith('688')) else idx_000001
             feats = await _extract_features_for_stock(ts_code, scan_date, idx_map_for_stock, stock_sector_map,
@@ -418,15 +448,15 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
                 new_probs[ts_code] = prob
         except Exception:
             pass
-        if (idx + 1) % 500 == 0:
-            logger.info(f"  XGBoost: {idx+1}/{len(lock_codes)}")
+        if (idx + 1) % 100 == 0:
+            logger.info(f"  XGBoost: {idx+1}/{len(score_queue)}")
             if progress_callback:
-                await progress_callback("xgb", idx+1, len(lock_codes),
-                    f"XGBoost {idx+1}/{len(lock_codes)} (已评分{len(new_probs)}只)")
+                await progress_callback("xgb", idx+1, len(score_queue),
+                    f"XGBoost {idx+1}/{len(score_queue)} (已评分{len(new_probs)}只)")
 
     logger.info(f"  XGBoost done: {len(new_probs)} scored")
     if progress_callback:
-        await progress_callback("xgb", len(lock_codes), len(lock_codes),
+        await progress_callback("xgb", len(score_queue), len(score_queue),
             f"XGBoost完成: {len(new_probs)}只有效评分")
 
     # ── 3.5 策略分类 (环节三+四: 锁质量 + 策略归类) ──
@@ -444,8 +474,12 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
             pass
 
         for code, prob in new_probs.items():
-            hist = history_label_map.get(code, {"history_label": "none"})
             lr = lock_map.get(code, {})
+            # 池内补入股票 (pool_stash): 历史评估从 history_label_map 取，无则给 moderate
+            hist = history_label_map.get(code, {"history_label": "none"})
+            if hist["history_label"] == "none":
+                if code in pool_stash:
+                    hist["history_label"] = "moderate"  # 已入池至少说明历史不差
 
             # 环节三: 当前锁质量
             try:
@@ -711,11 +745,24 @@ async def daily_scan(scan_date: date = None, progress_callback=None,
                 gain_pct = (cs[-1] - all_min) / all_min * 100 if all_min > 0 else 0
 
                 if not lock["in_lock"] and gain_pct > 100:
+                    from app.models.data_models import GooseArchive
                     async with async_session_factory() as s3:
-                        await s3.execute(text(
-                            "INSERT INTO goose_archive (ts_code,first_seen,gain_from_first_lock,first_lock_avg,waves_completed) "
-                            "VALUES (:c,:fs,:g,:l,:wc) ON CONFLICT (ts_code) DO UPDATE SET gain_from_first_lock=:g,first_lock_avg=:l,waves_completed=:wc"
-                        ), {"c": code, "fs": date.today(), "g": round(gain_pct, 1), "l": round(float(np.mean(cs)), 1), "wc": 0})
+                        goose = GooseArchive(
+                            ts_code=code,
+                            first_seen=date.today(),
+                            gain_from_first_lock=round(gain_pct, 1),
+                            first_lock_avg=round(float(np.mean(cs)), 1),
+                            waves_completed=0,
+                        )
+                        s3.add(goose)
+                        # ON CONFLICT: 手动实现 UPSERT
+                        existing = await s3.get(GooseArchive, code)
+                        if existing:
+                            existing.gain_from_first_lock = round(gain_pct, 1)
+                            existing.first_lock_avg = round(float(np.mean(cs)), 1)
+                            existing.waves_completed = 0
+                        else:
+                            s3.add(goose)
                         await s3.execute(text("DELETE FROM alphaflow_pool WHERE ts_code=:c"), {"c": code})
                         await s3.commit()
                     goosed += 1

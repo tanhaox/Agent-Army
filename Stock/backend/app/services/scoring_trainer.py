@@ -118,30 +118,41 @@ async def load_training_data(lookback_days: int = 120) -> tuple[np.ndarray, np.n
 
 
 async def load_training_data_with_regime(lookback_days: int = 120) -> dict:
-    """按市场状态分段加载训练数据 — 解决"静态权重打动态市场"问题.
+    """按市场状态分段加载训练数据 — v4.11 改用 signal_history 替代 recommendation_tracking.
 
-    从 market_status_log 获取每笔推荐时的市场阶段 (phase),
-    按 { regime: {X, y, symbols, win_rate} } 分组返回.
-
-    市场阶段映射:
-      phase包含"牛" → bull
-      phase包含"熊" → bear
-      其他 → range
+    旧实现用 recommendation_tracking JOIN analysis_scores (需要 was_profitable_3d)
+    → 推荐追踪延迟严重 (T+3 才验证), 训练数据长期不足.
+    → v4.11: signal_history 有 5652 条 outcome_label, 可即时按市场阶段分组.
     """
     cutoff = date.today() - timedelta(days=lookback_days)
 
     async with async_session_factory() as s:
         r = await s.execute(text("""
-            SELECT rt.symbol, rt.was_profitable_3d, rt.was_profitable_5d,
-                   a.dimension_scores, a.archetype, a.composite_score,
-                   rt.scan_date, COALESCE(ms.phase, 'unknown') as market_phase
-            FROM recommendation_tracking rt
-            JOIN analysis_scores a ON a.symbol = rt.symbol AND a.scan_date = rt.scan_date
-            LEFT JOIN market_status_log ms ON ms.trade_date = rt.scan_date
-            WHERE rt.scan_date >= :cut
-              AND rt.was_profitable_3d IS NOT NULL
-              AND a.dimension_scores IS NOT NULL
-            ORDER BY rt.scan_date DESC
+            WITH market_phases AS (
+                SELECT trade_date,
+                       CASE 
+                         WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date)) 
+                              / NULLIF(LAG(close, 10) OVER (ORDER BY trade_DATE), 0) * 100 > 1.0 
+                         THEN 'bull'
+                         WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date)) 
+                              / NULLIF(LAG(close, 10) OVER (ORDER BY trade_DATE), 0) * 100 < -1.0 
+                         THEN 'bear'
+                         ELSE 'range'
+                       END as phase
+                FROM daily_kline
+                WHERE ts_code = '700001.TI'
+            )
+            SELECT sh.symbol, sh.outcome_label,
+                   sh.push_count_30d, sh.price_zone_width_pct,
+                   sh.ret_t5, sh.max_gain_pct, sh.max_loss_pct,
+                   sh.predicted_return, sh.predicted_win_prob,
+                   sh.scan_date, sh.composite_score,
+                   COALESCE(mp.phase, 'range') as market_phase
+            FROM signal_history sh
+            LEFT JOIN market_phases mp ON mp.trade_date = sh.scan_date
+            WHERE sh.scan_date >= :cut
+              AND sh.outcome_label IN ('strong_win','weak_win','strong_loss','weak_loss')
+            ORDER BY sh.scan_date DESC
         """), {"cut": cutoff})
         rows = r.fetchall()
 
@@ -149,23 +160,23 @@ async def load_training_data_with_regime(lookback_days: int = 120) -> dict:
         logger.warning("No training data available (with regime)")
         return {}
 
-    # 按市场状态分组
     regime_data: dict[str, list] = {"bull": [], "bear": [], "range": []}
 
     for row in rows:
-        sym, p3, p5, dims_raw, arch, sc, scan_date, phase = row
-        dims = dims_raw if isinstance(dims_raw, dict) else (json.loads(dims_raw) if dims_raw else None)
-        if not dims:
-            continue
+        sym, outcome, push30, width, ret5, max_gain, max_loss, pred_r, pred_wp, sd, sc, phase = row
 
-        features = []
-        for k in DIM_KEYS:
-            features.append(float(dims.get(k, 5.0)))
-        for k in EXTRA_DIM_KEYS:
-            features.append(float(dims.get(k, 0)))
-        features.append(float(sc or 50))
+        features = [
+            float(push30 or 0),      # 30日推送次数
+            float(width or 0),       # 价格区间宽度%
+            float(ret5 or 0),        # T+5收益
+            float(max_gain or 0),    # 最大涨幅
+            float(abs(max_loss or 0)) * -1,  # 最大跌幅(负)
+            float(pred_r or 0),      # 预测收益
+            float(pred_wp or 0),     # 预测胜率
+            float(sc or 50),         # 综合分
+        ]
+        label = 1 if outcome in ('strong_win', 'weak_win') else 0
 
-        # 市场阶段 → regime
         phase_lower = (phase or "").lower()
         if "牛" in phase_lower or "bull" in phase_lower:
             regime = "bull"
@@ -176,13 +187,16 @@ async def load_training_data_with_regime(lookback_days: int = 120) -> dict:
 
         regime_data[regime].append({
             "features": features,
-            "label": 1 if p3 else 0,
+            "label": label,
             "symbol": sym,
         })
 
-    # 组装
     result = {}
-    feature_names = DIM_KEYS + EXTRA_DIM_KEYS + ['composite_score']
+    SH_FEAT_NAMES = [
+        'push_count_30d', 'price_width_pct', 'ret_t5',
+        'max_gain_pct', 'max_loss_pct',
+        'predicted_return', 'predicted_win_prob', 'composite_score',
+    ]
 
     for regime, samples in regime_data.items():
         if len(samples) < MIN_SAMPLES_FOR_TRAINING:
@@ -195,12 +209,11 @@ async def load_training_data_with_regime(lookback_days: int = 120) -> dict:
             "X": X, "y": y, "symbols": syms,
             "n_samples": len(samples),
             "win_rate": float(y.mean()),
-            "feature_names": feature_names,
+            "feature_names": SH_FEAT_NAMES,
         }
-        logger.info(f"Regime [{regime}]: {len(samples)} samples, win_rate={y.mean()*100:.1f}%")
+        logger.info(f"Regime [{regime}]: {len(samples)} samples, win_rate={y.mean():.1%}")
 
     return result
-
 
 async def train_weights(lookback_days: int = 120, min_samples: int = MIN_SAMPLES_FOR_TRAINING) -> dict:
     """基于真实盈亏反馈训练评分权重 (全局, 向后兼容).

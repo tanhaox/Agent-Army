@@ -61,6 +61,7 @@ async def run_all_daily_tasks():
         task_sync_daily_kline, task_update_market_status,
         task_cleanup_old_data, task_system_health, task_holdings_sector_warning,
         task_verify_recommendations, task_build_news_signals, task_verify_news_signals,
+        task_sync_chip_perf, task_sync_limit_list,
     )
     from app.scheduler.weekly_tasks import (
         task_scoring_weight_training, task_probability_recalibration,
@@ -100,6 +101,8 @@ async def run_all_daily_tasks():
         ("cleanup", task_cleanup_old_data),
         ("health", task_system_health),
         ("sector_warning", task_holdings_sector_warning),
+        ("chip_perf", task_sync_chip_perf),
+        ("limit_list", task_sync_limit_list),
     ]:
         try:
             logger.info(f"Task [{name}] start")

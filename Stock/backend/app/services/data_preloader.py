@@ -7,6 +7,7 @@ from app.core.database import async_session_factory
 logger = logging.getLogger(__name__)
 
 _ambush_cache: dict[str, float] = {}
+_pattern_cache: dict[str, str] = {}
 
 async def preload_ambush(symbols: list[str], scan_date_str: str):
     """批量预加载潜伏猎手信号."""
@@ -25,8 +26,6 @@ async def preload_ambush(symbols: list[str], scan_date_str: str):
     except Exception:
         pass
 
-
-_pattern_cache: dict[str, str] = {}
 
 async def preload_patterns(symbols: list[str], scan_date_str: str):
     """批量预加载形态信号."""

@@ -66,8 +66,10 @@ async def generate_holding_strategies(holdings: list[dict], uid: str) -> dict:
                 if cr and "absorption" in cr and "error" not in cr.get("absorption", {}):
                     ab = cr["absorption"]
                     st["chip"] = {"ar_ratio": ab["ar_ratio"], "verdict": ab["verdict"],
-                                  "trend": ab["trend"], "vol_lock_pct": ab["vol_lock_pct"],
-                                  "vol_over_pct": ab["vol_over_pct"], "summary": cr.get("summary", "")}
+                                  "trend": ab.get("trend", ""),
+                                  "vol_lock_pct": ab.get("chips_lock_pct", ab.get("vol_lock_pct", 0)),
+                                  "vol_over_pct": ab.get("chips_over_pct", ab.get("vol_over_pct", 0)),
+                                  "summary": cr.get("summary", "")}
             except Exception:
                 pass
 

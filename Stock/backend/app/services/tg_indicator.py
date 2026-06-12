@@ -89,21 +89,26 @@ class TGIndicator:
 
     def _step2_moving_averages(self):
         df = self.df
-        df['MA5']=MA(df['Close'],5); df['MA20']=MA(df['Close'],20); df['MA60']=MA(df['Close'],60)
+        df['MA5']=MA(df['Close'],5); df['MA10']=MA(df['Close'],10); df['MA20']=MA(df['Close'],20); df['MA60']=MA(df['Close'],60)
         M1=3; df['EMA1']=(df['Close']+df['Low']+df['High'])/3
         df['VAR1']=EMA(df['EMA1'],M1); df['买线']=EMA(df['VAR1'],M1)
-        N_mode=int(df['自适应N'].mode().iloc[0]) if len(df['自适应N'].mode())>0 else 13
+        # 最近 60 根 K 线的自适应 N 众数（避免全局 df.mode() 引入未来信息）
+        recent_n = df['自适应N'].iloc[-60:]
+        N_mode = int(recent_n.mode().iloc[0]) if len(recent_n.mode()) > 0 else 13
         df['卖线']=EMA(df['VAR1'],N_mode)
 
     def _step3_volume(self):
         df=self.df
         df['换手率']=df['Volume']/self.capital*100
         df['VOL_MA5']=MA(df['Volume'],5); df['VOL_MA20']=MA(df['Volume'],20)
+        df['AVG_VOL_5']=df['VOL_MA5']  # for L4/L5升级
         df['量比']=df['Volume']/df['VOL_MA5'].mask(df['VOL_MA5']==0, 1.0); df['AVG_VOL_60']=MA(df['Volume'],60)
 
     def _step4_tg_momentum(self):
         df=self.df
-        mom=int(df['MOM周期'].mode().iloc[0]) if len(df['MOM周期'].mode())>0 else 5
+        # 最近 60 根 K 线的 MOM 周期众数（避免全局 df.mode() 引入未来信息）
+        recent_mom = df['MOM周期'].iloc[-60:]
+        mom = int(recent_mom.mode().iloc[0]) if len(recent_mom.mode()) > 0 else 5
         mom_close=REF(df['Close'],mom).mask(REF(df['Close'],mom)==0, df['Close']); df['TG动量']=EMA((df['Close']-mom_close)/mom_close.mask(mom_close==0, 1.0)*100, 3)
         df['动量方向']=df['TG动量']>REF(df['TG动量'],1)
         df['动量连续']=df['动量方向']&REF(df['动量方向'],1)
@@ -124,6 +129,9 @@ class TGIndicator:
         df['RSV']=(df['Close']-LLV(df['Low'],9))/(HHV(df['High'],9)-LLV(df['Low'],9))*100
         df['RSV'] = df['RSV'].apply(lambda x: safe_rsi(x))
         df['K']=SMA(df['RSV'],3,1); df['D']=SMA(df['K'],3,1); df['J']=3*df['K']-2*df['D']
+        # RSI14 — 供 L4/L5 大神仙空因子复合验证使用
+        from .tdx_functions import calc_rsi
+        df['RSI14'] = calc_rsi(df['Close'], 14)
 
     def _step8_volatility(self):
         df=self.df
@@ -237,6 +245,24 @@ class TGIndicator:
         df['层级卖升']=IF(df['卖方向有效']&df['卖突破']&(df['层级卖']<3)&~df['大卖刚'],df['层级卖']+1,df['层级卖'])
         df['层级买终']=IF(df['大买刚'],3,IF(df['买方向']&(df['层级买升']==3)&(df['J']<60),3,IF(df['买方向']&(df['层级买升']==3),2,IF(df['买方向'],df['层级买升'],0)))).astype(int)
         df['层级卖终']=IF(df['大卖刚'],3,IF(df['卖方向有效'],df['层级卖升'],0)).astype(int)
+
+        # ── v4.8: L4/L5 升级 — 大神仙空因子复合验证 ──
+        # L4 = L3 + 均线多头排列 (close>MA5>MA10>MA20) + RSI>55
+        df['均线多头'] = (df['Close'] > df['MA5']) & (df['MA5'] > df['MA10']) & (df['MA10'] > df['MA20'])
+        df['RSI强'] = df['RSI14'] > 55
+        df['MACD强'] = df['MACD柱'] > 0
+        # L4 条件: 已是 L3 + 至少 2/3 (均线多头/RSI强/MACD强)
+        df['大神仙加分'] = df['均线多头'].astype(int) + df['RSI强'].astype(int) + df['MACD强'].astype(int)
+        df['层级买L4'] = IF(df['买方向'] & (df['层级买终'] >= 3) & (df['大神仙加分'] >= 2), 4, 0).astype(int)
+
+        # L5 = L4 + 量价配合 (成交量 5日均 > 20日均)
+        df['量价配合'] = df['AVG_VOL_5'] > df['AVG_VOL_60'] * 0.8
+        df['层级买L5'] = IF(df['层级买L4'] >= 4, 5, 0).astype(int)
+
+        # 最终层级 = max(旧3级, L4, L5)
+        df['层级买终'] = IF(df['层级买L5'] >= 5, 5,
+                           IF(df['层级买L4'] >= 4, 4, df['层级买终'])).astype(int)
+
         df['TG_买入信号']=df['买方向']&(df['层级买终']>0); df['TG_买入层级']=df['层级买终']
         df['TG_卖出信号']=df['卖方向有效']&(df['层级卖终']>0); df['TG_卖出层级']=df['层级卖终']
         df['TG_快翻转']=df['快翻转卖']&~df['卖方向']

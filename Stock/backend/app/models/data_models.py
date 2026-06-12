@@ -50,6 +50,11 @@ class AnalysisScore(Base):
     dimension_scores: Mapped[dict | None] = mapped_column(JSON)
     win_probability: Mapped[float | None] = mapped_column(Float)
     downside_risk: Mapped[float | None] = mapped_column(Float)
+    signal_quality: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trend_score: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    entry_score: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    signal_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    strategy_label: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 class StockFundamentalSnapshot(Base):
     __tablename__ = "stock_fundamental_snapshot"

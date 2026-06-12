@@ -77,25 +77,43 @@ async def _preload_sector_indices(min_date, max_date) -> dict:
 
 async def _build_sector_map_for_stocks(ts_codes: list[str],
                                         sector_indices: dict) -> dict:
-    """为每只股票找到其所属 SW 一级行业的指数日线数据."""
+    """为每只股票找到其所属 SW 一级行业的指数日线数据.
+
+    v4.9: 用 Tushare stock_basic.industry 替代 ths_member.ths_name.
+    ths_member 存的是同花顺概念名 (如"同花顺全A(加权)")，无法匹配SW行业名.
+    """
     if not sector_indices:
         return {}
     stock_sector = {}
     try:
-        async with async_session_factory() as s:
-            r = await s.execute(text("""
-                SELECT DISTINCT ON (ts_code) ts_code, ths_name
-                FROM ths_member WHERE ts_code = ANY(:codes) AND out_date IS NULL
-            """), {"codes": ts_codes})
-            ths_map = {row[0]: row[1] for row in r.fetchall() if row[1]}
+        # 先尝试 Tushare stock_basic 行业分类
+        from app.services.tushare_common import call_tushare
+        rows = await call_tushare("stock_basic", {"ts_code": ",".join(ts_codes[:500])},
+            "ts_code,industry")
+        if not rows:
+            rows = []
+        ind_map: dict[str, str] = {}
+        for r in rows:
+            code = r.get("ts_code", "")
+            if code and r.get("industry"):
+                ind_map[code] = r["industry"]
+        # 分批拉取 (Tushare 单次 ts_code 参数约 500 个)
+        for batch_start in range(500, len(ts_codes), 500):
+            batch = ts_codes[batch_start:batch_start+500]
+            more = await call_tushare("stock_basic", {"ts_code": ",".join(batch)}, "ts_code,industry")
+            for r in (more or []):
+                code = r.get("ts_code", "")
+                if code and r.get("industry"):
+                    ind_map[code] = r["industry"]
+
         for ts_code in ts_codes:
-            ths_name = ths_map.get(ts_code, "")
+            ind_name = ind_map.get(ts_code, "")
             for l1_name, idx_code in SW_L1_INDEX_MAP.items():
-                if l1_name in (ths_name or ""):
+                if l1_name in (ind_name or ""):
                     if idx_code in sector_indices:
                         stock_sector[ts_code] = sector_indices[idx_code]
                     break
-        logger.info(f"Sector-stock mapping: {len(stock_sector)}/{len(ts_codes)} matched")
+        logger.info(f"Sector-stock mapping: {len(stock_sector)}/{len(ts_codes)} matched (via stock_basic.industry)")
     except Exception as e:
         logger.warning(f"Sector mapping failed: {e}")
     return stock_sector

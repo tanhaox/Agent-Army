@@ -37,7 +37,7 @@ async def _ensure_user(uid: str):
     async with async_session_factory() as s:
         await s.execute(text("""
             INSERT INTO users (id, username, display_name, hashed_password, is_active, plan_type, created_at, updated_at)
-            VALUES (CAST(:uid AS uuid), :un, 'Web User', '', true, 'free', NOW(), NOW())
+            VALUES (:uid, :un, 'Web User', '', true, 'free', NOW(), NOW())
             ON CONFLICT (id) DO NOTHING
         """), {"uid": uid, "un": f"web_{uid[:8]}"})
         await s.commit()
@@ -59,7 +59,7 @@ async def add_holding(req: HoldingAdd, user_id: str = Depends(get_current_user))
             INSERT INTO holdings (id, created_by, symbol, name, quantity, available, frozen,
                 cost_price, current_price, floating_pnl, pnl_pct, daily_pnl, market_value,
                 weight_pct, market, holding_days)
-            VALUES (gen_random_uuid(), CAST(:uid AS uuid), :sym, :name, :qty, :qty, 0,
+            VALUES (gen_random_uuid(), :uid, :sym, :name, :qty, :qty, 0,
                 :cost, :price, 0, 0, 0, :mv, 0, :mkt, 0)
             ON CONFLICT (symbol, created_by) DO UPDATE SET
                 name=EXCLUDED.name, quantity=EXCLUDED.quantity,
@@ -79,7 +79,7 @@ async def update_price(symbol: str, current_price: float, user_id: str = Depends
     uid = _to_uuid(user_id)
     async with async_session_factory() as s:
         r = await s.execute(text(
-            "SELECT quantity, cost_price FROM holdings WHERE symbol=:s AND created_by = CAST(:uid AS uuid)"
+            "SELECT quantity, cost_price FROM holdings WHERE symbol=:s AND created_by = :uid"
         ), {"s": symbol, "uid": uid})
         row = r.fetchone()
         if not row: return {"status": "error", "detail": "未找到该持仓"}
@@ -103,7 +103,7 @@ async def close_position(symbol: str, req: CloseRequest, user_id: str = Depends(
 
     async with async_session_factory() as s:
         r = await s.execute(text(
-            "SELECT name, quantity, cost_price, current_price, holding_days FROM holdings WHERE symbol=:s AND created_by = CAST(:uid AS uuid)"
+            "SELECT name, quantity, cost_price, current_price, holding_days FROM holdings WHERE symbol=:s AND created_by = :uid"
         ), {"s": symbol, "uid": uid})
         row = r.fetchone()
         if not row:
@@ -119,7 +119,7 @@ async def close_position(symbol: str, req: CloseRequest, user_id: str = Depends(
             (id, created_by, symbol, name, quantity, buy_price, sell_price,
              holding_pnl, pnl_pct, holding_days, buy_reason, buy_date, close_date,
              t_trade_count, updated_at)
-            VALUES (gen_random_uuid(), CAST(:uid AS uuid), :sym, :name, :qty, :buy, :sell,
+            VALUES (gen_random_uuid(), :uid, :sym, :name, :qty, :buy, :sell,
                     :pnl, :pct, :days, 'manual_close', CURRENT_DATE, CURRENT_DATE,
                     0, NOW())
         """), {
@@ -127,7 +127,7 @@ async def close_position(symbol: str, req: CloseRequest, user_id: str = Depends(
             "buy": cost, "sell": sell_price, "pnl": realized, "pct": realized_pct, "days": days,
         })
         # 删除持仓
-        await s.execute(text("DELETE FROM holdings WHERE symbol = :s AND created_by = CAST(:uid AS uuid)"), {"s": symbol, "uid": uid})
+        await s.execute(text("DELETE FROM holdings WHERE symbol = :s AND created_by = :uid"), {"s": symbol, "uid": uid})
         await s.commit()
 
     return {
@@ -160,7 +160,7 @@ async def list_holdings(user_id: str = Depends(get_current_user)):
                 WHERE symbol = h.symbol
                 ORDER BY scan_date DESC LIMIT 1
             ) a ON true
-            WHERE h.created_by = CAST(:uid AS uuid)
+            WHERE h.created_by = :uid
             ORDER BY h.pending_close ASC, h.market_value DESC
         """), {"uid": uid})
         import json
@@ -196,7 +196,7 @@ async def holdings_summary(user_id: str = Depends(get_current_user)):
         r = await s.execute(text("""
             SELECT COUNT(*), COALESCE(SUM(market_value),0), COALESCE(SUM(floating_pnl),0),
                    COALESCE(AVG(pnl_pct),0)
-            FROM holdings WHERE created_by = CAST(:uid AS uuid)
+            FROM holdings WHERE created_by = :uid
         """), {"uid": uid})
         row = r.fetchone()
     return {"status": "success", "data": {
@@ -211,7 +211,7 @@ async def holdings_alerts(user_id: str = Depends(get_current_user)):
     async with async_session_factory() as s:
         r = await s.execute(text("""
             SELECT symbol,name,floating_pnl,pnl_pct FROM holdings
-            WHERE created_by = CAST(:uid AS uuid) AND pnl_pct < -5 ORDER BY pnl_pct ASC
+            WHERE created_by = :uid AND pnl_pct < -5 ORDER BY pnl_pct ASC
         """), {"uid": uid})
         data = [{"symbol": row[0], "name": row[1], "pnl": float(row[2] or 0),
                  "pnl_pct": float(row[3] or 0)} for row in r.fetchall()]
@@ -228,7 +228,7 @@ async def get_capital(user_id: str = Depends(get_current_user)):
     async with async_session_factory() as s:
         r = await s.execute(text("""
             SELECT type, amount, note, created_at FROM capital_account
-            WHERE created_by = CAST(:uid AS uuid) ORDER BY created_at
+            WHERE created_by = :uid ORDER BY created_at
         """), {"uid": uid})
         records = [{"type": row[0], "amount": float(row[1] or 0),
                      "note": row[2], "date": str(row[3])} for row in r.fetchall()]
@@ -250,7 +250,7 @@ async def set_capital(req: CapitalOp, user_id: str = Depends(get_current_user)):
     async with async_session_factory() as s:
         await s.execute(text("""
             INSERT INTO capital_account (created_by, type, amount, note)
-            VALUES (CAST(:uid AS uuid), :tp, :amt, :note)
+            VALUES (:uid, :tp, :amt, :note)
         """), {"uid": uid, "tp": op_type, "amt": round(req.amount, 2), "note": req.note})
         await s.commit()
     return {"status": "success", "message": f"{'入金' if req.amount>0 else '出金'} ¥{abs(req.amount):.2f}"}
@@ -267,7 +267,7 @@ async def list_closed(user_id: str = Depends(get_current_user)):
         r = await s.execute(text("""
             SELECT symbol, name, quantity, buy_price, sell_price,
                    holding_pnl, pnl_pct, holding_days, buy_reason, close_date
-            FROM closed_positions WHERE created_by = CAST(:uid AS uuid)
+            FROM closed_positions WHERE created_by = :uid
             ORDER BY close_date DESC
         """), {"uid": uid})
         data = [{
@@ -294,14 +294,14 @@ async def full_account(user_id: str = Depends(get_current_user)):
         # 资本
         r = await s.execute(text("""
             SELECT COALESCE(SUM(amount), 0) FROM capital_account
-            WHERE created_by = CAST(:uid AS uuid)
+            WHERE created_by = :uid
         """), {"uid": uid})
         net_capital = float(r.scalar() or 0)
 
         # 持仓
         r = await s.execute(text("""
             SELECT COUNT(*), COALESCE(SUM(market_value),0), COALESCE(SUM(floating_pnl),0)
-            FROM holdings WHERE created_by = CAST(:uid AS uuid)
+            FROM holdings WHERE created_by = :uid
         """), {"uid": uid})
         h_row = r.fetchone()
         h_count = h_row[0] or 0
@@ -311,7 +311,7 @@ async def full_account(user_id: str = Depends(get_current_user)):
         # 清仓
         r = await s.execute(text("""
             SELECT COALESCE(SUM(holding_pnl), 0), COUNT(*) FROM closed_positions
-            WHERE created_by = CAST(:uid AS uuid)
+            WHERE created_by = :uid
         """), {"uid": uid})
         cp_row = r.fetchone()
         closed_pnl = float(cp_row[0] or 0)
@@ -427,7 +427,7 @@ async def holdings_big_fairy(user_id: str = Depends(get_current_user)):
     uid = _to_uuid(user_id)
     async with async_session_factory() as s:
         r = await s.execute(text(
-            "SELECT symbol FROM holdings WHERE created_by = CAST(:uid AS uuid)"
+            "SELECT symbol FROM holdings WHERE created_by = :uid"
         ), {"uid": uid})
         symbols = [row[0] for row in r.fetchall()]
     if not symbols:
@@ -536,7 +536,7 @@ async def auto_holding_strategy(user_id: str = Depends(get_current_user)):
         r = await s.execute(text("""
             SELECT symbol, name, quantity, cost_price, current_price,
                    floating_pnl, pnl_pct, market_value, holding_days
-            FROM holdings WHERE created_by = CAST(:uid AS uuid)
+            FROM holdings WHERE created_by = :uid
             ORDER BY market_value DESC
         """), {"uid": uid})
         holdings = [{"symbol": row[0], "name": row[1], "quantity": row[2],

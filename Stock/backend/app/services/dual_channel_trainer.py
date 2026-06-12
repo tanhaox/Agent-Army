@@ -1,3 +1,5 @@
+# Status: P2 — train() implemented, model files loaded by signal_quality_scorer at inference time.
+# Training is NOT connected to scheduler_loop.py — needs weekly scheduling entry.
 """双通道 XGBoost 训练引擎 — 天使增益 + 护法守护.
 
 天使通道: 预测 T+2 收益 (回归)

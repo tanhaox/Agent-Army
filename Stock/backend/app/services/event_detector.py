@@ -276,7 +276,7 @@ async def _store_results(today: date, stage2_results: dict) -> dict:
                         INSERT INTO stock_events (ts_code,event_date,category,direction,
                             materiality,immediacy,certainty,scope,composite_impact,
                             title,summary,related_sectors,decay_days)
-                        VALUES (:ts,:d,:cat,:dir,:mat,:imm,:cer,:sco,:imp,:t,:sum,CAST(:sec AS jsonb),:dec)
+                        VALUES (:ts,:d,:cat,:dir,:mat,:imm,:cer,:sco,:imp,:t,:sum,:sec,:dec)
                         ON CONFLICT (ts_code, event_date, title) DO NOTHING
                     """), {
                         "ts": ts_code, "d": today, "cat": "company",
@@ -287,7 +287,7 @@ async def _store_results(today: date, stage2_results: dict) -> dict:
                         "sco": int(e.get("scores", {}).get("scope", 0)),
                         "imp": impact, "t": e.get("title", "")[:300],
                         "sum": e.get("summary", "")[:500],
-                        "sec": json.dumps([_norm_sector(x) for x in e.get("related_sectors", [])]),
+                        "sec": [_norm_sector(x) for x in e.get("related_sectors", [])],
                         "dec": decay,
                     })
                     await s.commit()
@@ -316,12 +316,12 @@ async def _store_results(today: date, stage2_results: dict) -> dict:
             async with async_session_factory() as s:
                 await s.execute(text("""
                     INSERT INTO sector_events (sector,event_date,direction,composite_impact,drivers,prediction)
-                    VALUES (:sec,:d,:dir,:imp,CAST(:drv AS jsonb),:pred)
+                    VALUES (:sec,:d,:dir,:imp,:drv,:pred)
                     ON CONFLICT (sector, event_date) DO NOTHING
                 """), {
                     "sec": sec, "d": today, "dir": si.get("direction", "neutral"),
                     "imp": float(si.get("composite_impact", 1.0)),
-                    "drv": json.dumps(si.get("drivers", [])),
+                    "drv": si.get("drivers", []),
                     "pred": si.get("prediction", "")[:200],
                 })
                 await s.commit()
@@ -348,13 +348,13 @@ async def _store_results(today: date, stage2_results: dict) -> dict:
                 async with async_session_factory() as s:
                     await s.execute(text("""
                         INSERT INTO sector_events (sector,event_date,direction,composite_impact,drivers,prediction)
-                        VALUES (:sec,:d,:dir,:imp,CAST(:drv AS jsonb),:pred)
+                        VALUES (:sec,:d,:dir,:imp,:drv,:pred)
                         ON CONFLICT (sector, event_date) DO NOTHING
                     """), {
                         "sec": f"宏观-{factor_name}", "d": today,
                         "dir": mf.get("direction", "neutral"),
                         "imp": impact,
-                        "drv": json.dumps([mf.get("factor", "")]),
+                        "drv": [mf.get("factor", "")],
                         "pred": mf.get("summary", "")[:200],
                     })
                     await s.commit()

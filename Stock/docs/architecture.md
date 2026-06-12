@@ -1,7 +1,7 @@
 # Stock Analyst 系统架构文档
 
-> **版本**: v4.5 | **日期**: 2026-06-07 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型
-> **审计状态**: 系统级 P0 升级完成 — NaN/Inf 统一防御 + 超额收益统一 + 除权全局复权 + Progress 标准化 + 代码规范化 + 名称解析
+> **版本**: v4.7 | **日期**: 2026-06-09 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型 + 大神仙空 v2.0
+> **审计状态**: v4.7 — AlphaFlow 信号重构 + 大神仙空全局部署 + 两期扫描 + 富宏观上下文 + 事件管道净化
 
 ---
 
@@ -1182,6 +1182,74 @@ StockAnalyst.bat
 | 12 | ⚠️ stock_dna.best_emotion_ret 列类型 | `dna_models.py` | 低 | 已修 (Float→JSONB + ALTER TABLE 迁移) |
 
 ## 10. 变更日志
+
+### v4.7 (2026-06-09) — AlphaFlow 信号重构 + 大神仙空全局部署 + 两期扫描
+
+**⭐ 大神仙空 v2.0 — 全局卖出指标**:
+- `app/services/big_fairy.py`: 7 维度评分 (KDJ + MACD + MA均线 + RSI + 量价 + 动量 + 超买综合), score≥2=sell, ≥3=strong_sell
+- 13/13 同花顺卖出信号校准 (000881/000333/600329/600167 四股全部日期匹配)
+- `_big_fairy_from_arrays()`: 纯 NumPy 计算, 批量模式下无 DB I/O, pool_service 一次查询加载全池 K 线后内存计算
+- API: `GET /api/alphaflow/big-fairy` + `GET /api/holdings/big-fairy`
+
+**⭐ AlphaFlow 信号逻辑重构**:
+- `lock_detector.py v2.3`: `state` 字段区分 `locked` / `breakout_up` / `breakout_down`, 通过 close vs MA20 + 20日趋势判定方向
+- `alphaflow_pool_service.py v4.7`: 批量加载全池 K 线+成交量, 一次查询加载所有 TG scan_results
+- 信号规则: 锁死中→watch, 主升浪+TG(10天延续)→buy, 主升浪+BF(10天延续)→sell, TG/BF同时活跃→最新胜出, 破位→sell
+- 大神仙空≥2 直接覆盖所有信号为卖出, ≥3 从分析页剔除, =2 打六折
+
+**⭐ 两期 SSE 扫描**:
+- `alphaflow_pool.py`: `daily_scan()` 新增 `restrict_symbols` 参数, 支持定向扫描
+- `alphaflow.py /scan`: Phase 1 扫池内~100只 (秒级), 前端立即刷新; Phase 2 后台扫全市场~5400只找新蛋
+- 前端 SSE 流式接收进度 (锁死检测/XGBoost/策略/清理 各阶段百分比)
+
+**⭐ 富宏观上下文**:
+- `llm_deep_analyzer.py`: 旧 3 值 (M2/SHIBOR/PMI) → 8 段 25+ 指标 (货币/通胀/PMI/GDP/利率曲线/杠杆/汇率/10商品/5概念/综合判读)
+- 所有值来自 macro_cache, 杜绝 LLM 虚构宏观叙事
+
+**⭐ 事件管道净化**:
+- `event_detector.py v4.7`: LLM Stage 1 前加入商品/宏观关键词预过滤 (期货/原油/沪铜/人民币/美元/SHIBOR/PMI/CPI/国债...)
+- 命中关键词但含公司级白名单 (中标/签约/减持/业绩/公告/涨停) → 保留; 否则丢弃
+- 存量清理: 58 条 LLM 虚构 sector_events 已删除, 86→28
+
+**修复**:
+- `tg_engine.py`: 涨停过滤改用 `close/prev_close` 替代 `(close-open)/open`, 修复一字板漏检
+- 科创板 20% / 北交所 30% 阈值已内置
+- `DeepAnalysisPage.tsx`: localStorage 持久化恢复修复 (individual/batchScores/completed 完整恢复)
+
+**前端**:
+- AlphaFlowPage: +大神仙空列, SSE 扫描进度, 两期事件处理
+- AnalysisPage: 趋势列→大神仙空列, BF 过滤
+- HoldingsPage: 大神仙空信号展示
+
+### v4.6 (2026-06-05~08) — 影子训练器升级 + 宏观数据扩展 + 新闻管线退役
+
+**⭐ 影子训练器 66 维升级** (`shadow_trainer.py`):
+- DEFAULT_WEIGHTS: 23→66 维 (23 技术 + 14 Tier1 大盘 + 18 Tier2 板块 + 11 Tier3 个股)
+- 三级漏斗: Tier1 (宏观指标直接乘) → Tier2 (乘板块暴露系数) → Tier3 (个股 ROE/资金流)
+- `build_macro_context()`: 从 macro_cache 批量加载, `score_stock(row, weights, macro_context)`
+- `factor_exposure.py`: 27 板块 × 30 因子矩阵 + 12 商品 × 84 链路 + DEFAULT_EXPOSURE 回退
+
+**⭐ 宏观数据扩展** (`macro_data.py`):
+- INDICATORS: 16→50+ 指标 (新增 M1-M2剪刀差/SHIBOR利差/PMI细分/CPI核心/PPI产端/GDP分项/汇率/国债)
+- `_sync_commodity_prices()`: 12 品种期货主力合约日线同步到 macro_cache
+- `_sync_sector_indices()`: 28 SW 行业 + 概念指数 5 日涨跌幅
+- `get_macro_snapshot()`: 含 direction (bullish/bearish/neutral) 和 unit 字段
+
+**⭐ 新闻管线 M-5 退役** (`event_detector.py`):
+- 删除 6 个宏观/政策/商品 LLM 分析入口 (`get_macro_adjustment`/`score_sector_news`)
+- TAG_TO_SYSTEM 精简为仅保留公司级 4 类 (company_announcement/stock_market/leaderboard/tech_innovation)
+- `deep_scorer.py`: 替换为 `score_macro_impact()` 数据驱动宏观修正
+- `news_crawler.py`: 加 DEPRECATED 标记
+
+**AlphaFlow 页面改造**:
+- 表头 8→5 列 (移除 层级/趋势), 字体放大, 抽屉重写 (4 卡片 + 周期历史 + breakout_pct + 预判)
+- Pool limit: 50→500 只
+- `lock_detail_service.py`: 突破后 40 日 rally peak 计算
+
+**其他修复**:
+- TG lockup→lockup_score (评分制, 5日滑动窗口 ≥2/3 条件)
+- `stock_dna` 中文前缀原型名 SQL 修复 (`SPLIT_PART(archetype, '_', 2)`)
+- `shadow_trainer` 日历日→交易日修正 (compute_excess_return)
 
 ### v4.5 (2026-06-07) — 系统级 P0 能力升级 + DNA 个性化模型
 

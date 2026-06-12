@@ -39,16 +39,11 @@ def parse_files():
                     if not line:
                         continue
                     code = line.upper()
-                    # Normalize: add exchange suffix if missing
-                    if '.' not in code:
-                        if code.startswith(('0', '3')):
-                            code = code + '.SZ'
-                        elif code.startswith('6'):
-                            code = code + '.SH'
-                        elif code.startswith(('4', '8')):
-                            code = code + '.BJ'
-                        else:
-                            continue
+                    # Normalize: use global normalize_ts_code (handles 9xx BJ and edge cases)
+                    from app.utils.stock_code import normalize_ts_code
+                    code = normalize_ts_code(code)
+                    if not code:
+                        continue
                     # Validate format
                     if not re.match(r'\d{6}\.(SZ|SH|BJ)', code):
                         continue

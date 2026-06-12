@@ -1,7 +1,8 @@
-# Stock Analyst 开发施工手册 v2.0
+# Stock Analyst 开发施工手册 v2.1
 
 > **用途**: 给开发窗口的 AI 使用。每次修改代码前，先查找你要改的文件/表，
 > 然后看"连带影响"表格 + 全局约定。新增/修改任何模块前，先查阅第七章"统一工具库"。
+> **最近更新**: 2026-06-09 — 大神仙空 v2.0 + AlphaFlow 信号规则 + 事件过滤
 
 ---
 
@@ -305,4 +306,40 @@ from app.services.kline_utils import (
     get_ex_rights_dates,       # 从 adj_factor 精确识别除权日 (不再靠阈值猜测!)
     iter_non_exrights_chunks,  # 按除权日切分连续K线段
 )
+```
+
+### 大神仙空 (`app/services/big_fairy.py`) ⭐ v4.7
+
+```python
+from app.services.big_fairy import (
+    _big_fairy_from_arrays,  # 纯NumPy计算 (closes,highs,lows,volumes,symbol) → dict, 无DB I/O
+    compute_big_fairy,        # DB查询版 (symbol, session) → dict
+)
+# 返回: {score(0-5), signal(normal/weak/sell/strong_sell), bearish(bool),
+#         dimensions(list), k,d,j, macd_hist, rsi14, close, ma5,ma10,ma20, details}
+# score≥2 = 卖出信号 (偏空), score≥3 = 强空
+# 7 维度: KDJ + MACD + MA均线 + RSI + 量价关系 + 短期动量 + 超买综合
+```
+
+### 信号计算规则 (`app/services/alphaflow_pool_service.py`) ⭐ v4.7
+
+```python
+# 锁死判定 — lock_detector.py v2.3
+from app.services.lock_detector import detect_lock_simple
+# 返回包含 state 字段: "locked" | "breakout_up" | "breakout_down"
+
+# AlphaFlow 信号优先级:
+# 1. 锁死中 → watch (TG/BF 都不看)
+# 2. 主升浪 + TG买入(10天延续) → buy
+# 3. 主升浪 + BF卖出(10天延续) → sell  
+# 4. TG+BF 同时活跃 → 按日期offset比较, 最新信号胜出
+# 5. 破位下跌 → sell
+```
+
+### 事件过滤 (`app/services/event_detector.py`) ⭐ v4.7
+
+```python
+# LLM分析前已过滤: 商品期货/汇率/宏观指标类新闻
+# 命中关键词但有公司级白名单(中标/签约/减持/业绩/公告/涨停) → 保留
+# 过滤逻辑在 analyze_all_sources() 中, Stage 1 标签之前
 ```

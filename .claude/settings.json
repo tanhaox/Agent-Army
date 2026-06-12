@@ -3,18 +3,10 @@
   "projectRoot": "C:\\AI-Agent-Local",
   "projectName": "AI-Agent-Local",
   "projectType": "AI代理和技能开发平台",
-
   "rules": {
-    "项目组织规范": "docs/项目组织规范.md",
-    "代码可维护性规范": "docs/代码可维护性规范.md",
-    "开发指南": "docs/开发指南.md",
-    "项目生成器": "shared/scripts/create_project.py",
-    "项目结构": "PROJECT_STRUCTURE.md",
-    "以智能体为中心的设计原则": "docs/以智能体为中心的设计原则.md",
-    "技能模板v2": "shared/templates/skill_template_v2.py",
-    "评估框架": "shared/testing/evaluation_generator.py"
+    "Karpathy四原则": "CLAUDE.md 第6条编码规范",
+    "三地统一": "本地→GitHub→服务器单向流程"
   },
-
   "约定": {
     "开发工作流": "【全自动模式】完全自主执行，无需用户确认即可完成所有开发操作",
     "新项目创建": "使用项目生成器：shared/scripts/create_project.py",
@@ -23,7 +15,6 @@
     "README": "每个项目必须有完整的README.md",
     "评估驱动": "使用评估框架进行场景测试，确保质量"
   },
-
   "目录结构": {
     "projects": "projects/",
     "skills": "projects/skills/",
@@ -33,109 +24,11 @@
     "docs": "docs/",
     "archives": "archives/"
   },
-
   "项目类型": {
     "skill": "可复用的功能模块，可被其他项目引用",
     "app": "完整的业务应用，有独立的配置和数据",
     "tool": "独立的小工具，命令行界面"
   },
-
-  "autoLoad": {
-    "enabled": true,
-    "loadOnStartup": true,
-    "documents": [
-      "docs/项目组织规范.md",
-      "docs/代码可维护性规范.md",
-      "docs/开发指南.md",
-      "docs/以智能体为中心的设计原则.md",
-      "CLAUDE.md"
-    ],
-    "priority": "CLAUDE.md > docs/规范 > 项目约定"
-  },
-
-  "sessionContext": {
-    "enabled": true,
-    "autoSave": true,
-    "autoRestore": true,
-    "savePath": ".claude/memory/session_context.json",
-    "maxHistorySize": 1000,
-    "persistent": true
-  },
-
-  "autonomousMode": {
-    "enabled": true,
-    "confirmationRequired": false,
-    "description": "完全自主执行模式，无需任何用户确认即可执行所有操作",
-    "scope": "all",
-    "allowedOperations": [
-      "编写代码",
-      "运行测试",
-      "修复错误",
-      "创建文件",
-      "编辑文件",
-      "删除文件",
-      "安装依赖",
-      "运行构建工具",
-      "Git提交",
-      "Git推送",
-      "修改配置"
-    ]
-  },
-
-  "toolConfig": {
-    "allowedTools": "all",
-    "defaultApproval": "auto",
-    "interactivePrompts": false,
-
-    "Edit": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-    "Write": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-    "Read": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-    "Glob": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-    "Grep": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-    "Bash": {
-      "approval": "auto",
-      "requireConfirmation": false,
-      "dangerousCommands": {
-        "requireConfirmation": false,
-        "autoHandle": true
-      }
-    },
-    "Task": {
-      "approval": "auto",
-      "requireConfirmation": false
-    },
-
-    "developmentMode": {
-      "enabled": true,
-      "autoRunTests": true,
-      "autoFixErrors": true,
-      "maxAutoFixIterations": 5,
-      "autoRefactor": true
-    },
-
-    "workspaceConfig": {
-      "autoSave": true,
-      "autoCreateFiles": true,
-      "autoRunCommands": true,
-      "autoManageDependencies": true
-    }
-  },
-
   "permissions": {
     "allow": [
       "Bash",
@@ -150,112 +43,5 @@
       "LSP",
       "NotebookEdit"
     ]
-  },
-
-  "workflow": {
-    "mode": "fully_autonomous",
-    "description": "完全自主执行工作流，无需任何用户交互或确认",
-
-    "autonomousExecution": {
-      "enabled": true,
-      "scope": "all",
-      "requireConfirmation": false,
-      "allowedOperations": [
-        "编写代码",
-        "运行测试",
-        "修复错误",
-        "创建文件",
-        "编辑文件",
-        "删除文件",
-        "安装依赖",
-        "运行构建工具",
-        "Git提交",
-        "Git推送",
-        "修改配置",
-        "数据库操作",
-        "重构代码"
-      ]
-    },
-
-    "errorHandling": {
-      "autoRetry": true,
-      "maxRetries": 5,
-      "fallbackToManual": false,
-      "autoFix": true,
-      "logAllErrors": true
-    },
-
-    "progressReporting": {
-      "enabled": true,
-      "autoUpdate": true,
-      "verbose": true
-    }
-  },
-
-  "logging": {
-    "enabled": true,
-    "level": "INFO",
-    "autoSave": true,
-    "persistent": true,
-    "logPath": "logs/autonomous_execution.log",
-    "maxLogSize": "100MB",
-    "includeTimestamps": true,
-    "includeContext": true,
-
-    "executionLog": {
-      "enabled": true,
-      "logAllOperations": true,
-      "logErrors": true,
-      "logSuccesses": true,
-      "autoArchive": true,
-      "archivePath": "logs/archive/"
-    },
-
-    "memory": {
-      "enabled": true,
-      "savePath": ".claude/memory/execution_memory.json",
-      "autoSave": true,
-      "maxEntries": 10000
-    }
-  },
-
-  "skills": {
-    "autoLoad": true,
-    "autoRegister": true,
-    "skillPaths": [
-      "projects/skills/*/skill_*.py",
-      "projects/apps/*/*_skill.py",
-      "shared/templates/skill_template_v2.py"
-    ],
-    "evaluation": {
-      "enabled": true,
-      "autoRun": false,
-      "frameworkPath": "shared/testing/evaluation_generator.py"
-    }
-  },
-
-  "testing": {
-    "autoRunOnSave": true,
-    "autoRunOnCommit": true,
-    "autoFixFailures": true,
-    "framework": "pytest",
-    "coverageThreshold": 80,
-    "parallelExecution": true,
-    "evaluation": {
-      "enabled": true,
-      "scenariosRequired": 10,
-      "autoGenerate": false
-    }
-  },
-
-  "git": {
-    "autoCommit": false,
-    "autoPush": false,
-    "commitMessageFormat": "自动提交: {description}",
-    "signCommits": false
-  },
-
-  "version": "2.0.0",
-  "lastUpdated": "2026-02-08",
-  "changelog": "升级到完全自主执行模式，禁用所有确认提示，启用会话持久化和自动日志"
+  }
 }

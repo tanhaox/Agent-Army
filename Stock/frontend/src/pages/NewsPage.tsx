@@ -153,30 +153,30 @@ export default function NewsPage() {
           {/* ── 分组数据卡片 ── */}
           {[
             { title: '货币与利率', color: '#3b82f6', items: [
-              { label: 'M2 增速', value: macroSnapshot?.m2_yoy?.value, unit: '%', hint: snapshotHint('m2_yoy', macroSnapshot?.m2_yoy?.value) },
+              { label: 'M2 增速', value: macroSnapshot?.m2_yoy?.value, change: macroSnapshot?.m2_yoy?.change, unit: '%', hint: snapshotHint('m2_yoy', macroSnapshot?.m2_yoy?.value) },
               { label: 'M1-M2 剪刀差', value: macroSnapshot?.m1_yoy?.value != null ? (macroSnapshot?.m1_yoy?.value - macroSnapshot?.m2_yoy?.value).toFixed(1) : null, unit: '%', hint: '正=资金活化' },
-              { label: 'SHIBOR 隔夜', value: macroSnapshot?.shibor_on?.value, unit: '%', hint: snapshotHint('shibor_on', macroSnapshot?.shibor_on?.value) },
-              { label: 'SHIBOR 3个月', value: macroSnapshot?.shibor_3m?.value, unit: '%', hint: snapshotHint('shibor_3m', macroSnapshot?.shibor_3m?.value) },
-              { label: 'LPR 1年期', value: macroSnapshot?.lpr_1y?.value, unit: '%', hint: '贷款基准利率' },
-              { label: '10年国债', value: macroSnapshot?.bond_10y_yield?.value, unit: '%', hint: '无风险利率锚' },
+              { label: 'SHIBOR 隔夜', value: macroSnapshot?.shibor_on?.value, change: macroSnapshot?.shibor_on?.change, unit: '%', hint: snapshotHint('shibor_on', macroSnapshot?.shibor_on?.value) },
+              { label: 'SHIBOR 3个月', value: macroSnapshot?.shibor_3m?.value, change: macroSnapshot?.shibor_3m?.change, unit: '%', hint: snapshotHint('shibor_3m', macroSnapshot?.shibor_3m?.value) },
+              { label: 'LPR 1年期', value: macroSnapshot?.lpr_1y?.value, change: macroSnapshot?.lpr_1y?.change, unit: '%', hint: '贷款基准利率' },
+              { label: '10年国债', value: macroSnapshot?.bond_10y_yield?.value, change: macroSnapshot?.bond_10y_yield?.change, unit: '%', hint: '无风险利率锚' },
             ]},
             { title: '通胀与景气', color: '#f59e0b', items: [
-              { label: 'CPI 同比', value: macroSnapshot?.cpi_yoy?.value, unit: '%', hint: snapshotHint('cpi_yoy', macroSnapshot?.cpi_yoy?.value) },
-              { label: 'PPI 同比', value: macroSnapshot?.ppi_yoy?.value, unit: '%', hint: snapshotHint('ppi_yoy', macroSnapshot?.ppi_yoy?.value) },
-              { label: 'PMI 制造业', value: macroSnapshot?.pmi?.value, unit: '', hint: snapshotHint('pmi', macroSnapshot?.pmi?.value) },
-              { label: 'GDP 增速', value: macroSnapshot?.gdp_yoy?.value, unit: '%', hint: '季频, >5.5%扩张' },
+              { label: 'CPI 同比', value: macroSnapshot?.cpi_yoy?.value, change: macroSnapshot?.cpi_yoy?.change, unit: '%', hint: snapshotHint('cpi_yoy', macroSnapshot?.cpi_yoy?.value) },
+              { label: 'PPI 同比', value: macroSnapshot?.ppi_yoy?.value, change: macroSnapshot?.ppi_yoy?.change, unit: '%', hint: snapshotHint('ppi_yoy', macroSnapshot?.ppi_yoy?.value) },
+              { label: 'PMI 制造业', value: macroSnapshot?.pmi?.value, change: macroSnapshot?.pmi?.change, unit: '', hint: snapshotHint('pmi', macroSnapshot?.pmi?.value) },
+              { label: 'GDP 增速', value: macroSnapshot?.gdp_yoy?.value, change: macroSnapshot?.gdp_yoy?.change, unit: '%', hint: '季频, >5.5%扩张' },
               { label: 'CPI-PPI 剪刀差', value: macroSnapshot?.cpi_yoy?.value != null ? (macroSnapshot?.cpi_yoy?.value - (macroSnapshot?.ppi_yoy?.value||0)).toFixed(1) : null, unit: '%', hint: '正=下游利润空间' },
             ]},
             { title: '资金情绪', color: '#10b981', items: [
-              { label: '融资余额', value: ((macroSnapshot?.margin_balance?.value||0)/1e8).toFixed(0), unit: '亿', hint: snapshotHint('margin', (macroSnapshot?.margin_balance?.value||0)/1e8) },
-              { label: '融券余额', value: ((macroSnapshot?.short_balance?.value||0)/1e8).toFixed(0), unit: '亿', hint: '做空力量参考' },
-              { label: '北向持股', value: ((macroSnapshot?.north_hold_vol?.value||0)/1e8).toFixed(1), unit: '亿股', hint: '外资持仓总量' },
+              { label: '融资余额', value: ((macroSnapshot?.margin_balance?.value||0)/1e8).toFixed(0), change: macroSnapshot?.margin_balance?.change != null ? (macroSnapshot.margin_balance.change/1e8).toFixed(0) : null, unit: '亿', hint: snapshotHint('margin', (macroSnapshot?.margin_balance?.value||0)/1e8) },
+              { label: '融券余额', value: ((macroSnapshot?.short_balance?.value||0)/1e8).toFixed(0), change: macroSnapshot?.short_balance?.change != null ? (macroSnapshot.short_balance.change/1e8).toFixed(0) : null, unit: '亿', hint: '做空力量参考' },
+              { label: '北向持股', value: ((macroSnapshot?.north_hold_vol?.value||0)/1e8).toFixed(1), change: macroSnapshot?.north_hold_vol?.change != null ? (macroSnapshot.north_hold_vol.change/1e8).toFixed(1) : null, unit: '亿股', hint: '外资持仓总量' },
             ]},
             { title: '商品期货', color: '#8b5cf6', items: [
-              { label: '原油 (INE)', value: macroSnapshot?.['commodity:crude_oil']?.value, unit: '元/桶', hint: '全球通胀之锚' },
-              { label: '沪铜', value: macroSnapshot?.['commodity:copper']?.value, unit: '元/吨', hint: '经济晴雨表' },
-              { label: '螺纹钢', value: macroSnapshot?.['commodity:rebar']?.value, unit: '元/吨', hint: '基建地产风向标' },
-              { label: '沪金', value: macroSnapshot?.['commodity:gold']?.value, unit: '元/克', hint: '避险情绪指标' },
+              { label: '原油 (INE)', value: macroSnapshot?.['commodity:crude_oil']?.value, change: macroSnapshot?.['commodity:crude_oil']?.change, unit: '元/桶', hint: '全球通胀之锚' },
+              { label: '沪铜', value: macroSnapshot?.['commodity:copper']?.value, change: macroSnapshot?.['commodity:copper']?.change, unit: '元/吨', hint: '经济晴雨表' },
+              { label: '螺纹钢', value: macroSnapshot?.['commodity:rebar']?.value, change: macroSnapshot?.['commodity:rebar']?.change, unit: '元/吨', hint: '基建地产风向标' },
+              { label: '沪金', value: macroSnapshot?.['commodity:gold']?.value, change: macroSnapshot?.['commodity:gold']?.change, unit: '元/克', hint: '避险情绪指标' },
             ]},
           ].map((group, gi) => (
             <div key={gi} style={{ marginBottom: 16 }}>
@@ -187,6 +187,13 @@ export default function NewsPage() {
                 {group.items.map((item, ii) => {
                   const v = item.value;
                   const display = v != null ? (typeof v === 'number' ? (Math.abs(v) > 1000 ? v.toFixed(0) : v.toFixed(2)) : v) : '—';
+                  // ★ v4.8: 与上一期比较的涨跌箭头
+                  const change = item.change;
+                  const changeArrow = change != null
+                    ? (change > 0 ? <span style={{fontSize:13,color:'#ef4444',marginLeft:3}}>↑</span>
+                      : change < 0 ? <span style={{fontSize:13,color:'#10b981',marginLeft:3}}>↓</span>
+                      : <span style={{fontSize:11,color:'#4b5563',marginLeft:3}}>→</span>)
+                    : null;
                   return (
                     <div key={ii} style={{
                       flex: '1 1 130px', minWidth: 110,
@@ -194,7 +201,7 @@ export default function NewsPage() {
                       padding: '12px 14px', textAlign: 'center',
                     }}>
                       <div style={{ fontSize: 22, fontWeight: 800, color: '#e2e8f0', lineHeight: 1.1 }}>
-                        {display}<span style={{ fontSize: 12, fontWeight: 400, color: '#6e7a8a', marginLeft: 2 }}>{item.unit}</span>
+                        {changeArrow}{display}<span style={{ fontSize: 12, fontWeight: 400, color: '#6e7a8a', marginLeft: 2 }}>{item.unit}</span>
                       </div>
                       <div style={{ fontSize: 11, color: '#6e7a8a', marginTop: 2 }}>{item.label}</div>
                     </div>

@@ -182,6 +182,9 @@ async def _get_market_phases(dates: list[date]) -> dict[date, str]:
 
     result = {}
     for d in dates:
+        if d not in prices:
+            result[d] = "range"  # 指数无数据, 默认震荡
+            continue
         prev_dates = sorted([pd for pd in prices if pd < d], reverse=True)
         if len(prev_dates) < 11:
             result[d] = "range"
@@ -709,8 +712,20 @@ async def run_training_round_from_kline(archetype, strategy, weights, lookback_d
         val_map = {row[0]: (float(row[1]) if row[1] else None, float(row[2]) if row[2] else None) for row in r.fetchall()}
 
     sym_scores: dict[str, dict] = {}
-    for sym, rows in stock_series.items():
-        if len(rows) < 30: continue
+    syms_3b = list(stock_series.keys())
+    total_3b = len(syms_3b)
+    done_3b = 0
+    for sym in syms_3b:
+        rows = stock_series[sym]
+        if len(rows) < 30:
+            done_3b += 1
+            continue
+        done_3b += 1
+        if done_3b % 50 == 0:
+            _kline_progress[job_key]["done"] = total_3b + done_3b  # 让前端知道在进展中
+            _kline_progress[job_key]["current_sym"] = sym
+            _kline_progress[job_key]["phase"] = "维度计算" if _kline_progress.get(job_key, {}).get("iteration", 1) == 1 else _kline_progress[job_key].get("phase", "维度计算")
+            await asyncio.sleep(0)
         rows_sorted = sorted(rows, key=lambda x: x["date"])
         df = pd.DataFrame({
             "Close": [r["close"] for r in rows_sorted], "Open": [r["open"] for r in rows_sorted],
@@ -1120,11 +1135,12 @@ async def train_shadow(archetype, strategy="S2", n_iterations=20, progress_cb=No
     today = date.today()
     verifiable_dates = [d for d in all_dates if d + timedelta(days=horizon) <= today]
 
-    use_kline = len(verifiable_dates) < 5
-    # 阶段训练时优先走K线路径（600天历史数据，覆盖牛熊周期）
-    if not use_kline and n_iterations > 0:
-        use_kline = True  # 用K线数据，2020年至今全覆盖
-    if not use_kline:
+    use_kline = True  # 默认走K线 (600天历史数据)
+    # v4.5: 当有足够的可验证日期时，优先走 analysis_scores 丰富特征路径
+    if len(verifiable_dates) >= 3:
+        use_kline = False  # 用 rich scores from analysis_scores
+        logger.info(f"Training {archetype}/{strategy} via SCORES path ({len(verifiable_dates)} verifiable dates)")
+    if use_kline:
         async with async_session_factory() as s:
             r = await s.execute(text(
                 "SELECT COUNT(*) FROM analysis_scores WHERE SPLIT_PART(archetype, chr(95), 2) = :a AND scan_date = ANY(:ds)"
