@@ -246,6 +246,9 @@ predictive_features.build_training_data
 | JSON 序列化 | `sanitize_for_json()` — 在 json.dumps 之前调用 |
 | 除权 | ⭐ 系统已全局前复权 (daily_kline.adj_factor 列)。**不要再加任何除权检测代码** |
 | 代码规范 | `normalize_ts_code()` — 不要写 `startswith('6') → .SH` |
+| 🔴 数据库安全 | **绝对禁止 DROP/TRUNCATE/DELETE 全表** — 只用 SELECT/INSERT/UPDATE |
+| 🔴 数据库安全 | **修改表结构使用 ALTER TABLE**，不要重建表 |
+| 🔴 数据库安全 | **daily_kline 表含 400万+ 条数据，删除后无法恢复** |
 
 ---
 
@@ -342,4 +345,252 @@ from app.services.lock_detector import detect_lock_simple
 # LLM分析前已过滤: 商品期货/汇率/宏观指标类新闻
 # 命中关键词但有公司级白名单(中标/签约/减持/业绩/公告/涨停) → 保留
 # 过滤逻辑在 analyze_all_sources() 中, Stage 1 标签之前
+```
+
+### 新闻分类去重 (`app/services/news_classifier.py`) ⭐ v4.8
+
+```python
+from app.services.news_classifier import (
+    compute_simhash,           # 文本 SimHash 指纹 (64-bit)
+    hamming_distance,          # 汉明距离
+    is_similar,                # 判断相似 (阈值10)
+    dedup_news_list,           # 跨源去重
+    classify_news,             # 三级分类 (company/sector/macro/garbage)
+    should_skip_for_llm,       # 跳过 macro_only (避免与宏观数据重复)
+    get_stock_news_summary,    # 个股新闻摘要 (含 title+summary)
+    preprocess_for_llm,        # 批量预处理
+)
+# SimHash: 中文按2字切分, 英文按词, MD5 hash → 32-bit
+# 公司级白名单: 中标/签约/投产/减持/业绩 → 保留
+# 行业级: 半导体/新能源/医药 → sector
+# 宏观级: 期货/利率/汇率/PMI/CPI → macro (跳过LLM)
+```
+
+### 龙虎榜精细化 (`app/services/toplist_analyzer.py`) ⭐ v2.1
+
+```python
+from app.services.toplist_analyzer import (
+    _match_broker_tag_v2,      # 精细化席位匹配
+    analyze_daily_all,         # 个股分析 (含 机构/游资 tier 拆分)
+    analyze_sector_resonance,  # 板块共振 (5级强度)
+    get_net_buy_persistence,   # 净买持续性 (3日/5日)
+    get_cached_daily_toplist,  # v2.1: 智能缓存 (历史永久/当日动态)
+    _is_trading_hours_now,     # 交易时段判断
+    clear_toplist_cache,       # 手动清除缓存
+)
+# 机构: 公募/私募/QFII/北向/社保 (细分)
+# 游资: 顶级(95-87分)/一线(80-60分)/二线(55-45分)/三线(40分)
+# 共振强度: extreme/strong/moderate/weak/minimal
+# 共振标签: 机构入场/顶级游资/一线游资/合力买入/净买普遍
+# 缓存策略:
+#   - 历史交易日 → 永久缓存
+#   - 当日交易时段 (9:30-15:00) → 5分钟
+#   - 当日休市时段 → 1小时
+```
+
+### 龙虎榜 SSE 接口 ⭐ v2.1
+
+```python
+# 强制刷新 (SSE 流式进度)
+POST /api/scan/toplist-refresh
+# 事件: {phase: sync/analyze/sector, current, total, msg}
+# 完成: {done: true, data: {date, total_stocks, total_sectors}}
+
+# 新鲜度检查
+GET /api/scan/toplist-freshness
+# 返回: {latest_trade_date, is_trading, is_historical, recommendation}
+
+# v2.1: 交易时段已过则不刷新 (历史数据永久缓存)
+```
+
+### TG 扫描阶段 (`app/api/scan.py:trigger_scan`) ⭐ v4.8.2
+
+```python
+# 10 阶段 SSE 流式扫描
+POST /api/scan/trigger?skip_download=true&market_filter=主板
+
+# 阶段顺序:
+#   ① toplist         → ensure_toplist_fresh() (skip_download 时跳过)
+#   ② download        → tg_engine 内部: download_latest_kline()
+#   ③ scan            → 本地 TG 计算 (5% 步长推送)
+#   ④ ambush_scan     → 潜伏猎手 (用 scan_results 最新日期)
+#   ⑤ pattern_scan    → 形态识别
+#   ⑥ deep_score      → 14 维深度评分
+#   ⑦ nm_defense      → 分钟线防伪
+#   ⑧ toplist_sync    → ⛔ v4.8.2 移除 (与 ① 重复, 合并到 toplist)
+#   ⑨ accuracy_feedback → isolated_meta=True 写独立列
+#   ⑩ dna_auto_join   → asyncio.create_task 异步训练, 不阻塞 done
+#   done 事件         → 前端 currentPhase='done' 触发 load()
+
+# v4.8.2 修复的 15 项问题:
+#   P0-1: ScanPage setCurrentPhase 类型扩展
+#   P0-2: DNA auto-join 异步化 (不阻塞 done)
+#   P1-1: toplist_sync 合并到 toplist (去除重复)
+#   P1-2: phaseMessages slice(-8) → slice(-20), maxHeight 120 → 280
+#   P1-3: market_filter 后端真过滤 (用 classify_board)
+#   P1-4: skip_download 同时控制龙虎榜 + DNA
+#   P1-5: scan phase 5% 步长推送 (5000只 → 100 事件)
+#   P1-6: accuracy_feedback isolated_meta=True
+#   P2-1: 14 维文案修正
+#   P2-2: phase 异常信息统一 "异常: {e}"
+#   P2-3: 覆盖率 < 95% 时回退 365 天
+#   P2-4: ambush_scan 用 scan_results 最新日期
+#   P2-5: ST 过滤正则修正
+#   P2-6: phaseLabel 新增 🧬DNA训练
+```
+
+### 融资融券情绪 (`app/api/scan.py:get_margin_sentiment`) ⭐ v4.8
+
+```python
+# 改用 rzye (融资余额) 直接判断杠杆水平:
+#   > 1.6万亿 = 亢奋 (注意风险) - 红色 #ef4444
+#   1.2-1.6万亿 = 正常 - 绿色 #10b981
+#   < 1.2万亿 = 谨慎 - 蓝色 #3b82f6
+#
+# 返回字段:
+# {
+#   "label": "融资余额 14,489亿",
+#   "value": "14,489",
+#   "unit": "亿",
+#   "change": "+3247.2%",
+#   "level": "正常",
+#   "level_color": "#10b981",
+#   "level_note": "杠杆水平正常",
+#   "value_yi": 14489.0,
+#   "short_balance_yi": 139.0,
+# }
+
+GET /api/scan/margin-sentiment
+```
+
+### 新闻事件 → Tushare 宏观数据 (v4.8 改造) ⭐
+
+```python
+# 旧方案 (已废弃): 依赖 stock_events/news_aggregated/news_verify 空白表
+# 新方案: 统一用 Tushare 宏观数据 + 板块暴露系数
+
+from app.services.macro_data import (
+    compute_sector_macro_score,  # 板块宏观得分 (-3~+3)
+    get_macro_snapshot,           # 当前宏观快照
+    score_macro_impact,           # 大盘宏观得分
+)
+from app.services.factor_exposure import (
+    get_sector_exposure,          # 板块对宏观因子的暴露系数
+    get_commodity_affected_sectors,  # 商品→板块
+)
+
+# 改造位置:
+# - deep_scorer.py: score_event_impact() → compute_sector_macro_score()
+# - deep_scorer.py: news_aggregated/news_verify → 板块宏观暴露
+# - holdings.py: news_signal → 预计算 sector_macro_cache
+# - LearningPage: 新闻验证标签 → MacroSnapshotView (宏观快照展示)
+```
+
+### DNA 自动化加入 (`app/services/stock_dna_auto_join.py`) ⭐ v4.8
+
+```python
+from app.services.stock_dna_auto_join import (
+    auto_join_for_alphaflow,  # 突破+TG买入 → 自动加入 DNA
+    auto_join_for_scan,       # L3级股票 → 自动加入 DNA
+    auto_join_for_holdings,   # 持仓新增/清仓 → 自动加入 DNA
+    warmup_dna_samples,       # 轻量级批量预热 (仅生成样本,不训练)
+)
+# 自动加入机制已集成到:
+#   - alphaflow_pool_service.py (池维护完成后)
+#   - scan.py (扫描完成后, result_data.dna_auto_join)
+#   - holdings.py (持仓新增/清仓后)
+```
+
+### 新闻采集优化 (`news_pipeline.py` + `scan.py`) ⭐ v4.8
+
+```python
+# 聚合接口 - 一次返回所有数据
+GET /scan/news-dashboard  # 并行加载 events/margin/freshness/sector_heat/toplist
+
+# 新鲜度检查
+GET /scan/news-freshness  # 返回 should_crawl / should_analyze / recommendation
+
+# 增量更新逻辑 (news_pipeline.py):
+#   - < 2小时前爬取 → 跳过爬取
+#   - < 6小时前分析 → 跳过 LLM 分析
+# force=True → 完整执行所有步骤
+
+# 前端分类工具 (NewsPage.tsx):
+classifyMarket(ts_code) → 'main' | 'chinext' | 'sme'
+filterByMarket(events, market) → filtered events
+```
+
+---
+
+## 九、数据库迁移脚本 ⭐ v4.7 新增
+
+### 迁移管理工具
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/migrations.py` | 迁移脚本管理器 (集中管理所有 DDL) |
+| `scripts/db_health_check.py` | 数据库健康检查 |
+| `scripts/fix_missing_tables.py` | 修复缺失的表和列 |
+
+### 使用方法
+
+```bash
+cd Stock/backend
+set PYTHONPATH=.
+
+# 列出所有迁移
+python scripts/migrations.py --list
+
+# 检查迁移状态
+python scripts/migrations.py --check
+
+# 执行待处理的迁移
+python scripts/migrations.py --run
+
+# 运行健康检查
+python scripts/db_health_check.py
+```
+
+### 迁移脚本清单
+
+| ID | 名称 | 描述 | Schema |
+|----|------|------|--------|
+| 1 | ai_insights | LLM 分析结果存储表 | public |
+| 2 | idx_ai_type_date | ai_insights 索引 | public |
+| 3 | daily_kline_adj_factor | 前复权因子列 | public |
+| 10 | alphaflow_pool_history_micro_score | 微分维度分数 | public |
+| 11 | idx_fingerprint_symbol_date | 指纹复合索引 | public |
+| 20 | idx_param_library_arch_st | 影子训练索引 | public |
+| 21 | idx_beliefs_archetype | 贝叶斯信念索引 | public |
+| 22 | idx_experience_archetype | 经验回放索引 | public |
+| 23 | idx_prediction_symbol_date | 预测记录索引 | public |
+| 30 | news_verify_t5_columns | T+5 相关列 | public |
+| 31 | stock_deep_feedback_trade_date | 交易日期列 | public |
+| 40 | idx_signal_history_symbol | 信号历史索引 | public |
+| 50-54 | stock_dna.* | DNA 个性化模型表 | stock_dna |
+
+### 数据库健康检查
+
+**检查项目**:
+1. 关键表及其期望列
+2. stock_dna schema 表
+3. 关键索引
+4. 数据完整性（孤儿数据）
+
+**退出码**:
+- 0 = HEALTHY（健康）
+- 1 = WARNING（警告，可修复）
+- 2 = ERROR（错误，必须修复）
+
+### 误删库重建流程
+
+```bash
+# 1. 运行所有迁移
+python scripts/migrations.py --run
+
+# 2. 检查健康状态
+python scripts/db_health_check.py
+
+# 3. 如有问题，运行修复脚本
+python scripts/fix_missing_tables.py
 ```

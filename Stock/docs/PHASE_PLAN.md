@@ -1,7 +1,8 @@
-# Stock Analyst Phase 执行计划 v1.0
+# Stock Analyst Phase 执行计划 v1.1
 
 > **用途**: 给开发窗口的 AI 使用。配合 `docs/DEVELOPER_GUIDE.md` 一起用。
 > **工作流**: 每个 Phase 按顺序执行 → 读完"施工前检查"→ 改代码 → 跑自检 → 标记 ✅
+> **更新**: v1.1 2026-06-14 添加 Phase 72 新闻去重修复
 
 ## 使用方式
 
@@ -71,6 +72,59 @@
 - **66**: `ResultPage.tsx` 展示 `predicted_return` + `rank_score`
 - **67**: `HoldingsPage.tsx` 展示 `news_signal`
 
+### Phase 68 — DNA 实验室自动化加入 (v4.8)
+- **状态**: ✅ 2026-06-13
+- **文件**: `app/services/stock_dna_auto_join.py`
+- **机制**:
+  - 机制1 (AlphaFlow): lock_state=breakout_up + TG买入 → 加入 DNA
+  - 机制2 (TG扫描): 每日扫描完成后 L3 级股票 → 加入 DNA (异步, 不阻塞)
+  - 机制3 (持仓): 持仓新增/清仓 → 相关股票加入 DNA
+
+### Phase 69 — 新闻特征系统改造 (v4.8)
+- **状态**: ✅ 2026-06-13
+- **旧问题**: `stock_events`/`news_aggregated`/`news_verify` 表数据稀疏
+- **新方案**: 使用 `compute_sector_macro_score()` + Tushare 宏观数据
+- **改造位置**:
+  - `deep_scorer.py`: `score_event_impact()` → `compute_sector_macro_score()`
+  - `holdings.py`: `news_signal` 用 `sector_macro_cache` 预计算
+  - `LearningPage.tsx`: 新闻验证标签 → 宏观快照展示
+
+### Phase 70 — 新闻分类去重 + 龙虎榜精细化 (v4.8)
+- **状态**: ✅ 2026-06-13
+- **新闻分类** (`news_classifier.py`): SimHash 指纹 + 三级分类 (company/sector/macro/garbage)
+- **个股摘要保留**: `get_stock_news_summary()` 从 `news_raw` + `stock_events` 合并
+- **龙虎榜精细化** (`toplist_analyzer.py`):
+  - 机构: 公募/北向/社保/QFII/私募
+  - 游资: 顶级/一线/二线/三线
+  - 共振: 5 级强度 + 标签
+  - 净买持续性: 1/3/5 日
+  - 智能缓存: 历史永久 / 当日交易 5min / 休市 1h
+- **SSE 刷新接口**: `POST /api/scan/toplist-refresh`
+- **新闻 SSE 接口**: `POST /api/scan/crawl-news` (浏览器加超时)
+- **聚合接口**: `GET /api/scan/news-dashboard` (6 请求 → 1)
+- **新鲜度 API**: `GET /api/scan/news-freshness` (skip/crawl/analyze/full 4 建议)
+- **融资融券重写**: `get_margin_sentiment()` 改用 rzye (融资余额) 1.6/1.2 万亿阈值
+
+### Phase 71 — TG 扫描阶段重组 v4.8.2 (本次修复 15 项)
+- **状态**: ✅ 2026-06-13
+- **修复**:
+  - P0-1: `setCurrentPhase` 类型扩展为 10 个 `ScanPhase`
+  - P0-2: DNA auto-join 异步化 (`asyncio.create_task`)
+  - P1-1: `toplist_sync` 合并到 `toplist` (去除重复)
+  - P1-2: phaseMessages slice(-8) → slice(-20), maxHeight 120 → 280
+  - P1-3: `market_filter` 后端真过滤 (用 `classify_board`)
+  - P1-4: `skip_download` 同时控制龙虎榜 + DNA
+  - P1-5: scan phase 5% 步长推送 (5000只 → 100 事件)
+  - P1-6: `accuracy_feedback(isolated_meta=True)` 写独立列
+  - P2-1: 14 维文案修正
+  - P2-2: phase 异常信息统一 "异常: {e}"
+  - P2-3: 覆盖率 < 95% 时回退 365 天
+  - P2-4: ambush_scan 用 `scan_results` 最新日期
+  - P2-5: ST 过滤正则修正 (支持中文 "ST")
+  - P2-6: phaseLabel 新增 🧬DNA训练
+- **数据库变更**: `param_library` 新增 `accuracy_feedback_factor`, `accuracy_feedback_at` 列
+- **关联文档**: `docs/architecture.md` 变更日志, `docs/DEVELOPER_GUIDE.md` §7
+
 ---
 
 ## 执行状态
@@ -87,6 +141,11 @@
 | 63 | ✅ | 06-06 | Phase 50 已完成调度器注册 |
 | 64 | ✅ | 06-06 | 持仓页加入 rec_index + news_signal + recent_wins |
 | 65-67 | ✅ | 06-06 | ResultPage 加入 predicted_return + rank_score 列 |
+| 68 | ✅ | 06-13 | DNA 实验室 3 机制自动化加入 |
+| 69 | ✅ | 06-13 | 新闻特征系统改造 (→ Tushare 宏观数据) |
+| 70 | ✅ | 06-13 | 新闻分类去重 + 龙虎榜精细化 v2.0 + 融资融券重写 |
+| 71 | ✅ | 06-13 | TG 扫描阶段重组 v4.8.2 (15 项 P0/P1/P2 修复) |
+| 72 | ✅ | 06-14 | 新闻页面重复标题修复 (SimHash 去重) |
 
 ---
 

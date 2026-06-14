@@ -1,7 +1,7 @@
 # Stock Analyst 系统架构文档
 
-> **版本**: v4.7 | **日期**: 2026-06-09 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型 + 大神仙空 v2.0
-> **审计状态**: v4.7 — AlphaFlow 信号重构 + 大神仙空全局部署 + 两期扫描 + 富宏观上下文 + 事件管道净化
+> **版本**: v4.8 | **日期**: 2026-06-14 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型 + 大神仙空 v2.0
+> **审计状态**: v4.8 — DNA实验室自动化 + 新闻采集优化 + 宏观数据改造 + TG扫描阶段重组 + 新闻去重修复
 
 ---
 
@@ -124,9 +124,27 @@ Stock Analyst 目前运行 **两条独立又互补的管线**，并通过交叉�
 
 DeepSeek 在系统中扮演 **三类角色**：
 
-1. **新闻分析引擎**（Stage1 打标签 + Stage2 深度分析 + 晨报生成）—— 调用 chat/v4 模型
+1. **新闻分析引擎**（Stage1 打标签 + Stage2 深度分析 + 晨报生成）—— **v4.8: Stage1 用 Flash, Stage2 公司级用 Pro, 行业/政策/商品用 Flash**
 2. **个股深度分析师**（精选反哺/自动分析/持仓策略）—— 调用 chat 模型，含筹码硬指标附件
 3. **结构化数据提取器**（持仓导入解析/反哺文本解析/批量横向评分）—— 调用 chat 模型
+
+### v4.8 核心能力 (本次新增)
+
+| 能力 | 模块 | 说明 |
+|------|------|------|
+| **DNA 实验室自动化加入** | `stock_dna_auto_join.py` | 3 机制: AlphaFlow突破+TG买入 / L3级 / 持仓变动, 异步训练不阻塞 |
+| **新闻分类去重** | `news_classifier.py` | SimHash 跨源去重 + 三级分类 (company/sector/macro/garbage), macro_only 跳过 LLM |
+| **龙虎榜精细化 v2.0** | `toplist_analyzer.py` | 机构 4 子类 (公募/北向/社保/QFII) + 游资 4 级 (顶级/一线/二线/三线) + 5 级共振 + 净买持续性 |
+| **龙虎榜智能缓存** | `get_cached_daily_toplist()` | 历史永久 / 当日交易 5min / 休市 1h, 避免休市期间重复计算 |
+| **龙虎榜 SSE 刷新** | `/api/scan/toplist-refresh` | 流式 sync → analyze → sector 3 阶段进度 |
+| **新闻聚合接口** | `/api/scan/news-dashboard` | 6 请求 → 1 请求, 加载时间大幅减少 |
+| **新闻新鲜度** | `/api/scan/news-freshness` | skip / crawl_only / analyze_only / full 4 种建议 |
+| **新闻增量更新** | `news_pipeline.py` | 2h 内爬过跳过, 6h 内分析过跳过 LLM |
+| **融资融券重写** | `get_margin_sentiment()` | 改用 rzye (融资余额) 直接判断亢奋/正常/谨慎 + 颜色 |
+| **市场过滤 (后端)** | `trigger_scan?market_filter=` | 主板/中小板/创业板 服务端真过滤, 不再仅前端展示 |
+| **DNA 异步训练** | `asyncio.create_task` | 60-180秒/只训练放入后台队列, 不阻塞 done 事件 |
+| **进度推送节流** | `tg_engine.py` | scan phase 5% 步长推送, 5000只 → 100 事件 |
+| **accuracy 隔离元参数** | `accuracy_tracker.py` | `isolated_meta=True` 写入独立列, 不覆盖主 discrimination |
 
 ### 技术栈
 
@@ -399,11 +417,39 @@ MonitorPage.tsx           # ★ v4.3 系统监控 (老兵回测+校准+就绪状
 
 | 职责 | 入口文件 | 关键函数 | 输出 |
 |------|---------|---------|------|
-| TG 扫描 | `tg_engine.py` | `scan_all_stocks()` | `scan_results` 表 |
+| TG 扫描 | `tg_engine.py` | `scan_all_stocks()` (5% 步长推送) | `scan_results` 表 |
 | TG 指标 | `tg_indicator.py` | `TGIndicator(df).compute()` | 18 步指标 + 买入/卖出信号 |
-| 深度评分 | `deep_scorer.py` | `deep_analyze()` | `analysis_scores` 表 (含 dimension_scores, win_probability) |
+| 深度评分 | `deep_scorer.py` | `deep_analyze()` (14 维) | `analysis_scores` 表 (含 dimension_scores, win_probability) |
 | 形态识别 | `pattern_engine.py` | `run_pattern_scan()` | `pattern_signals` 表 |
-| 潜伏猎手 | `ambush_scanner.py` | `run_ambush_scan()` | `ambush_signals` 表 |
+| 潜伏猎手 | `ambush_scanner.py` | `run_ambush_scan()` (用最新 scan_date) | `ambush_signals` 表 |
+
+**v4.8 扫描阶段流程 (10 阶段, 修复 toplist_sync 重复 + DNA 异步化)**：
+
+```
+POST /api/scan/trigger
+  ① toplist        → ensure_toplist_fresh() (skip_download 时跳过, 与 ⑧ 合并)
+  ② download       → tg_engine 内部: download_latest_kline() + 覆盖率回退 365 天
+  ③ scan           → 本地 TG 计算 (5% 步长推送 SSE, 5000只 → 100 事件)
+  ④ ambush_scan    → 潜伏猎手 (用 scan_results 最新日期, 非历史最早)
+  ⑤ pattern_scan   → 形态识别
+  ⑥ deep_score     → 14 维深度评分 (文案修正: 12→14)
+  ⑦ nm_defense     → 分钟线防伪 (异常不影响后续, 仍受 try/except 保护)
+  ⑧ toplist_sync   → ⛔ v4.8 移除 (与 ① 重复, 合并到 toplist)
+  ⑨ accuracy_feedback → isolated_meta=True 写独立列, 不覆盖主 discrimination
+  ⑩ dna_auto_join  → asyncio.create_task 异步训练, 60-180s/只不阻塞 done
+  done 事件 ────→ 前端 currentPhase='done' 触发 load()
+```
+
+**市场过滤 (v4.8 后端真正过滤)**：
+
+```
+前端: 主板/中小板/创业板 按钮
+  ↓ market_filter query param
+后端: /api/scan/trigger?market_filter=主板
+  ↓ classify_board(ts_code) → '上海主板'|'深圳主板'|'中小板'|'创业板'
+  ↓ results = results[results['symbol'].apply(in allowed)]
+  ↓ 日志: market_filter=主板 (allowed=['上海主板', '深圳主板']): 5500 -> 3500
+```
 
 **TG 指标差异化阈值** (`tg_indicator.py:29-51`)：
 
@@ -1182,6 +1228,121 @@ StockAnalyst.bat
 | 12 | ⚠️ stock_dna.best_emotion_ret 列类型 | `dna_models.py` | 低 | 已修 (Float→JSONB + ALTER TABLE 迁移) |
 
 ## 10. 变更日志
+
+**⭐ 新闻页面重复标题修复 (v4.9)**:
+- `app/services/event_aggregator.py`: 新增 SimHash 相似度去重
+- `_dedup_similar_events()`: 同一股票内相似标题去重
+- 阈值: 汉明距离 < 8 判定为相似，每股同主题只保留最高 display_score 的一条
+- 修复同一股票多条重复显示问题
+
+**⭐ 新闻分类去重 (v2.1)**:
+- `app/services/news_classifier.py`: SimHash 指纹 + 智能分类服务
+- **去重**: 跨源 SimHash (汉明距离<10) + 数据库唯一约束
+- **分类**: 三级 (company/sector/macro/garbage) - macro_only 跳过 LLM (避免与宏观数据重复)
+- **个股摘要保留**: `get_stock_news_summary()` 从 `news_raw` + `stock_events` 合并, 不丢失 title/summary
+
+**⭐ 龙虎榜精细化 (v2.1)**:
+- 机构细分: 公募/私募/QFII/北向/社保
+- 游资分级: 顶级(95-87分) / 一线(80-60分) / 二线(55-45分) / 三线(40分)
+- 共振强度: 5级 (extreme/strong/moderate/weak/minimal)
+- 共振标签: 机构入场/顶级游资/一线游资/合力买入/净买普遍
+- 净买持续性: 1/3/5日统计
+- **智能缓存 (v2.1)**: 历史永久/当日交易时段5min/休市1h
+- **SSE 刷新接口 (v2.1)**: POST /api/scan/toplist-refresh
+- **新鲜度检查**: GET /api/scan/toplist-freshness
+- **前端 SSE 集成**: 进度条 + 刷新按钮 + 缓存标识
+
+**LLM 模型明确化 (v2.1)**:
+- 新闻 Stage1 (打标签): DEEPSEEK_FLASH_MODEL (deepseek-v4-flash)
+- 新闻 Stage2 公司级: DEEPSEEK_PRO_MODEL (深度分析)
+- 新闻 Stage2 行业/政策/商品: DEEPSEEK_FLASH_MODEL (轻量任务)
+
+**修复**:
+- `news_crawler.py`: 浏览器启动加超时 (10s/15s), 防止按钮卡死
+- `news_crawler.py`: 进度回调 (init/crawl_X/dedup/store) 让前端实时反馈
+
+**前端**:
+- NewsPage: 板块共振 5 级强度 + 共振标签展示
+- NewsPage: 个股席位精细化 (北向/公募/社保/顶级/一线/二线) 标签
+
+### v4.8 (2026-06-13) — DNA 实验室自动化 + 新闻采集优化 + 宏观数据改造 + TG 扫描阶段重组
+
+**⭐ DNA 自动加入三种机制**:
+- `app/services/stock_dna_auto_join.py`: 独立服务模块, 提供三个自动加入函数
+- **机制1 (AlphaFlow)**: lock_state=breakout_up + TG买入信号 → 自动加入 DNA
+- **机制2 (TG扫描)**: 每日扫描完成后, L3级股票自动加入 DNA (L1/L2不加入) — **v4.8.2 改为异步后台执行, 不阻塞 done 事件**
+- **机制3 (持仓变动)**: 持仓新增或清仓 → 相关股票自动加入 DNA (保留模型用于后续分析)
+
+**⭐ 新闻特征系统改造 (枯竭数据 → Tushare 宏观数据)**:
+- 旧问题: `stock_events` / `news_aggregated` / `news_verify` 表数据稀疏, 新闻特征长期空缺
+- 旧方案: `score_event_impact()` 读取空表, 返回 0
+- 新方案: 使用 `compute_sector_macro_score()` + Tushare 宏观数据
+- 改造位置:
+  - `deep_scorer.py`: `score_event_impact()` → `compute_sector_macro_score()` (板块宏观得分 × 3)
+  - `deep_scorer.py`: 新闻信号加权从 `news_aggregated` 改为宏观数据
+  - `holdings.py`: `news_signal` 字段用 `sector_macro_cache` 预计算
+  - `LearningPage.tsx`: 新闻验证标签 → 宏观快照展示 (MacroSnapshotView 组件)
+
+**⭐ 新闻采集优化**:
+- **聚合接口**: `GET /scan/news-dashboard` 一次返回所有数据
+- **新鲜度API**: `GET /scan/news-freshness` 返回 should_crawl/should_analyze/recommendation
+- **增量更新**: `news_pipeline.py` 根据新鲜度智能跳过爬取或LLM分析
+- **前端分类工具**: `classifyMarket()` / `filterByMarket()` 统一市场分类逻辑
+
+**⭐ 新闻分类去重 v2.1**:
+- `app/services/news_classifier.py`: SimHash 指纹 + 智能分类
+- **去重**: 跨源 SimHash (汉明距离<10) + 数据库唯一约束
+- **分类**: 三级 (company/sector/macro/garbage) - macro_only 跳过 LLM
+- **个股摘要保留**: `get_stock_news_summary()` 从 `news_raw` + `stock_events` 合并, 不丢失 title/summary
+- **修复新闻速报按钮**: 浏览器启动加超时 (10s/15s), 防止按钮卡死
+
+**⭐ 龙虎榜精细化 v2.0**:
+- 机构细分: 公募/私募/QFII/北向/社保
+- 游资分级: 顶级(95-87分) / 一线(80-60分) / 二线(55-45分) / 三线(40分)
+- 共振强度: 5级 (extreme/strong/moderate/weak/minimal)
+- 共振标签: 机构入场/顶级游资/一线游资/合力买入/净买普遍
+- 净买持续性: 1/3/5日统计
+- **智能缓存**: 历史永久/当日交易时段5min/休市1h
+- **SSE 刷新接口**: POST /api/scan/toplist-refresh
+- **新鲜度检查**: GET /api/scan/toplist-freshness
+
+**⭐ 融资融券情绪重写**:
+- 旧问题: `trend_pct`/`detail`/`sentiment` 字段 undefined, 返回 0
+- 新方案: 改用 `rzye` (融资余额) 直接判断
+- **判定标准**: > 1.6万亿=亢奋 (注意风险), 1.2-1.6万亿=正常, < 1.2万亿=谨慎
+- 同步数据: `margin_trading` 表 (ts_code='TOTAL' 汇总)
+
+**⭐ TG 扫描阶段重组 v4.8.2 (本次修复 P0/P1/P2 共 15 项问题)**:
+
+| 修复 | 文件 | 说明 |
+|------|------|------|
+| **P0-1** | `ScanPage.tsx` | `setCurrentPhase` 类型从 `'download'\|'scan'\|null` 扩展为 10 个 `ScanPhase` |
+| **P0-2** | `scan.py` | DNA auto-join 用 `asyncio.create_task()` 异步执行, 不阻塞 done 事件 |
+| **P1-1** | `scan.py` | 移除 `toplist_sync` 阶段 (与 `toplist` 重复), 合并到 ① |
+| **P1-2** | `ScanPage.tsx` | phaseMessages slice(-8) → slice(-20), maxHeight 120 → 280 |
+| **P1-3** | `scan.py` + `ScanPage.tsx` | `trigger_scan` 接受 `market_filter` 参数, 后端用 `classify_board` 真过滤 |
+| **P1-4** | `scan.py` | `skip_download=True` 同时跳过龙虎榜 + DNA, 不调 Tushare API |
+| **P1-5** | `tg_engine.py` | scan phase 节流: `% 200/500` → `% max(1, total//20)` (5% 步长), `asyncio_sleep(0)` `% 10` → `% 50` |
+| **P1-6** | `accuracy_tracker.py` | `apply_accuracy_feedback(isolated_meta=True)` 写入独立 `accuracy_feedback_factor` 列, 不覆盖主 discrimination |
+| **P2-1** | `scan.py` | 文案 "12维评分" → "14维评分" |
+| **P2-2** | `scan.py` | 所有 phase `extra` 异常信息统一改为 "异常: {e}" |
+| **P2-3** | `tg_engine.py` | 覆盖率 < 95% 时回退 `latest_date` → 回退 365 天, 避免漏掉中间日 |
+| **P2-4** | `scan.py` | ambush_scan 用 `scan_results.MAX(scan_date)` 而非 `analysis_scores.MAX(scan_date)` |
+| **P2-5** | `tg_engine.py` | ST 过滤正则 `[*]?ST` → `name ~* '[* ]?ST' OR name LIKE '%ST%' OR name LIKE '%退%'` |
+| **P2-6** | `ScanPage.tsx` | phaseLabel 新增 `'🧬DNA训练'` 标签, 阶段指示器含 dna_auto_join |
+| **DB** | `param_library` | 新增列 `accuracy_feedback_factor`, `accuracy_feedback_at` |
+
+**市场过滤 v4.8 (后端真过滤)**:
+
+```
+前端 ScanPage 主板/中小板/创业板 按钮
+  ↓ market_filter=主板  (URL query)
+后端 trigger_scan
+  ↓ classify_board(ts_code) → '上海主板'|'深圳主板'|'中小板'|'创业板'
+  ↓ 主板允许列表: ['上海主板', '深圳主板']
+  ↓ results = results[results['symbol'].apply(in allowed)]
+  ↓ 日志: market_filter=主板 (allowed=['上海主板', '深圳主板']): 5500 -> 3500
+```
 
 ### v4.7 (2026-06-09) — AlphaFlow 信号重构 + 大神仙空全局部署 + 两期扫描
 

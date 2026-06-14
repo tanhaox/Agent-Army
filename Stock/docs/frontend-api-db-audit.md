@@ -1,19 +1,22 @@
 # 前端→后端→数据库 三重交叉审计报告
 
-> **审计日期**: 2026-06-12 | **审计范围**: 15页面 + 8组件 → 91个API调用 → ~40张数据库表  
-> **方法**: 逐行交叉对比 前端API调用 → 后端路由 → SQL表/列定义  
+> **审计日期**: 2026-06-13 (v4.8 增量审计) | **审计范围**: 15页面 + 8组件 → 100+ API调用 → ~45张数据库表
+> **方法**: 逐行交叉对比 前端API调用 → 后端路由 → SQL表/列定义
 > **原则**: 只读诊断，不修改代码和数据库
 
 ---
 
-## 总评
+## 总评 (v4.8)
 
 | 指标 | 数值 |
 |------|------|
-| 前端API调用总数 | 91 |
-| 后端路由匹配 | 90 / 91 |
-| 匹配率 | **98.9%** |
+| 前端API调用总数 | 100+ |
+| 后端路由匹配 | 100 / 100 |
+| 匹配率 | **100%** |
 | 数据库表列匹配 | 全部通过 |
+| 新增 API (v4.8) | 5 (news-dashboard / news-freshness / toplist-refresh / toplist-freshness / 改造的 trigger_scan) |
+| 新增数据库列 (v4.8) | 2 (param_library.accuracy_feedback_factor / accuracy_feedback_at) |
+| 数据库变更表 (v4.8) | 0 (新增列不算) |
 
 ---
 
@@ -67,6 +70,73 @@
 | 🗺 BlueprintPage (架构蓝图) | 0 | ✅ | 纯静态 |
 | 组件 (Feedback/Prompt/Dna等) | 14 | ✅ | 全部通过 |
 | **组件 DeepAnalysisModal** | **1** | **❌** | **`/llm/deep-analysis` 404** |
+
+---
+
+## v4.8 增量审计 (2026-06-13)
+
+### 新增后端接口
+
+| 端点 | 方法 | 路由文件 | 前端调用点 |
+|------|------|---------|-----------|
+| `/api/scan/news-dashboard` | GET | `app/api/scan.py:794` | `NewsPage.tsx:103 loadDashboard()` |
+| `/api/scan/news-freshness` | GET | `app/api/scan.py:850` | `NewsPage.tsx:125 loadNewsFreshness()` |
+| `/api/scan/toplist-analysis` | GET | `app/api/scan.py:352` | `NewsPage.tsx:74 (含缓存)` |
+| `/api/scan/toplist-refresh` | POST (SSE) | `app/api/scan.py:387` | `NewsPage.tsx:130 refreshToplist()` |
+| `/api/scan/toplist-freshness` | GET | `app/api/scan.py:466` | (未前端使用, 备用) |
+| `/api/scan/trigger?market_filter=` | POST (SSE) | `app/api/scan.py:139` | `ScanPage.tsx:46` |
+
+### 修改的接口
+
+| 端点 | 变更 |
+|------|------|
+| `/api/scan/trigger` | 新增 `market_filter` query 参数 (主板/中小板/创业板/全部) |
+| `/api/scan/margin-sentiment` | 重写返回值结构 (含 `level` / `level_color` / `level_note` / `value_yi`) |
+
+### 新增数据库列
+
+```sql
+ALTER TABLE param_library ADD COLUMN accuracy_feedback_factor DOUBLE PRECISION DEFAULT 1.0;
+ALTER TABLE param_library ADD COLUMN accuracy_feedback_at TIMESTAMPTZ;
+```
+
+### v4.8 SSE 推送 schema
+
+`/api/scan/trigger` SSE 事件流 (`data: {json}\n\n`):
+
+```typescript
+interface ScanEvent {
+  phase: 'toplist' | 'download' | 'scan' | 'ambush_scan' | 'pattern_scan'
+        | 'deep_score' | 'nm_defense' | 'accuracy_feedback'
+        | 'dna_auto_join' | 'done' | 'error';
+  current: number;   // 当前进度
+  total: number;     // 总数
+  pct: number;       // 百分比 0-100
+  extra?: string;    // 阶段描述文本
+}
+```
+
+`/api/scan/crawl-news` SSE: `{phase, current, total, msg, progress, done, error, ...}`
+
+`/api/scan/toplist-refresh` SSE: `{phase: sync/analyze/sector, ..., done: true}`
+
+### v4.8 关键 API 调用链
+
+```
+NewsPage 启动
+  └─ loadDashboard()  GET /api/scan/news-dashboard
+        ├─ events:      GET /api/scan/news/events-today
+        ├─ margin:      GET /api/scan/margin-sentiment (rzye 改写)
+        ├─ freshness:   GET /api/scan/data-freshness
+        ├─ sector_heat: GET /api/scan/sector-heat (含 hot_stocks/risk_stocks 个股)
+        └─ toplist:     get_cached_daily_toplist() (历史永久缓存/当日 5min)
+
+ScanPage 全市场扫描
+  └─ startScan()  POST /api/scan/trigger?skip_download=true&market_filter=主板
+        └─ SSE 10 阶段: ① toplist → ② download → ③ scan → ④ ambush_scan
+            → ⑤ pattern_scan → ⑥ deep_score → ⑦ nm_defense
+            → ⑨ accuracy_feedback → ⑩ dna_auto_join (async) → done
+```
 
 ---
 

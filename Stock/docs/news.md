@@ -1,12 +1,56 @@
-# 新闻事件分析系统 v2.2
+# 新闻事件分析系统 v3.1
 
 > 基于 2026-05-26 实际测试数据更新。4 源分开发送 + 跨源去重 + JSON 修复。
-> **v2.2 (2026-06-09)**: LLM前商品/宏观关键词过滤 (v4.7), LLM虚构叙事已净化。
-> **v2.1 (2026-06-07)**: 配合系统 v4.5 P0 升级，更新全局约定。
+> **v3.1 (2026-06-14)**: event_aggregator 同一股票内相似标题去重 (SimHash)
+> **v3.0 (2026-06-13)**: v4.8 改造 - SimHash 跨源去重 + 三级分类 + macro_data 替代 + 融资融券重写
+> **v2.2 (2026-06-09)**: LLM前商品/宏观关键词过滤 (v4.7), LLM虚构叙事已净化
+> **v2.1 (2026-06-07)**: 配合系统 v4.5 P0 升级，更新全局约定
 
 ---
 
-## 数据流
+## v3.0 重大变更 (2026-06-13) ⭐
+
+### 新闻特征系统改造 (枯竭数据 → Tushare 宏观数据)
+
+**问题**: `stock_events` / `news_aggregated` / `news_verify` 表数据稀疏, `score_event_impact()` 长期返回 0
+
+**新方案**: 使用 `compute_sector_macro_score()` + Tushare 宏观数据 + 板块暴露系数
+
+| 旧位置 | 新方案 |
+|--------|--------|
+| `deep_scorer.score_event_impact()` | `compute_sector_macro_score()` (板块宏观得分 × 3) |
+| `news_aggregated/news_verify` 加权 | Tushare 宏观数据 (板块暴露) |
+| `holdings.news_signal` (从空 details 取) | `sector_macro_cache` 预计算 |
+| `LearningPage` 新闻验证标签 | `MacroSnapshotView` 宏观快照展示 |
+
+### 新闻分类去重 (SimHash 指纹)
+
+`app/services/news_classifier.py`:
+- **SimHash**: 中文按2字切分, 英文按词, MD5 hash → 64-bit 指纹
+- **三级分类**: `company` / `sector` / `macro` / `garbage`
+- **macro_only 跳过 LLM**: 期货/利率/汇率/PMI/CPI 等由 `macro_data` 覆盖
+- **公司级白名单**: 中标/签约/投产/减持/业绩 → 保留 (即使有宏观词)
+- **跨源去重**: 汉明距离 < 10 视为相同
+- **个股摘要保留**: `get_stock_news_summary()` 从 `news_raw` + `stock_events` 合并
+
+### 新闻采集 API 优化
+
+- **聚合接口**: `GET /api/scan/news-dashboard` (6 请求 → 1)
+- **新鲜度 API**: `GET /api/scan/news-freshness` (skip/crawl_only/analyze_only/full 4 建议)
+- **增量更新**: `news_pipeline.py` 智能跳过:
+  - < 2h 前爬过 → 跳过爬取
+  - < 6h 前分析过 → 跳过 LLM 分析
+- **修复新闻速报按钮**: 浏览器启动加超时 (10s/15s), 防止按钮卡死
+
+### LLM 模型明确化
+
+- **Stage 1 (打标签)**: `DEEPSEEK_FLASH_MODEL` (deepseek-v4-flash) - 轻量任务
+- **Stage 2 公司级深度分析**: `DEEPSEEK_PRO_MODEL` (deepseek-v4-pro) - 精确提取
+- **Stage 2 行业/政策/商品**: `DEEPSEEK_FLASH_MODEL` - 简单分类
+
+---
+
+## 数据流 (v3.0)
 
 ```
 Tushare News 爬虫 (手动触发: "新闻速报"按钮)
@@ -490,6 +534,32 @@ CREATE TABLE name_code_map (
 
 ### SettingsPage
 - Tushare Cookie 配置 ✅ 已完成
+
+---
+
+## v3.1 event_aggregator 相似标题去重 (2026-06-14) ⭐
+
+`app/services/event_aggregator.py` 在查询展示前增加 SimHash 去重：
+
+```python
+def _dedup_similar_events(events: list[dict]) -> list[dict]:
+    """同一股票内相似标题去重，每股同主题只保留最高 display_score 的一条."""
+    # 1. 按 ts_code 分组
+    # 2. 每组按 display_score 降序
+    # 3. 计算 SimHash 指纹 (中文2字切分 + MD5 hash → 64-bit)
+    # 4. 汉明距离 < 8 判定为相似
+    # 5. 保留第一条 (最高分), 跳过相似标题
+```
+
+**修复效果**:
+| 场景 | 修复前 | 修复后 |
+|------|--------|--------|
+| 300848.SZ 出现 3 次 | 全部显示 | 只显示最高分 1 条 |
+| 300308.SZ 出现 2 次 | 全部显示 | 只显示最高分 1 条 |
+| 相似标题（如"龙虎榜数据"） | 重复显示 | 自动去重 |
+
+**根本原因**: LLM Stage2 对相似新闻可能产生不同 composite_impact 评分，导致同一股票多条记录。
+**解决方案**: 在 event_aggregator 查询层增加 SimHash 相似度过滤。
 
 ---
 
