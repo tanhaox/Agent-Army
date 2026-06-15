@@ -1,6 +1,7 @@
 # Stock Analyst 文档索引
 
-> **版本**: v5.0 | **日期**: 2026-06-14 | **更新**: 整合所有文档，统一系统状态
+> **版本**: v5.1 | **日期**: 2026-06-15 | **更新**: 添加 AGENTS.md 层级索引
+> **关联**: [Stock/AGENTS.md](../AGENTS.md) — 项目级 AI 理解文档
 
 ---
 
@@ -16,6 +17,38 @@
 | **[tushare.md](tushare.md)** | ~420 | ✅ 准确 | Tushare API 速查 |
 | **[frontend-api-db-audit.md](frontend-api-db-audit.md)** | ~156 | ✅ 准确 | API 审计报告 |
 | **[PHASE_PLAN.md](PHASE_PLAN.md)** | ~157 | ✅ 准确 | Phase 执行计划 |
+
+---
+
+## 🗂️ AGENTS.md 层级索引 (AI 理解文档)
+
+> 层级索引帮助 AI 快速定位代码结构，无需阅读全部代码。
+
+| 层级 | 文件 | 内容 |
+|------|------|------|
+| **L0 根** | [Stock/AGENTS.md](../AGENTS.md) | 项目概览、技术栈、核心约束 |
+| **L1 backend** | [backend/AGENTS.md](../backend/AGENTS.md) | 后端根目录、脚本、模型 |
+| **L1 app** | [backend/app/AGENTS.md](../backend/app/AGENTS.md) | FastAPI 核心、core/utils 模块 |
+| **L1 frontend** | [frontend/AGENTS.md](../frontend/AGENTS.md) | 前端根目录 |
+| **L1 src** | [frontend/src/AGENTS.md](../frontend/src/AGENTS.md) | React 页面/组件、API 客户端 |
+| **L2 services** | [backend/app/services/AGENTS.md](../backend/app/services/AGENTS.md) | 80+ 服务模块分类索引 |
+| **L2 api** | [backend/app/api/AGENTS.md](../backend/app/api/AGENTS.md) | 17 路由模块、端点清单 |
+| **L2 backend/docs** | [backend/docs/AGENTS.md](../backend/docs/AGENTS.md) | 后端补充文档 (宏观映射) |
+| **L2 docs** | [docs/AGENTS.md](AGENTS.md) | 文档目录索引 |
+
+### 快速定位指南
+
+```
+想找... → 查看...
+──────────────────────────────────────────────────────
+服务实现 → backend/app/services/AGENTS.md
+API 端点 → backend/app/api/AGENTS.md
+前端页面 → frontend/src/AGENTS.md
+核心工具 → backend/app/AGENTS.md §Core Modules
+数据库表 → docs/DEVELOPER_GUIDE.md §三、数据库表
+开发约束 → Stock/AGENTS.md §For AI Agents
+文档索引 → docs/AGENTS.md
+```
 
 ---
 
@@ -47,14 +80,14 @@
 
 ---
 
-## 📊 系统当前状态 (v4.8)
+## 📊 系统当前状态 (v4.9)
 
 ### 核心能力
 
 | 能力 | 状态 | 版本 |
 |------|------|------|
-| TG 全市场扫描 | ✅ 运行中 | v4.8 |
-| AlphaFlow 主升浪捕获 | ✅ 运行中 | v4.8 |
+| TG 全市场扫描 | ✅ 运行中 | v4.9 |
+| AlphaFlow 主升浪捕获 | ✅ 运行中 | v4.9 |
 | DNA 个性化模型 | ✅ 运行中 | v4.5 |
 | 大神仙空卖出信号 | ✅ 运行中 | v4.7 |
 | 周线双周期共振 | ✅ 运行中 | v4.2 |
@@ -135,6 +168,10 @@ PHASE_PLAN.md (执行计划)
 
 | 版本 | 日期 | 更新内容 |
 |------|------|----------|
+| v5.4 | 2026-06-15 | ✅分钟线防伪优化：只检测高分股票(134→219)+并发降至10 |
+| v5.3 | 2026-06-15 | 分钟线防伪流程改造+L3股票优先检测+潜伏猎手/形态识别待优化 |
+| v5.2 | 2026-06-15 | P0-1批量查询优化+P1-4特征选择+v4.9 |
+| v5.1 | 2026-06-15 | 添加 AGENTS.md 层级索引 (5 个 AI 理解文档) |
 | v5.0 | 2026-06-14 | 整合所有文档，统一索引 |
 | v4.8 | 2026-06-13 | DNA自动化+新闻改造+扫描重组 |
 | v4.7 | 2026-06-09 | 大神仙空+AlphaFlow重构 |

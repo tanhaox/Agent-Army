@@ -85,7 +85,7 @@ async def backfill_signal_history():
     # 批量加载推荐记录 (Phase 44: 含 enrichment details)
     async with async_session_factory() as s:
         r = await s.execute(text("""
-            SELECT symbol, scan_date, composite_score, archetype, market, details
+            SELECT symbol, scan_date, composite_score, archetype, market_correction, details
             FROM analysis_scores WHERE composite_score >= 40
             ORDER BY symbol, scan_date
         """))
@@ -177,7 +177,8 @@ async def backfill_signal_history():
             outcome = _classify_outcome(ret_t2)
             deception = _classify_deception(ret_t1, ret_t2, push_30d.get(key, 1), price_width)
 
-            await s.execute(text("""
+            try:
+                await s.execute(text("""
                 INSERT INTO signal_history (symbol, scan_date, composite_score, archetype, market,
                     push_count_30d, price_zone_high, price_zone_low, price_zone_width_pct,
                     ret_t1, ret_t2, ret_t3, ret_t5, max_gain_pct, max_loss_pct,
@@ -189,21 +190,26 @@ async def backfill_signal_history():
                     :r1, :r2, :r3, :r5, :mg, :ml, :o, :dt,
                     :rp, :sdir, :slc, :sr5, :m5d, :pret, :pwp,
                     :strat)
-            """), {
-                "s": sym, "d": sd, "sc": score, "a": arch, "m": mkt,
-                "p": push_30d.get(key, 1), "ph": price_high, "pl": price_low, "pw": price_width,
-                "r1": ret_t1, "r2": ret_t2, "r3": ret_t3, "r5": ret_t5,
-                "mg": max_gain, "ml": max_loss, "o": outcome, "dt": deception,
-                "strat": "S2",  # Phase 61: 默认 S2 (T+5 收益率)——后续可从 strategy_map 推导
-                "rp": enrichment.get((sym, sd), {}).get("relative_position"),
-                "sdir": enrichment.get((sym, sd), {}).get("sector_direction"),
-                "slc": enrichment.get((sym, sd), {}).get("sector_lifecycle"),
-                "sr5": enrichment.get((sym, sd), {}).get("sector_rank_5d"),
-                "m5d": enrichment.get((sym, sd), {}).get("market_5d"),
-                "pret": enrichment.get((sym, sd), {}).get("predicted_return"),
-                "pwp": enrichment.get((sym, sd), {}).get("predicted_win_prob"),
-            })
-            inserted += 1
+                """), {
+                    "s": sym, "d": sd, "sc": score, "a": arch, "m": mkt,
+                    "p": push_30d.get(key, 1), "ph": price_high, "pl": price_low, "pw": price_width,
+                    "r1": ret_t1, "r2": ret_t2, "r3": ret_t3, "r5": ret_t5,
+                    "mg": max_gain, "ml": max_loss, "o": outcome, "dt": deception,
+                    "strat": "S2",  # Phase 61: 默认 S2 (T+5 收益率)——后续可从 strategy_map 推导
+                    "rp": enrichment.get((sym, sd), {}).get("relative_position"),
+                    "sdir": enrichment.get((sym, sd), {}).get("sector_direction"),
+                    "slc": enrichment.get((sym, sd), {}).get("sector_lifecycle"),
+                    "sr5": enrichment.get((sym, sd), {}).get("sector_rank_5d"),
+                    "m5d": enrichment.get((sym, sd), {}).get("market_5d"),
+                    "pret": enrichment.get((sym, sd), {}).get("predicted_return"),
+                    "pwp": enrichment.get((sym, sd), {}).get("predicted_win_prob"),
+                })
+            except Exception as insert_err:
+                logger.debug(f"signal_history insert skipped (table may not exist): {insert_err}")
+                await s.rollback()
+                break  # 表不存在，后续循环也会失败，直接退出
+            else:
+                inserted += 1
 
         await s.commit()
 
@@ -465,8 +471,8 @@ async def verify_signals_with_minute_bars(
         return {"nm_results": {}, "alliance": None, "quality_adjustments": {},
                 "summary": "信号股不足 3 只, 跳过分钟线验证"}
 
-    # ── Phase 1: 逐只 N/M 检测 (并发) ──
-    from app.services.minute_data import fetch_5min_bars
+    # ── Phase 1: 逐只 N/M 检测 (并发, 使用 minute_on_demand) ──
+    from app.services.minute_on_demand import get_minute_bars
     from app.services.minute_nm_detector import detect_nm_pattern
 
     sem = asyncio.Semaphore(3)
@@ -474,7 +480,7 @@ async def verify_signals_with_minute_bars(
     async def _detect_one(stock: dict) -> dict:
         async with sem:
             sym = stock["symbol"]
-            bars = await fetch_5min_bars(sym, lookback_days=15)
+            bars = await get_minute_bars(sym, period='5min', days=15)
             if len(bars) < 100:
                 return {"symbol": sym, "error": "分钟数据不足", "nm_score": 0}
             nm = detect_nm_pattern(bars)
@@ -605,6 +611,101 @@ BLOCK_SIZE = 5               # 每批下载 5 只, 控制 API 压力
 TOP_N_DEFENSE = 25           # 只验证前 25 只高分信号
 
 
+# ═══════════════════════════════════════════════════════════
+# v4.9: 快速分钟线防伪 — TG 扫描后立即执行
+# ═══════════════════════════════════════════════════════════
+
+async def quick_nm_scan(scan_date: str, progress_callback=None) -> dict:
+    """TG 扫描后快速分钟线防伪 (v4.9 流程改造).
+
+    扫描所有 L2/L3 信号，更新 scan_results.nm_verdict 字段。
+    不调整分数，只标记 N/M 型。
+
+    Args:
+        scan_date: 扫描日期
+        progress_callback: 进度回调函数
+
+    Returns:
+        {"nm_verdicts": {symbol: verdict}, "m_count": N, "n_count": N}
+    """
+    import asyncio
+    from datetime import datetime
+
+    if isinstance(scan_date, str):
+        scan_dt = datetime.strptime(scan_date, "%Y-%m-%d").date()
+    else:
+        scan_dt = scan_date
+
+    # v4.9: 只检测评分通过的股票 (composite_score >= 40)，减少查询量
+    async with async_session_factory() as s:
+        r = await s.execute(text("""
+            SELECT DISTINCT sr.symbol, sr.name, sr.level
+            FROM scan_results sr
+            INNER JOIN analysis_scores ans ON sr.symbol = ans.symbol AND sr.scan_date = ans.scan_date
+            WHERE sr.scan_date = :d AND sr.level IN ('L2', 'L3')
+              AND ans.composite_score >= 40
+        """), {"d": scan_dt})
+        rows = [(row[0], row[1], row[2]) for row in r.fetchall()]
+
+    if not rows:
+        return {"nm_verdicts": {}, "m_count": 0, "n_count": 0, "status": "no_scored_l2l3"}
+
+    if progress_callback:
+        await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只高分L2/L3...")
+
+    # 2. 并发下载分钟线 + NM 检测
+    from app.services.minute_on_demand import get_minute_bars
+    from app.services.minute_nm_detector import detect_nm_pattern
+
+    sem = asyncio.Semaphore(10)  # v4.9: 降低并发避免连接池耗尽
+
+    async def _scan_one(idx, sym):
+        async with sem:
+            try:
+                bars = await get_minute_bars(sym, period='5min', days=5)  # v4.9: 减少到5天，加快速度
+                if len(bars) < 100:
+                    return sym, "insufficient"
+                nm = detect_nm_pattern(bars)
+                return sym, nm["dominant_shape"]
+            except Exception as e:
+                logger.warning(f"NM scan failed for {sym}: {e}")
+                return sym, "error"
+
+    tasks = [_scan_one(i, sym) for i, (sym, _, _) in enumerate(rows)]
+    results = await asyncio.gather(*tasks)
+
+    # 处理结果
+    nm_verdicts = {}
+    for r in results:
+        if r and r[0]:
+            nm_verdicts[r[0]] = r[1]
+
+    # 3. 批量更新 scan_results
+    m_count = sum(1 for v in nm_verdicts.values() if v.startswith("M"))
+    n_count = sum(1 for v in nm_verdicts.values() if v.startswith("N"))
+
+    async with async_session_factory() as s:
+        for sym, verdict in nm_verdicts.items():
+            await s.execute(text("""
+                UPDATE scan_results SET nm_verdict = :v
+                WHERE scan_date = :d AND symbol = :s
+            """), {"v": verdict, "d": scan_dt, "s": sym})
+        await s.commit()
+
+    if progress_callback:
+        verdict_msg = f"N:{n_count} M:{m_count} 中性:{len(nm_verdicts)-m_count-n_count}"
+        await progress_callback("nm_defense", len(rows), len(rows), extra=f"防伪完成: {verdict_msg}")
+
+    logger.info(f"Quick NM scan: {len(nm_verdicts)} checked, N:{n_count} M:{m_count}")
+
+    return {
+        "nm_verdicts": nm_verdicts,
+        "m_count": m_count,
+        "n_count": n_count,
+        "status": "success",
+    }
+
+
 async def run_nm_defense(scan_date: str) -> dict:
     """TG 扫描后自动运行 — 分钟线防伪防火墙.
 
@@ -619,32 +720,40 @@ async def run_nm_defense(scan_date: str) -> dict:
     import asyncio, numpy as np
     from datetime import date as dt_date
 
-    # 取当日高分信号
+    # 取当日 L2/L3 高分信号
+    # v4.9: 改用 scan_results 表筛选 L2/L3
+    from datetime import datetime
+    if isinstance(scan_date, str):
+        scan_dt = datetime.strptime(scan_date, "%Y-%m-%d").date()
+    else:
+        scan_dt = scan_date
+
     async with async_session_factory() as s:
         r = await s.execute(text("""
-            SELECT symbol, name, composite_score, archetype, market
-            FROM analysis_scores
-            WHERE scan_date = :d AND composite_score >= 40
-            ORDER BY composite_score DESC
+            SELECT a.symbol, a.name, a.composite_score, a.archetype, a.market_correction
+            FROM analysis_scores a
+            JOIN scan_results r ON r.symbol = a.symbol AND r.scan_date = a.scan_date
+            WHERE a.scan_date = :d AND r.level IN ('L2', 'L3')
+            ORDER BY a.composite_score DESC
             LIMIT :lim
-        """), {"d": scan_date, "lim": TOP_N_DEFENSE})
+        """), {"d": scan_dt, "lim": TOP_N_DEFENSE})
         rows = [(row[0], row[1], float(row[2] or 0), row[3] or '', row[4] or '主板')
                 for row in r.fetchall()]
 
-    if len(rows) < 3:
-        return {"status": "skipped", "reason": f"信号不足 ({len(rows)} 只)", "penalized": 0}
+    if len(rows) < 1:
+        return {"status": "skipped", "reason": f"L2/L3信号不足 ({len(rows)} 只)", "penalized": 0}
 
     logger.info(f"NM Defense: analyzing {len(rows)} top signals")
 
-    # ── 并发下载分钟线 + NM 检测 ──
-    from app.services.minute_data import fetch_5min_bars
+    # ── 并发下载分钟线 + NM 检测 (使用 minute_on_demand) ──
+    from app.services.minute_on_demand import get_minute_bars
     from app.services.minute_nm_detector import detect_nm_pattern
 
     sem = asyncio.Semaphore(3)
 
     async def _scan_one(sym, name, score):
         async with sem:
-            bars = await fetch_5min_bars(sym, lookback_days=15)
+            bars = await get_minute_bars(sym, period='5min', days=15)
             if len(bars) < 100:
                 return None
             nm = detect_nm_pattern(bars)
@@ -836,42 +945,25 @@ async def detect_anti_patterns(symbol: str, scan_date: str | date) -> dict:
         except Exception:
             pass
 
-        # ── 2. 尾盘拉升检测 ──
+        # ── 2. 尾盘拉升检测 (使用 minute_on_demand) ──
         try:
-            import httpx, os
-            from dotenv import load_dotenv
-            load_dotenv('C:/AI-Agent-Local/Stock/backend/.env')
-            TOKEN = os.getenv('TUSHARE_TOKEN')
+            from app.services.minute_on_demand import get_minute_bars
 
-            end_dt = scan_date.strftime('%Y-%m-%d')
-            start_dt = (scan_date - timedelta(days=3)).strftime('%Y-%m-%d')
-
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post('https://api.tushare.pro', json={
-                    'api_name': 'stk_mins', 'token': TOKEN,
-                    'params': {'ts_code': symbol, 'freq': '5min',
-                               'start_date': f'{start_dt} 09:00:00',
-                               'end_date': f'{end_dt} 15:00:00'},
-                    'fields': 'ts_code,trade_time,close,vol'
-                })
-                data = resp.json()
-                if data.get('code') == 0:
-                    items = data.get('data', {}).get('items', []) or []
-                    # 找最后一天的数据
-                    last_day = end_dt
-                    day_bars = [b for b in items if b[1][:10] == last_day]
-                    if len(day_bars) >= 30:
-                        day_bars.sort(key=lambda x: x[1])
-                        day_open = float(day_bars[0][2])
-                        day_close = float(day_bars[-1][2])
-                        total_gain = (day_close - day_open) / max(day_open, 0.01) * 100
-                        # 尾盘最后6根(30分钟)
-                        tail_start = max(0, len(day_bars) - 7)
-                        tail_open = float(day_bars[tail_start][2])
-                        tail_gain = (day_close - tail_open) / max(tail_open, 0.01) * 100
-                        if total_gain > 1 and tail_gain > total_gain * 0.6:
-                            penalty -= 5
-                            warnings.append(f"尾盘做线: 全天涨{total_gain:.1f}%, 尾盘贡献{tail_gain:.1f}% → 日线是画出来的")
+            bars = await get_minute_bars(symbol, period='5min', days=3, trade_date=scan_date)
+            if len(bars) >= 30:
+                # 排序
+                bars.sort(key=lambda x: str(x["trade_time"]))
+                # 计算全天涨幅
+                day_open = float(bars[0]["open"])
+                day_close = float(bars[-1]["close"])
+                total_gain = (day_close - day_open) / max(day_open, 0.01) * 100
+                # 尾盘最后6根(30分钟)
+                tail_start = max(0, len(bars) - 7)
+                tail_open = float(bars[tail_start]["open"])
+                tail_gain = (day_close - tail_open) / max(tail_open, 0.01) * 100
+                if total_gain > 1 and tail_gain > total_gain * 0.6:
+                    penalty -= 5
+                    warnings.append(f"尾盘做线: 全天涨{total_gain:.1f}%, 尾盘贡献{tail_gain:.1f}% → 日线是画出来的")
         except Exception:
             pass
 
