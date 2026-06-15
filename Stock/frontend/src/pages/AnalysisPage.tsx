@@ -137,6 +137,11 @@ export default function AnalysisPage() {
     } catch {}
   };
 
+  // v5.5: 页面加载时滚动到顶部
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  }, []);
+
   useEffect(() => { load(); }, []);
 
   const filtered = (() => {

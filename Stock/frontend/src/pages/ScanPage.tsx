@@ -5,27 +5,37 @@ import api from '../lib/api';
 interface ScanProgress {
   phase: string; current: number; total: number; pct: number; extra?: string;
 }
+type ScanPhase = 'toplist' | 'download' | 'scan' | 'ambush_scan' | 'pattern_scan' | 'deep_score' | 'nm_defense' | 'toplist_sync' | 'accuracy_feedback' | 'dna_auto_join' | 'done' | 'error';
 
 export default function ScanPage() {
   const [data, setData] = useState<any[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ signals: 0, l3: 0, l2: 0 });
   const [klineInfo, setKlineInfo] = useState('');
   const [progress, setProgress] = useState<ScanProgress | null>(null);
-  const [currentPhase, setCurrentPhase] = useState<'download' | 'scan' | null>(null);
+  const [currentPhase, setCurrentPhase] = useState<ScanPhase | null>(null);
   const [skipDownload, setSkipDownload] = useState(false);
   const [phaseMessages, setPhaseMessages] = useState<string[]>([]);
   const [marketFilter, setMarketFilter] = useState<string>('全部');
   const abortRef = useRef<AbortController | null>(null);
   const navigate = useNavigate();
 
+  // v5.5: 页面加载时滚动到顶部
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  }, []);
+
   const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const r = await api.get('/scan/results', { params: { limit: 500 } });
+      const r = await api.get('/scan/results', { params: { limit: 100 } });
       const d = r.data.data || [];
       setData(d);
       setStats({ signals: d.length, l3: d.filter((x: any) => x.level === 'L3').length, l2: d.filter((x: any) => x.level === 'L2').length });
-    } catch {}
+    } catch {} finally {
+      setLoading(false);
+    }
     try {
       const r = await api.get('/scan/dates');
       if (r.data.dates?.length > 0) {
@@ -38,11 +48,41 @@ export default function ScanPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // 轮询扫描状态（刷新页面后恢复正在运行的任务）
+  useEffect(() => {
+    let prevCount = 0;
+    const pollStatus = async () => {
+      try {
+        const r = await api.get('/scan/status');
+        const state = r.data.data || {};
+        if (state.running === true || state.running === 'True') {
+          setScanning(true);
+          setProgress({ phase: state.phase || 'scan', current: state.current || 0, total: state.total || 0, pct: state.pct || 0, extra: state.extra || '' });
+          setCurrentPhase((state.phase || 'scan') as ScanPhase);
+          // 恢复消息历史 - 累积显示
+          if (state.messages && Array.isArray(state.messages)) {
+            const msgs = state.messages.map((m: any) => m.extra).filter(Boolean);
+            if (msgs.length > prevCount) {
+              setPhaseMessages(prev => {
+                const newMsgs = msgs.slice(prev.length);
+                return [...prev, ...newMsgs].slice(-20);
+              });
+              prevCount = msgs.length;
+            }
+          }
+        }
+      } catch { /* 静默忽略 */ }
+    };
+    pollStatus();
+    const interval = setInterval(pollStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
   const startScan = async () => {
     setScanning(true); setProgress(null); setCurrentPhase(null); setPhaseMessages([]);
     abortRef.current = new AbortController();
     try {
-      const response = await fetch(`/api/scan/trigger?skip_download=${skipDownload}`, {
+      const response = await fetch(`/api/scan/trigger?skip_download=${skipDownload}&market_filter=${encodeURIComponent(marketFilter)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: abortRef.current.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -60,7 +100,7 @@ export default function ScanPage() {
             try {
               const event: ScanProgress = JSON.parse(line.slice(6));
               setProgress(event);
-              setCurrentPhase(event.phase as 'download' | 'scan' | null);
+              setCurrentPhase(event.phase as ScanPhase);
               if (event.extra) {
                   setPhaseMessages(prev => { const u = [...prev]; if (u[u.length-1] !== event.extra) u.push(event.extra!); if (u.length > 20) u.shift(); return u; });
               }
@@ -80,7 +120,7 @@ export default function ScanPage() {
   };
 
   const phaseLabel = (p: string) => {
-    const m: Record<string,string> = { toplist:'龙虎榜准备', download:'K线下载', scan:'TG扫描中', ambush_scan:'潜伏猎手', pattern_scan:'形态识别', deep_score:'多维度评分', nm_defense:'🛡️分钟线防伪', toplist_sync:'龙虎榜同步', accuracy_feedback:'准确率验证' };
+    const m: Record<string,string> = { toplist:'龙虎榜准备', download:'K线下载', scan:'TG扫描中', ambush_scan:'潜伏猎手', pattern_scan:'形态识别', deep_score:'多维度评分', nm_defense:'🛡️分钟线防伪', accuracy_feedback:'准确率验证', dna_auto_join:'🧬DNA训练' };
     return m[p] || p;
   };
 
@@ -129,7 +169,7 @@ export default function ScanPage() {
       {/* 阶段指示器 */}
       {currentPhase && (
         <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap' }}>
-          {['toplist','download','scan','ambush_scan','pattern_scan','deep_score','nm_defense','toplist_sync','accuracy_feedback'].map(p => (
+          {['toplist','download','scan','ambush_scan','pattern_scan','deep_score','nm_defense','dna_auto_join'].map(p => (
             <div key={p} style={{ padding:'6px 14px', borderRadius:20, fontSize:11, fontWeight:500,
               background: currentPhase===p?'rgba(59,130,246,0.12)':'rgba(255,255,255,0.02)',
               color: currentPhase===p?'#3b82f6':'#4b5563',
@@ -150,11 +190,14 @@ export default function ScanPage() {
           <div style={{height:6,background:'#1e2535',borderRadius:3,marginBottom:8}}>
             <div style={{height:'100%',width:`${progress.pct}%`,background:'linear-gradient(90deg,#3b82f6,#ef4444)',borderRadius:3,transition:'width .3s'}}/>
           </div>
-          {phaseMessages.length > 0 && (
-            <div style={{maxHeight:120,overflowY:'auto',fontSize:11,color:'#6e7a8a'}}>
-              {phaseMessages.slice(-8).map((m,i) => <div key={i} style={{padding:'2px 0'}}>{m}</div>)}
-            </div>
-          )}
+          {/* 消息日志区域 - 扫描状态下始终显示 */}
+          <div style={{maxHeight:280,overflowY:'auto',fontSize:11,color:'#6e7a8a',background:'rgba(0,0,0,0.2)',padding:8,borderRadius:6}}>
+            {phaseMessages.length > 0 ? (
+              phaseMessages.slice(-20).map((m,i) => <div key={i} style={{padding:'2px 0'}}>{m}</div>)
+            ) : (
+              <div style={{color:'#4b5563'}}>等待扫描日志...</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -205,10 +248,17 @@ export default function ScanPage() {
         </div>
       )}
 
-      {!scanning && data.length === 0 && (
+      {!scanning && data.length === 0 && !loading && (
         <div style={{ textAlign: 'center', padding: 60, color: '#4b5563' }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>📡</div>
           <div style={{ fontSize: 14 }}>点击「全市场扫描」开始TG信号扫描</div>
+        </div>
+      )}
+
+      {loading && (
+        <div style={{ textAlign: 'center', padding: 60, color: '#6e7a8a' }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>⏳</div>
+          <div style={{ fontSize: 14 }}>加载扫描结果...</div>
         </div>
       )}
 

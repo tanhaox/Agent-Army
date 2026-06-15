@@ -14,6 +14,7 @@ import ProgressBar from '../components/ProgressBar';
 import SectionHeader from '../components/SectionHeader';
 import EmptyState from '../components/EmptyState';
 import SkeletonRow from '../components/SkeletonRow';
+import RegimeDashboard from '../components/RegimeDashboard';
 import { getActionSignal } from '../lib/signalColor';
 import { T, TH as Th, TD as Td } from '../lib/designTokens';
 import { useMediaQuery } from '../lib/useMediaQuery';
@@ -65,6 +66,11 @@ export default function ResultPage() {
   const load=async()=>{setLoading(true);const params:any={limit:50};if(curatedSymbols)params.symbols=curatedSymbols;if(curatedDate)params.date=curatedDate;
     try{const r=await api.get('/result/final',{params});const d=r.data.data||[];setData(d);setLoadError(false);setScanDate(r.data.scan_date||'');setHasFeedback(r.data.has_feedback||false);setGateInfo(r.data.gate||null);setGateFilteredCount(r.data.gate_filtered??0);setMarketWarning(r.data.market_warning||null);setTimingCap(r.data.timing_cap||null);setWatchlist(r.data.watchlist||[]);setMarketThemes(r.data.market_themes||[])}catch(e:any){console.error(e);setLoadError(true);if(isCurated)setData([])}setLoading(false);
     if(!curatedSymbols){try{const f=await api.get('/result/fusion',{params:{limit:50}});setFusionData(f.data.data||[])}catch{}try{const a=await api.get('/ambush-signals',{params:{limit:20}});setAmbushData(a.data.data||[])}catch{}loadHistory()}};
+  // v5.5: 页面加载时滚动到顶部
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+  }, []);
+
   useEffect(()=>{load()},[curatedSymbols,curatedDate]);
   useEffect(()=>{if(isCurated&&data.length>0&&Object.keys(batchScores).length===0)doBatchScore()},[data,isCurated]);
 
@@ -105,6 +111,9 @@ export default function ResultPage() {
       </div>
 
       {!isCurated&&<MarketGatingCard gateInfo={gateInfo}/>}
+
+      {/* ★ v4.9: 三层 Regime Dashboard */}
+      {!isCurated&&<RegimeDashboard/>}
 
       {/* ★ Phase 31: 自适应阈值信息 */}
       {gateInfo?.adaptive?.status==='adaptive'&&(
@@ -284,6 +293,11 @@ export default function ResultPage() {
                     Object.entries(r.dimension_scores).filter(([k])=>['fundamentals','kline_game','fund_flow','technical'].includes(k)).map(([k,v]:any)=><span key={'dim'+k} style={{fontSize:9,color:v?.raw!=null?(v.raw>0?C.green:C.red):C.textMuted}}>{k.replace('_',' ')}: {v?.score!=null?Number(v.score).toFixed(1):'?'}</span>)
                   }
                   {r.sector_bonus>0&&<span style={{fontSize:9,color:C.amber}}>板块:+{r.sector_bonus}</span>}
+                  {/* ★ v4.9: Regime 系数信息 */}
+                  {r.market_coef!=null&&r.sector_coef!=null&&<span style={{fontSize:9,padding:'1px 4px',borderRadius:2,background:'rgba(139,92,246,0.12)',color:'#a78bfa'}}>
+                    系数:{(r.market_coef*r.sector_coef).toFixed(2)}
+                    {r.regime_signal_cn&&<span style={{marginLeft:3}}>{r.regime_signal_cn}</span>}
+                  </span>}
                 </div>
               </td>
             </tr>}
