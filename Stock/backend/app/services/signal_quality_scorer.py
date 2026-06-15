@@ -658,16 +658,19 @@ async def quick_nm_scan(scan_date: str, progress_callback=None, scored_stocks: l
     if progress_callback:
         await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只高分...")
 
-    # 2. 并发下载分钟线 + NM 检测
+    # 2. 并发下载分钟线 + NM 检测 (v5.5: 提高并发+实时进度)
     from app.services.minute_on_demand import get_minute_bars
     from app.services.minute_nm_detector import detect_nm_pattern
 
-    sem = asyncio.Semaphore(10)  # v4.9: 降低并发避免连接池耗尽
+    sem = asyncio.Semaphore(30)  # v5.5: 提高并发加速检测
+    completed = 0
+    total = len(rows)
 
     async def _scan_one(idx, sym):
+        nonlocal completed
         async with sem:
             try:
-                bars = await get_minute_bars(sym, period='5min', days=5)  # v4.9: 减少到5天，加快速度
+                bars = await get_minute_bars(sym, period='5min', days=5)
                 if len(bars) < 100:
                     return sym, "insufficient"
                 nm = detect_nm_pattern(bars)
@@ -675,6 +678,11 @@ async def quick_nm_scan(scan_date: str, progress_callback=None, scored_stocks: l
             except Exception as e:
                 logger.warning(f"NM scan failed for {sym}: {e}")
                 return sym, "error"
+            finally:
+                completed += 1
+                if progress_callback and completed % 10 == 0:
+                    pct = int(completed / total * 100)
+                    await progress_callback("nm_defense", completed, total, extra=f"防伪检测 {completed}/{total} ({pct}%)")
 
     tasks = [_scan_one(i, sym) for i, (sym, _, _) in enumerate(rows)]
     results = await asyncio.gather(*tasks)
@@ -685,17 +693,19 @@ async def quick_nm_scan(scan_date: str, progress_callback=None, scored_stocks: l
         if r and r[0]:
             nm_verdicts[r[0]] = r[1]
 
-    # 3. 批量更新 scan_results
+    # 3. 批量更新 scan_results (v5.5: 使用批量执行)
     m_count = sum(1 for v in nm_verdicts.values() if v.startswith("M"))
     n_count = sum(1 for v in nm_verdicts.values() if v.startswith("N"))
 
-    async with async_session_factory() as s:
-        for sym, verdict in nm_verdicts.items():
-            await s.execute(text("""
-                UPDATE scan_results SET nm_verdict = :v
-                WHERE scan_date = :d AND symbol = :s
-            """), {"v": verdict, "d": scan_dt, "s": sym})
-        await s.commit()
+    if nm_verdicts:
+        async with async_session_factory() as s:
+            # 批量更新：55只股票很快
+            for sym, verdict in nm_verdicts.items():
+                await s.execute(text("""
+                    UPDATE scan_results SET nm_verdict = :v
+                    WHERE scan_date = :d AND symbol = :s
+                """), {"v": verdict, "d": scan_dt, "s": sym})
+            await s.commit()
 
     if progress_callback:
         verdict_msg = f"N:{n_count} M:{m_count} 中性:{len(nm_verdicts)-m_count-n_count}"
