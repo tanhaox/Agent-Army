@@ -615,15 +615,16 @@ TOP_N_DEFENSE = 25           # 只验证前 25 只高分信号
 # v4.9: 快速分钟线防伪 — TG 扫描后立即执行
 # ═══════════════════════════════════════════════════════════
 
-async def quick_nm_scan(scan_date: str, progress_callback=None) -> dict:
+async def quick_nm_scan(scan_date: str, progress_callback=None, scored_stocks: list = None) -> dict:
     """TG 扫描后快速分钟线防伪 (v4.9 流程改造).
 
-    扫描所有 L2/L3 信号，更新 scan_results.nm_verdict 字段。
+    扫描评分通过的股票列表，更新 scan_results.nm_verdict 字段。
     不调整分数，只标记 N/M 型。
 
     Args:
         scan_date: 扫描日期
         progress_callback: 进度回调函数
+        scored_stocks: deep_score 返回的高分股票列表（dict list，包含 symbol）
 
     Returns:
         {"nm_verdicts": {symbol: verdict}, "m_count": N, "n_count": N}
@@ -636,22 +637,26 @@ async def quick_nm_scan(scan_date: str, progress_callback=None) -> dict:
     else:
         scan_dt = scan_date
 
-    # v4.9: 只检测 L3 股票（高分信号），减少查询量
-    async with async_session_factory() as s:
-        r = await s.execute(text("""
-            SELECT DISTINCT sr.symbol, sr.name, sr.level
-            FROM scan_results sr
-            INNER JOIN analysis_scores ans ON sr.symbol = ans.symbol AND sr.scan_date = ans.scan_date
-            WHERE sr.scan_date = :d AND sr.level = 'L3'
-              AND ans.composite_score >= 40
-        """), {"d": scan_dt})
-        rows = [(row[0], row[1], row[2]) for row in r.fetchall()]
+    # v4.9: 优先使用传入的高分股票列表，否则从数据库查询
+    if scored_stocks:
+        rows = [(s["symbol"], s.get("name", ""), s.get("level", "")) for s in scored_stocks if s.get("symbol")]
+    else:
+        # 降级：从数据库查询评分 >= 70 的股票
+        async with async_session_factory() as s:
+            r = await s.execute(text("""
+                SELECT DISTINCT sr.symbol, sr.name, sr.level
+                FROM scan_results sr
+                INNER JOIN analysis_scores ans ON sr.symbol = ans.symbol AND sr.scan_date = ans.scan_date
+                WHERE sr.scan_date = :d AND sr.level IN ('L2', 'L3')
+                  AND ans.composite_score >= 70
+            """), {"d": scan_dt})
+            rows = [(row[0], row[1], row[2]) for row in r.fetchall()]
 
     if not rows:
-        return {"nm_verdicts": {}, "m_count": 0, "n_count": 0, "status": "no_scored_l2l3"}
+        return {"nm_verdicts": {}, "m_count": 0, "n_count": 0, "status": "no_scored"}
 
     if progress_callback:
-        await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只L3高分...")
+        await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只高分...")
 
     # 2. 并发下载分钟线 + NM 检测
     from app.services.minute_on_demand import get_minute_bars
