@@ -636,13 +636,13 @@ async def quick_nm_scan(scan_date: str, progress_callback=None) -> dict:
     else:
         scan_dt = scan_date
 
-    # v4.9: 只检测评分通过的股票 (composite_score >= 40)，减少查询量
+    # v4.9: 只检测 L3 股票（高分信号），减少查询量
     async with async_session_factory() as s:
         r = await s.execute(text("""
             SELECT DISTINCT sr.symbol, sr.name, sr.level
             FROM scan_results sr
             INNER JOIN analysis_scores ans ON sr.symbol = ans.symbol AND sr.scan_date = ans.scan_date
-            WHERE sr.scan_date = :d AND sr.level IN ('L2', 'L3')
+            WHERE sr.scan_date = :d AND sr.level = 'L3'
               AND ans.composite_score >= 40
         """), {"d": scan_dt})
         rows = [(row[0], row[1], row[2]) for row in r.fetchall()]
@@ -651,7 +651,7 @@ async def quick_nm_scan(scan_date: str, progress_callback=None) -> dict:
         return {"nm_verdicts": {}, "m_count": 0, "n_count": 0, "status": "no_scored_l2l3"}
 
     if progress_callback:
-        await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只高分L2/L3...")
+        await progress_callback("nm_defense", 0, len(rows), extra=f"分钟线防伪: 检测{len(rows)}只L3高分...")
 
     # 2. 并发下载分钟线 + NM 检测
     from app.services.minute_on_demand import get_minute_bars
