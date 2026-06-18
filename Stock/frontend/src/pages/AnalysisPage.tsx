@@ -462,7 +462,7 @@ export default function AnalysisPage() {
           <div><span style={{ color: '#c9d1d9' }}>30日</span> — 30个交易日内该股被推荐的累计次数</div>
           <div><span style={{ color: '#c9d1d9' }}>质量</span> — 护法反训练信号质量 (0~100%, 高=可靠, 低=假信号)</div>
           <div style={{ gridColumn: '1 / -1', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e2535' }}><span style={{ color: '#fbbf24', fontWeight: 600 }}>⭐ v7.0.32 新增</span></div>
-          <div><span style={{ color: '#c9d1d9' }}>MACD DIF/DEA</span> — MACD 指标 (>0 多头绿/&lt;0 空头红)</div>
+          <div><span style={{ color: '#c9d1d9' }}>MACD DIF/DEA</span> — MACD 指标 (&gt;0 多头绿/&lt;0 空头红)</div>
           <div><span style={{ color: '#c9d1d9' }}>KDJ J</span> — KDJ 指标 (&lt;20 超卖绿, &gt;80 超买红)</div>
           <div><span style={{ color: '#c9d1d9' }}>RSI 24</span> — 24 日 RSI (&lt;30 超卖, &gt;70 超买)</div>
           <div><span style={{ color: '#c9d1d9' }}>BOLL</span> — 布林带位置 0~1 (0.3-0.7 中性)</div>
