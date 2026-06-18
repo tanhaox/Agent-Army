@@ -1209,6 +1209,19 @@ async def _deep_persist_phase(session, results: list[dict], session_date) -> Non
             "sq": r.get("signal_quality", 0.5), "tsc": r.get("trend_score", 5),
             "esc": r.get("entry_score", 5), "sc": r.get("signal_count", 0),
             "sl": r.get("strategy_label", None),
+            # v7.0.32: 技术因子 14 字段
+            "macd_dif": r.get("macd_dif"), "macd_dea": r.get("macd_dea"),
+            "macd_bar": r.get("macd_bar"),
+            "kdj_k": r.get("kdj_k"), "kdj_d": r.get("kdj_d"), "kdj_j": r.get("kdj_j"),
+            "rsi_6": r.get("rsi_6"), "rsi_12": r.get("rsi_12"), "rsi_24": r.get("rsi_24"),
+            "boll_upper": r.get("boll_upper"), "boll_mid": r.get("boll_mid"),
+            "boll_lower": r.get("boll_lower"), "boll_width": r.get("boll_width"),
+            "boll_pos": r.get("boll_pos"),
+            "cci": r.get("cci"),
+            # 筹码 7 字段 (后续从 daily_chip_perf JOIN)
+            "cost_5pct": None, "cost_50pct": None, "cost_95pct": None,
+            "weight_avg": None, "winner_rate": None,
+            "cost_spread": None, "price_vs_cost": None,
         })
         tracking_params.append({
             "sd": session_date, "sym": r["symbol"], "rank": 0,
@@ -1219,19 +1232,81 @@ async def _deep_persist_phase(session, results: list[dict], session_date) -> Non
     from app.core.database import async_session_factory as _asf
     try:
         async with _asf() as ws:
+            # v7.0.32: 同步拉取技术/筹码字段 (从 daily_chip_perf JOIN)
+            chip_lookup = {}
+            symbols = [r.get("symbol") for r in results if r.get("symbol")]
+            if symbols:
+                chip_rows = await ws.execute(text("""
+                    SELECT ts_code, trade_date, cost_5pct, cost_50pct, cost_95pct, weight_avg, winner_rate
+                    FROM daily_chip_perf
+                    WHERE ts_code = ANY(:syms) AND trade_date = :sd
+                """), {"syms": symbols, "sd": analysis_params[0]['sd'] if analysis_params else None})
+                for c in chip_rows.fetchall():
+                    chip_lookup[c.ts_code] = dict(c)
+
+            # v7.0.32: 把新字段加进 params
+            for params in analysis_params:
+                sym = params['sym']
+                chip = chip_lookup.get(sym, {})
+                if chip:
+                    params['cost_5pct'] = chip.get('cost_5pct')
+                    params['cost_50pct'] = chip.get('cost_50pct')
+                    params['cost_95pct'] = chip.get('cost_95pct')
+                    params['weight_avg'] = chip.get('weight_avg')
+                    params['winner_rate'] = chip.get('winner_rate')
+                    # 算 cost_spread
+                    c5 = chip.get('cost_5pct')
+                    c95 = chip.get('cost_95pct')
+                    if c5 is not None and c95 is not None:
+                        params['cost_spread'] = c95 - c5
+                    # 算 price_vs_cost
+                    wavg = chip.get('weight_avg')
+                    if wavg and wavg > 0:
+                        # 找 close 价
+                        close_row = await ws.execute(text('''
+                            SELECT close FROM daily_kline
+                            WHERE ts_code = :s AND trade_date = :d
+                        '''), {"s": sym, "d": params['sd']})
+                        cr = close_row.first()
+                        if cr:
+                            params['price_vs_cost'] = (float(cr.close) - wavg) / wavg * 100
+                else:
+                    params['cost_5pct'] = None
+                    params['cost_50pct'] = None
+                    params['cost_95pct'] = None
+                    params['weight_avg'] = None
+                    params['winner_rate'] = None
+                    params['cost_spread'] = None
+                    params['price_vs_cost'] = None
+
             await ws.execute(text("""
                 INSERT INTO analysis_scores (
                     scan_date, symbol, name, tech_score, kline_score, fund_score,
                     sector_bonus, composite_score, fundamental_adjustment,
                     market_correction, details, archetype, weight_snapshot,
                     adjustment_reasons, dimension_scores, win_probability, downside_risk,
-                    signal_quality, trend_score, entry_score, signal_count, strategy_label
+                    signal_quality, trend_score, entry_score, signal_count, strategy_label,
+                    -- v7.0.32 新增 22 字段
+                    macd_dif, macd_dea, macd_bar,
+                    kdj_k, kdj_d, kdj_j,
+                    rsi_6, rsi_12, rsi_24,
+                    boll_upper, boll_mid, boll_lower, boll_width, boll_pos,
+                    cci,
+                    cost_5pct, cost_50pct, cost_95pct, weight_avg, winner_rate,
+                    cost_spread, price_vs_cost
                 ) VALUES (
                     :sd, :sym, :name, :ts, :ks, :fs,
                     :sb, :cs, :fa,
                     :mc, :det, :arch, :ws,
                     :ar, :dim, :wp, :dr,
-                    :sq, :tsc, :esc, :sc, :sl
+                    :sq, :tsc, :esc, :sc, :sl,
+                    :macd_dif, :macd_dea, :macd_bar,
+                    :kdj_k, :kdj_d, :kdj_j,
+                    :rsi_6, :rsi_12, :rsi_24,
+                    :boll_upper, :boll_mid, :boll_lower, :boll_width, :boll_pos,
+                    :cci,
+                    :cost_5pct, :cost_50pct, :cost_95pct, :weight_avg, :winner_rate,
+                    :cost_spread, :price_vs_cost
                 ) ON CONFLICT (scan_date, symbol) DO UPDATE SET
                     name=EXCLUDED.name, tech_score=EXCLUDED.tech_score,
                     kline_score=EXCLUDED.kline_score, fund_score=EXCLUDED.fund_score,
@@ -1248,7 +1323,19 @@ async def _deep_persist_phase(session, results: list[dict], session_date) -> Non
                     trend_score=EXCLUDED.trend_score,
                     entry_score=EXCLUDED.entry_score,
                     signal_count=EXCLUDED.signal_count,
-                    strategy_label=EXCLUDED.strategy_label
+                    strategy_label=EXCLUDED.strategy_label,
+                    -- v7.0.32: 同步更新新字段
+                    macd_dif=EXCLUDED.macd_dif, macd_dea=EXCLUDED.macd_dea, macd_bar=EXCLUDED.macd_bar,
+                    kdj_k=EXCLUDED.kdj_k, kdj_d=EXCLUDED.kdj_d, kdj_j=EXCLUDED.kdj_j,
+                    rsi_6=EXCLUDED.rsi_6, rsi_12=EXCLUDED.rsi_12, rsi_24=EXCLUDED.rsi_24,
+                    boll_upper=EXCLUDED.boll_upper, boll_mid=EXCLUDED.boll_mid,
+                    boll_lower=EXCLUDED.boll_lower, boll_width=EXCLUDED.boll_width,
+                    boll_pos=EXCLUDED.boll_pos,
+                    cci=EXCLUDED.cci,
+                    cost_5pct=EXCLUDED.cost_5pct, cost_50pct=EXCLUDED.cost_50pct,
+                    cost_95pct=EXCLUDED.cost_95pct, weight_avg=EXCLUDED.weight_avg,
+                    winner_rate=EXCLUDED.winner_rate,
+                    cost_spread=EXCLUDED.cost_spread, price_vs_cost=EXCLUDED.price_vs_cost
             """), analysis_params)
 
             await ws.execute(text("""

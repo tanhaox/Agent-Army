@@ -179,10 +179,22 @@ async def main():
                 d += td(days=1)
         else:
             logger.info(f"Latest chip data: {latest}")
-            # 同步今天
+            # 同步最新缺失的交易日 (从 latest+1 到今天)
+            # 修复 v7.0.32: 不能只同步今天, 因为今天可能没收盘
+            from datetime import timedelta as td
+            d = latest + td(days=1)
             today = date.today()
-            if today.weekday() < 5 and latest < today:
-                await sync_day(today.strftime("%Y%m%d"))
+            synced = 0
+            while d <= today:
+                if d.weekday() < 5:  # 工作日
+                    n = await sync_day(d.strftime("%Y%m%d"))
+                    if n > 0:
+                        synced += 1
+                d += td(days=1)
+            if synced == 0:
+                # 没新数据, 再回头试一次今天
+                if today.weekday() < 5 and latest < today:
+                    await sync_day(today.strftime("%Y%m%d"))
             else:
                 logger.info("Already up to date")
 
