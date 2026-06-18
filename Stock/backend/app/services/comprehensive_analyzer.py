@@ -282,7 +282,6 @@ def _enrich_dims_from_kline(deep: dict, daily: dict, market: str = "主板"):
     ma10 = float(np.mean(cs[-10:])) if n >= 10 else px
     ma20 = float(np.mean(cs[-20:])) if n >= 20 else px
     ma60 = float(np.mean(cs[-60:])) if n >= 60 else ma20
-
     dims = {}
 
     # 1. tech_score — RSI位置 (0-10)
@@ -362,14 +361,81 @@ def _enrich_dims_from_kline(deep: dict, daily: dict, market: str = "主板"):
     # 14. ambush_score (0-10)
     dims["ambush_score"] = 3.0
 
-    # 简易 composite: 15维加权平均
+    # === v7.0.32: 新增 5 维技术因子评分 ===
+    # 15. macd_score (0-10): MACD 多头加分, 空头减分
+    macd_dif = deep.get("macd_dif")
+    macd_dea = deep.get("macd_dea")
+    if macd_dif is not None and macd_dea is not None:
+        if macd_dif > 0 and macd_dea > 0:
+            dims["macd_score"] = 8.0  # 双多头
+        elif macd_dif > macd_dea:
+            dims["macd_score"] = 6.0  # 金叉中
+        elif macd_dif < 0 and macd_dea < 0:
+            dims["macd_score"] = 2.0  # 双空头
+        else:
+            dims["macd_score"] = 4.0  # 死叉中
+    else:
+        dims["macd_score"] = 5.0
+
+    # 16. kdj_score (0-10): J 值超卖加分, 超买减分
+    kdj_j = deep.get("kdj_j")
+    if kdj_j is not None:
+        if kdj_j < 20: dims["kdj_score"] = 9.0  # 严重超卖
+        elif kdj_j < 40: dims["kdj_score"] = 7.5  # 超卖
+        elif kdj_j < 60: dims["kdj_score"] = 6.0  # 偏弱
+        elif kdj_j < 80: dims["kdj_score"] = 5.0  # 中性
+        elif kdj_j < 100: dims["kdj_score"] = 3.0  # 偏强
+        else: dims["kdj_score"] = 1.5  # 严重超买
+    else:
+        dims["kdj_score"] = 5.0
+
+    # 17. boll_score (0-10): BOLL 位置 0.3-0.7 给高分
+    boll_pos = deep.get("boll_pos")
+    if boll_pos is not None:
+        if 0.3 <= boll_pos <= 0.7: dims["boll_score"] = 8.0  # 中部
+        elif 0.1 <= boll_pos < 0.3: dims["boll_score"] = 6.0  # 偏低
+        elif 0.7 < boll_pos <= 0.9: dims["boll_score"] = 5.0  # 偏高
+        elif boll_pos < 0.1: dims["boll_score"] = 4.0  # 触底
+        else: dims["boll_score"] = 3.0  # 触顶
+    else:
+        dims["boll_score"] = 5.0
+
+    # 18. cci_score (0-10): CCI 在 -100 ~ 100 区间给高分
+    cci_val = deep.get("cci")
+    if cci_val is not None:
+        if -100 <= cci_val <= 100: dims["cci_score"] = 7.0  # 正常区间
+        elif -200 <= cci_val < -100: dims["cci_score"] = 5.0  # 弱超卖
+        elif 100 < cci_val <= 200: dims["cci_score"] = 4.0  # 弱超买
+        elif cci_val < -200: dims["cci_score"] = 6.0  # 强超卖
+        else: dims["cci_score"] = 2.0  # 强超买
+    else:
+        dims["cci_score"] = 5.0
+
+    # 19. chip_score (0-10): 筹码成本适中 + 获利盘
+    cost_50 = deep.get("cost_50pct")
+    winner_rate = deep.get("winner_rate")
+    if cost_50 is not None and winner_rate is not None:
+        score = 5.0
+        if 5 < cost_50 < 100: score += 1.5  # 成本适中
+        if 30 < cost_50 < 80: score += 1.0  # 成本更佳
+        if winner_rate > 50: score += 1.5  # 多数获利
+        if winner_rate > 80: score += 0.5  # 极度获利
+        if cost_50 < 3: score -= 2.0  # 成本过低 (无主力)
+        dims["chip_score"] = max(0, min(10, score))
+    else:
+        dims["chip_score"] = 5.0
+
+    # 简易 composite: 19维加权平均 (v7.0.32: 14+5)
     weights = {
-        "tech_score": 3.0, "kline_score": 3.0, "fund_score": 2.5,
+        "tech_score": 2.5, "kline_score": 2.5, "fund_score": 2.0,
         "tg_momentum_score": 2.5, "vol_ratio_score": 2.0, "arbr_score": 1.5,
         "market_relative_score": 1.5, "valuation_score": 1.0,
-        "ma_trend_score": 1.5, "pattern_score": 1.5,
+        "ma_trend_score": 1.0, "pattern_score": 1.5,
         "trend_deviation_score": 1.5, "bbi_score": 1.5,
         "box_score": 2.0, "ambush_score": 1.5,
+        # v7.0.32 新增 5 维
+        "macd_score": 2.0, "kdj_score": 1.5, "boll_score": 1.0,
+        "cci_score": 0.5, "chip_score": 2.0,
     }
     total_w = sum(weights.values())
     weighted_sum = sum(dims.get(k, 5) * w for k, w in weights.items())
@@ -379,6 +445,9 @@ def _enrich_dims_from_kline(deep: dict, daily: dict, market: str = "主板"):
     deep["tech_score"] = deep.get("tech_score") or dims.get("tech_score", 5)
     deep["kline_score"] = deep.get("kline_score") or dims.get("kline_score", 5)
     deep["fund_score"] = deep.get("fund_score") or dims.get("fund_score", 5)
+    # v7.0.32: 5 维新评分也写回 deep (后续落库)
+    for new_dim in ["macd_score", "kdj_score", "boll_score", "cci_score", "chip_score"]:
+        deep[new_dim] = deep.get(new_dim) or dims.get(new_dim, 5)
     deep["dimension_scores"] = dims
     deep["archetype"] = deep.get("archetype") or "large_bluechip"
     deep["win_probability"] = deep.get("win_probability") or round(min(0.65, max(0.10, estimated_composite / 100)), 3)

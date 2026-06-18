@@ -19,9 +19,9 @@ DEFAULT_ARCHETYPE = "__global__"
 # 组 1: 子评分权重(决定各子评分在 composite 中的比重)
 # 注意: 所有子维度已归一化到 0-100 同尺度，权重直接可比
 GROUP_SCORING_WEIGHTS = {
-    "tech_weight": 3.5,        # 技术面
-    "kline_weight": 3.0,        # K线博弈
-    "fund_weight": 2.5,         # 资金面
+    "tech_weight": 2.5,        # 技术面 (v7.0.32 降权, 因为 RSI 已纳入 RSI 6/12/24 细化)
+    "kline_weight": 2.5,        # K线博弈
+    "fund_weight": 2.0,         # 资金面
     "fundamentals_weight": 1.5, # 基本面
     "valuation_weight": 1.0,    # 估值
     "real_fund_weight": 1.0,    # 真实资金流
@@ -45,6 +45,12 @@ GROUP_SCORING_WEIGHTS = {
     "weekly_resonance_weight": 0.5,
     "toplist_sector_weight": 0.5,
     "ambush_weight": 0.5,
+    # v7.0.32: 新增 5 维技术因子权重
+    "macd_weight": 2.0,         # MACD (趋势确认)
+    "kdj_weight": 1.5,          # KDJ (超买超卖)
+    "boll_weight": 1.0,         # BOLL 布林带 (价格位置)
+    "cci_weight": 0.5,          # CCI 顺势指标
+    "chip_weight": 2.0,         # 筹码分布 (主力成本)
 }
 # 组 2: TG 信号乘数(调整 TG 各维度的灵敏度)
 GROUP_TG_MULTIPLIERS = {

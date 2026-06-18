@@ -243,6 +243,9 @@ def _param_label(param: str) -> str:
         "vol_ratio_mult": "量比", "buy_strength_mult": "买入强度",
         "tg_momentum_weight": "TG动量权重",
         "sector_bonus_l2": "板块L2", "sector_bonus_l3": "板块L3",
+        # v7.0.32 新增 5 维
+        "macd_weight": "MACD", "kdj_weight": "KDJ",
+        "boll_weight": "BOLL", "cci_weight": "CCI", "chip_weight": "筹码",
     }
     return labels.get(param, param)
 
