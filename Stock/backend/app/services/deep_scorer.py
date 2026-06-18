@@ -5,6 +5,7 @@ Phases: preload → score → enrich → normalize → persist
 """
 import json as _json
 import logging
+import asyncio
 import numpy as np
 from datetime import date as dt_date, timedelta
 from sqlalchemy import text
@@ -75,6 +76,25 @@ DEFAULT_WEIGHTS = {
     "macro_forecast_surprise": 0.5,
 }
 
+# P2-2: regime 混合比例配置 (可调整 regime 权重对原型权重的影响程度)
+REGIME_BLEND_CONFIG = {
+    "blend_ratio": 0.5,      # regime 权重混入比例 (0.0=全原型, 1.0=全regime)
+    "enabled": True,          # 是否启用 regime 混合
+}
+
+# P2-3: regime 权重激活阈值配置 (来自 scoring_trainer.OVERFIT_THRESHOLD_CONFIG)
+REGIME_ACTIVATION_CONFIG = {
+    "min_samples": 50,        # 最小样本数
+    "min_params": 10,         # 最小参数数
+    "min_auc": 0.55,          # 最小 AUC
+}
+
+# ── Notebook Optimization: 批量处理限制 ──
+BATCH_CONFIG = {
+    "max_stocks_per_batch": 100,   # 单批次最大股票数
+    "kline_days": 120,             # K线历史天数（降低以节省内存）
+}
+
 _ARCH_RULES = {
     "large_bluechip": ["银行","保险","证券","金融","信托","白酒","食品","饮料","家电"],
     "growth_tech": ["半导体","芯片","元器件","通信","计算机设备","机械","机器人","光刻","PCB","制药","生物","医疗","医药","中药","创新药","CRO","器械","软件","互联网","IT服务","电信","传媒","游戏","数据","AI"],
@@ -107,6 +127,114 @@ def _derive_strategy_label(r: dict) -> str | None:
     if "speculative" in arch or "small" in arch:
         return "S3"
     return None
+
+
+def _apply_hard_rules(r: dict) -> tuple[list, list]:
+    """v7.0.30 (铁三角实测校准): 5 条死规则过滤假信号.
+
+    v7.0.30 校准 (基于 1915 行 verified_5d 实测 2026-06-18):
+      - R2 bias 阈值 -5% → -3% (实测更宽阈值,期望值提升 +239%)
+      - R3 bias 阈值 +5% → +10% (实测更宽阈值,胜率 -8.5%)
+      - R2/R3 对 archetype in ('value_defensive', 'cyclical_resource') 跳过
+        (周期股/价值股本来就在 MA20 下方操作,超跌反弹是机会,规则会误杀)
+      - R1/R4/R5 不变
+
+    数据基础 (实测 v7.0.30 验证):
+      单规则期望值差 (剔 1 票 vs 留 1 票):
+        R1 mcap<50亿:        +197.5%
+        R2 bias<-3%:         +239.7% ⭐⭐
+        R3 bias>10%:          +71.2%
+        R4 RSI>70:           +260.8% ⭐⭐⭐ (黄金规则)
+        R5 MA严格空头:        +152.7% ⭐⭐
+      累积 5 条 AND 应用:
+        TG 全部:    n=1915 wr=47.3% E=-29%
+        5 条全过:   n=649  wr=44.5% E=+5% (期望值由负转正)
+      跨年稳定性: 2024/2025/2026 三条主规则 Δwr 全为负,稳.
+
+    Rules (按期望值差排序, 黄金规则先):
+      R4 RSI 超买:   rsi > 70 → 剔除 (E 差 +260.8% ⭐⭐⭐)  # 黄金
+      R2 弱势股:     bias < -3% (价格远低于 MA20) → 剔除 (E 差 +239.7% ⭐⭐)
+      R1 微盘股:     mcap < 50 亿 → 剔除 (E 差 +197.5%)
+      R5 严格空头:   MA5<MA10<MA20 → 剔除 (E 差 +152.7% ⭐⭐)
+      R3 追高:       bias > 10% (价格远高于 MA20) → 剔除 (E 差 +71.2%)
+
+    Args:
+        r: 单只股票 deep_scorer 输出结果
+
+    Returns:
+        (passed_rules, failed_rules) 两个 list, 用于诊断
+    """
+    passed = []
+    failed = []
+
+    # R1 微盘股过滤
+    mcap = r.get("circulating_market_cap") or 0
+    if mcap > 0 and mcap < 50:
+        failed.append(("R1_micro_cap", f"流通市值 {mcap:.0f}亿 < 50亿"))
+    else:
+        passed.append("R1_micro_cap")
+
+    # R2 弱势股 (价格远低于 MA20, bias < -3%)
+    # v7.0.30: 阈值 -5% → -3%, value/cyclical archetype 跳过
+    bias = r.get("ma5_above_ma20_pct") or 0
+    arch = r.get("archetype", "")
+    if arch in ("value_defensive", "cyclical_resource"):
+        # 周期/价值股超跌反弹是机会, 规则不适用
+        passed.append("R2_weak_skipped_archetype")
+    elif bias < -3:
+        failed.append(("R2_weak", f"价格低于 MA20 {bias:.1f}%"))
+    else:
+        passed.append("R2_weak")
+
+    # R3 追高股 (bias > 10%)
+    # v7.0.30: 阈值 +5% → +10%, value/cyclical archetype 跳过
+    if arch in ("value_defensive", "cyclical_resource"):
+        passed.append("R3_chase_high_skipped_archetype")
+    elif bias > 10:
+        failed.append(("R3_chase_high", f"价格高于 MA20 {bias:.1f}%"))
+    else:
+        passed.append("R3_chase_high")
+
+    # R4 RSI 超买 (rsi > 70) - 黄金规则! 触发胜率仅 10%
+    rsi = r.get("rsi_14") or 0
+    if 0 < rsi > 70:
+        failed.append(("R4_rsi_overbought", f"RSI={rsi:.0f} > 70 (超买)"))
+    else:
+        passed.append("R4_rsi_overbought")
+
+    # R5 严格空头 (MA5<MA10<MA20) - 强规则
+    ma_align = r.get("ma_alignment_strict") or 0
+    if ma_align == 0:
+        failed.append(("R5_strong_bear", "MA5<MA10<MA20 严格空头"))
+    else:
+        passed.append("R5_strong_bear")
+
+    # === v7.0.32: 新增 3 条弱规则 (R6/R7/R8) ===
+    # 这些是"加分项"——失败不阻断, 但记录到 details 里给前端展示
+    # 优先级低于 R1-R5 主规则, 不参与 hard_rules_blocked 主推逻辑
+
+    # R6 MACD 空头 (DIF < 0)
+    macd_dif = r.get("macd_dif")
+    if macd_dif is not None and macd_dif < 0:
+        failed.append(("R6_macd_bear", f"MACD DIF={macd_dif:.2f} < 0 (空头)"))
+    else:
+        passed.append("R6_macd_bull")
+
+    # R7 KDJ 超买 (J > 80)
+    kdj_j = r.get("kdj_j")
+    if kdj_j is not None and kdj_j > 80:
+        failed.append(("R7_kdj_overbought", f"KDJ J={kdj_j:.0f} > 80 (超买)"))
+    else:
+        passed.append("R7_kdj_normal")
+
+    # R8 筹码成本过低 (cost_50pct < 5) - 提示无主力
+    cost_50 = r.get("cost_50pct")
+    if cost_50 is not None and cost_50 < 5:
+        failed.append(("R8_chip_too_low", f"筹码中位 {cost_50:.1f} < 5 (无主力)"))
+    else:
+        passed.append("R8_chip_normal")
+
+    return passed, failed
 
 
 derive_strategy_label = _derive_strategy_label
@@ -182,27 +310,35 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
     from app.core.database import async_session_factory as _asf
     scan_date_str = str(scan_date)
 
-    # 1. Preload fundamental scores (batch)
-    try:
-        await preload_fundamental_scores(symbols)
-    except Exception as e:
-        logger.warning(f"Fundamental preload failed: {e}")
+    # 1+2+3. Preload fundamental + patterns + ambush in parallel (v4.8)
+    import asyncio as _asyncio
 
-    # 2. Preload pattern signals (独立 session)
-    try:
-        from app.services.data_preloader import preload_patterns
-        async with _asf() as ps:
-            await preload_patterns(symbols, scan_date_str)
-    except Exception as e:
-        logger.warning(f"Pattern preload failed: {e}")
+    async def _preload_wrapper():
+        """并行预加载: fundamental 和 patterns+ambush 可同时运行"""
+        results = {"fundamental": None, "patterns": None, "ambush": None}
 
-    # 3. Preload ambush signals (独立 session)
-    try:
-        from app.services.data_preloader import preload_ambush
-        async with _asf() as ps:
-            await preload_ambush(symbols, scan_date_str)
-    except Exception as e:
-        logger.warning(f"Ambush preload failed: {e}")
+        async def _load_fundamental():
+            try:
+                await preload_fundamental_scores(symbols)
+                results["fundamental"] = "ok"
+            except Exception as e:
+                logger.warning(f"Fundamental preload failed: {e}")
+
+        async def _load_patterns_ambush():
+            try:
+                from app.services.data_preloader import preload_patterns, preload_ambush
+                async with _asf() as ps:
+                    await preload_patterns(symbols, scan_date_str)
+                results["patterns"] = "ok"
+                async with _asf() as ps2:
+                    await preload_ambush(symbols, scan_date_str)
+                results["ambush"] = "ok"
+            except Exception as e:
+                logger.warning(f"Pattern/ambush preload failed: {e}")
+
+        await _asyncio.gather(_load_fundamental(), _load_patterns_ambush())
+
+    await _preload_wrapper()
 
     # 4. Load scan_rows
     r = await session.execute(text(
@@ -215,20 +351,30 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
     scan_rows = {row[0]: row for row in r.fetchall()}
 
     # 5. Build fingerprints + classify
-    # v4.5: 用代码前缀 + 名称关键词做主分类 (fingerprint/stock_basic均缺失)
-    # v4.6: 添加 board 前缀 (主板/创业板), 目标10种原型
+    # v4.8: 优先从 stock_fingerprints 预建表读取原型 (省去每次重新构建)
     archetype_map: dict[str, str] = {}
     try:
-        from app.services.fingerprint_builder import build_fingerprints
-        from app.services.archetype_classifier import classify_stocks
-        fingerprints = await build_fingerprints(symbols)
-        archetype_map = await classify_stocks(symbols, fingerprints)
-        unique_archs = set(archetype_map.values())
-        # v4.6: 如果全是 fallback 原型, 用代码+名称回退以获取更多样性
-        if len(unique_archs) <= 1 or all(a == "large_bluechip" for a in unique_archs):
-            raise ValueError("Need diverse archetypes")
+        r = await session.execute(text(
+            "SELECT symbol, archetype FROM stock_fingerprints WHERE symbol = ANY(:syms)"
+        ), {"syms": symbols})
+        fp_rows = {row[0]: row[1] for row in r.fetchall()}
+        hit_count = sum(1 for s in symbols if s in fp_rows and fp_rows[s] != 'pending')
+        total = len(symbols)
+        logger.info(f"Fingerprint cache hit: {hit_count}/{total}")
+
+        if hit_count > max(10, total * 0.3):
+            # 覆盖率足够, 直接用
+            for s in symbols:
+                arch = fp_rows.get(s, "")
+                if arch and arch != "pending":
+                    archetype_map[s] = arch
+                else:
+                    archetype_map[s] = "large_bluechip"  # 缺数据的默认
+        else:
+            raise ValueError(f"Fingerprint coverage too low ({hit_count}/{total})")
     except Exception as e:
-        # 所有symbols去重后用代码前缀+名称分类
+        # Fallback: 代码前缀+名称关键词分类
+        logger.info(f"Fingerprint classify skipped ({e}), using code+name fallback")
         r = await session.execute(text(
             "SELECT DISTINCT ON (symbol) symbol, name, industry FROM scan_results WHERE symbol=ANY(:syms) ORDER BY symbol, scan_date DESC"
         ), {"syms": symbols})
@@ -238,11 +384,11 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
             name, ind = name_map.get(s, ("", ""))
             code = s[:3] if s else ""
 
-            # -- 确定 board (主板/创业板/科创板/北交所) --
+            # -- 确定 board --
             if code.startswith(("8","4")):
                 board = ""  # 北交所/新三板不分board前缀
             elif code.startswith("688"):
-                board = ""  # 科创板不分board前缀
+                board = "创业板_"
             elif code.startswith(("300","301")):
                 board = "创业板_"
             else:
@@ -250,24 +396,19 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
 
             # -- 按代码前缀 + 名称关键词分类 --
             if code.startswith("8") or code.startswith("4"):
-                arch = "small_speculative"  # 北交所/新三板
-            elif code.startswith("688"):
-                arch = "growth_tech"  # 科创板 (创业板_growth_tech 变体)
-                board = "创业板_"
-            elif code.startswith("300") or code.startswith("301"):
-                arch = "growth_tech"  # 创业板科技
+                arch = "small_speculative"
+            elif code.startswith("688") or code.startswith("300") or code.startswith("301"):
+                arch = "growth_tech"
             elif name and any(kw in name for kw in ["银行","保险","证券","金融","信托","白酒","食品","饮料","家电","乳业"]):
                 arch = "large_bluechip"
             elif name and any(kw in name for kw in ["石油","石化","煤炭","有色","钢铁","化工","稀土","锂业","矿业","黄金","铜","铝","水泥","玻璃","纸","化纤","能源","燃气","港口","公路","铁路","航空"]):
                 arch = "cyclical_resource"
             elif name and any(kw in name for kw in ["电力","水务","环保","建材","建筑","地产","农林","农业","纺织","旅游","酒店","百货","超市","医药","医疗","中药","制药","生物"]):
                 arch = "value_defensive"
-            elif name and any(kw in name for kw in ["科技","电子","半导体","芯片","通信","软件","互联网","机器人","光电","精密","智能","数字","数据","网络","信息","计算机","自动化"]):
-                arch = "growth_tech"
-            elif name and any(kw in name for kw in ["汽车","新能源","光伏","风能","电池","储能","材料"]):
+            elif name and any(kw in name for kw in ["科技","电子","半导体","芯片","通信","软件","互联网","机器人","光电","精密","智能","数字","数据","网络","信息","计算机","自动化","汽车","新能源","光伏","风能","电池","储能","材料"]):
                 arch = "growth_tech"
             elif code.startswith("6") or code.startswith("0"):
-                arch = "large_bluechip"  # 主板默认
+                arch = "large_bluechip"
             else:
                 arch = "growth_tech"
             archetype_map[s] = board + arch
@@ -277,9 +418,27 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
             dist[v] = dist.get(v, 0) + 1
         logger.info(f"Code+name archetype distribution: {dist}")
 
+    # 5.5. Determine current market regime (before weight resolution)
+    regime_name = None
+    try:
+        from app.services.market_gate import get_market_state
+        _ms = await get_market_state()
+        _regime_str = _ms.get("regime", "")
+        if "趋势上涨" in _regime_str or "结构行情" in _regime_str:
+            regime_name = "bull"
+        elif "恐慌" in _regime_str or "弱势" in _regime_str:
+            regime_name = "bear"
+        else:
+            regime_name = "range"
+    except Exception:
+        pass
+
     # 6. Resolve weights + beliefs per archetype
+    # v4.8: 加载 regime 权重 (bull/bear/range) 并与原型权重混合
     weights_map: dict[str, dict] = {}
     beliefs_map: dict[str, dict] = {}
+    regime_weights: dict[str, float] = {}
+    regime_available = False
     try:
         from app.services.archetype_param_resolver import resolve_scoring_weights
         from app.services.bayesian_optimizer import get_beliefs
@@ -288,8 +447,48 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
             beliefs = await get_beliefs(arch)
             beliefs_map[arch] = beliefs
             weights_map[arch] = resolve_scoring_weights(arch, beliefs)
+
+        # ── v4.8: 加载 regime 分段权重 ──
+        if regime_name:
+            rb = await get_beliefs(regime_name)
+            if rb:
+                # 安全门控: n≥50 + params≥10 + AUC≥0.55
+                regime_n_vals = [info.get("n", 0) if isinstance(info, dict) else 0
+                                 for info in rb.values()]
+                max_n = max(regime_n_vals) if regime_n_vals else 0
+                n_params = len([info for k, info in rb.items()
+                                if not k.startswith("__")])
+                auc_info = rb.get("__regime_auc__", {})
+                auc_val = auc_info.get("mu", 0) if isinstance(auc_info, dict) else 0
+
+                cfg = REGIME_ACTIVATION_CONFIG
+                if (max_n >= cfg["min_samples"] and n_params >= cfg["min_params"]
+                    and auc_val >= cfg["min_auc"]):
+                    for k, info in rb.items():
+                        if not k.startswith("__"):
+                            regime_weights[k] = info.get("mu", 1.0) if isinstance(info, dict) else float(info if info else 1.0)
+                    regime_available = True
+                    logger.info(
+                        f"Regime [{regime_name}] weights activated: "
+                        f"n={max_n}, params={n_params}, AUC={auc_val:.3f}"
+                    )
+                else:
+                    logger.info(
+                        f"Regime [{regime_name}] weights REJECTED: "
+                        f"n={max_n}/{cfg['min_samples']}, params={n_params}/{cfg['min_params']}, AUC={auc_val:.3f}/{cfg['min_auc']} → fallback to global"
+                    )
     except Exception as e:
         logger.warning(f"Weight/belief resolution failed: {e}")
+
+    # ── v4.8: 混合 regime 权重到每个原型的 weights_map ──
+    # P2-2: 使用可配置混合比例
+    if REGIME_BLEND_CONFIG["enabled"] and regime_available and regime_weights:
+        blend_ratio = REGIME_BLEND_CONFIG["blend_ratio"]
+        for arch in weights_map:
+            for rk, rv in regime_weights.items():
+                if rk in weights_map[arch]:
+                    original = weights_map[arch][rk]
+                    weights_map[arch][rk] = round(original * (1 - blend_ratio) + rv * blend_ratio, 4)
 
     # 7. Build industry map
     industry_map: dict[str, str] = {}
@@ -306,13 +505,15 @@ async def _deep_preload_phase(session, symbols: list[str], scan_date) -> dict:
         pass
 
     # 8. Batch-load K-line data（上界约束防止回扫时引入未来数据）
+    # ── Notebook: 限制 K 线天数以节省内存 ──
+    kline_days = BATCH_CONFIG["kline_days"]
     kline_batch: dict[str, dict] = {}
     try:
         r = await session.execute(text(
             "SELECT ts_code, trade_date, open, high, low, close, volume "
             "FROM daily_kline WHERE ts_code=ANY(:syms) AND trade_date >= :cut AND trade_date <= :scan_date "
             "ORDER BY ts_code, trade_date"
-        ), {"syms": symbols, "cut": scan_date - timedelta(days=250), "scan_date": scan_date})
+        ), {"syms": symbols, "cut": scan_date - timedelta(days=kline_days), "scan_date": scan_date})
         import pandas as pd
         rows = r.fetchall()
         for row in rows:
@@ -689,11 +890,18 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
         r["proto_win_rate"] = round(proto_wr, 1)
         r["proto_discount"] = round(proto_discount, 2)
 
-        # ── Sector bonus ──
+        # ── Sector bonus (v4.8: preload sector rankings once per batch) ──
         sector_bonus = 0.0
         try:
-            from app.services.sector_heat_engine import get_stock_sector_factor
-            sf = await get_stock_sector_factor(sym)
+            from app.services.sector_heat_engine import get_stock_sector_factor, get_sector_rankings, detect_theme_lifecycle
+            if "_sector_preload" not in ctx:
+                ctx["_sector_preload"] = {
+                    "rankings": await get_sector_rankings(),
+                    "theme": await detect_theme_lifecycle(),
+                }
+            sf = await get_stock_sector_factor(sym,
+                preloaded_rankings=ctx["_sector_preload"]["rankings"],
+                preloaded_theme=ctx["_sector_preload"]["theme"])
             if sf:
                 if sf.get("heat_level") == "hot":
                     sector_bonus = weights.get("sector_bonus_l3", 1.5)
@@ -706,14 +914,30 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
         # ── ✦ Macro impact (precomputed Tier 1, shared by all stocks) ──
         r["macro_adjustment"] = round(float(macro_adj), 1)
 
-        # ── Event impact ──
+        # ── Event impact (v4.8: 替换为 Tushare 宏观数据) ──
+        # 旧方案: score_event_impact() 读取空白的 stock_events 表
+        # 新方案: compute_sector_macro_score() 使用 Tushare 宏观数据
         event_impact = 0.0
+        event_label = ""
         try:
-            from app.services.event_detector import score_event_impact
-            event_impact = await score_event_impact(sym)
+            from app.services.macro_data import compute_sector_macro_score
+            sector_name = r.get("industry") or r.get("sector") or ""
+            if sector_name:
+                sector_score, _ = await compute_sector_macro_score(sector_name)
+                # 宏观得分映射到事件影响: -3~+3 → -9~+9
+                event_impact = round(sector_score * 3, 1)
+                if sector_score > 1:
+                    event_label = f"宏观利好+{sector_score:.1f}"
+                elif sector_score < -1:
+                    event_label = f"宏观利空{sector_score:.1f}"
+                elif sector_score > 0.5:
+                    event_label = "宏观偏多"
+                elif sector_score < -0.5:
+                    event_label = "宏观偏空"
         except Exception:
             pass
         r["event_impact"] = round(float(event_impact), 1)
+        r["event_label"] = event_label
 
         # ── Market correction (含宏观调整) ──
         regime = market_state.get("regime", "unknown")
@@ -796,92 +1020,71 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
     except Exception as e:
         logger.warning(f"Sector context unavailable, skipping: {e}")
 
-    # ── Phase 49a/52: 新闻信号加权 (news_aggregated → composite_score, 三级门控) ──
+    # ── v4.8: 宏观信号加权 (Tushare 宏观数据 → composite_score) ──
+    # 旧方案: 读取空白的 news_aggregated/news_verify 表
+    # 新方案: 使用 Tushare 宏观数据 + 板块暴露系数
     try:
-        import json
-        from datetime import date as _dt
-        from app.core.database import async_session_factory as _asf2
-        _scan_d = _dt.fromisoformat(scan_date_str) if isinstance(scan_date_str, str) else scan_date_str
+        from app.services.macro_data import compute_sector_macro_score
 
-        async with _asf2() as ns_session:  # 独立 session 避免管线事务污染
-            # 加载已验证的有效映射
-            active_map: set[tuple[str, str, str]] = set()
+        # 按板块分组处理 (同板块只计算一次)
+        sector_cache: dict[str, tuple[float, str]] = {}
+        for r in results:
+            sector = r.get("industry") or r.get("sector") or ""
+            if not sector or sector in sector_cache:
+                continue
             try:
-                r_nv = await ns_session.execute(text(
-                    "SELECT commodity, direction, symbol FROM news_verify WHERE is_active = TRUE"
-                ))
-                for nv_row in r_nv.fetchall():
-                    active_map.add((nv_row[0], nv_row[1], nv_row[2]))
+                score, _ = await compute_sector_macro_score(sector)
+                if score > 1:
+                    label = f"宏观利好+{score:.1f}"
+                elif score < -1:
+                    label = f"宏观利空{score:.1f}"
+                elif score > 0.5:
+                    label = "宏观偏多"
+                elif score < -0.5:
+                    label = "宏观偏空"
+                else:
+                    label = "宏观中性"
+                sector_cache[sector] = (score, label)
             except Exception:
                 pass
 
-            r_news = await ns_session.execute(text("""
-                SELECT na.commodity, na.direction, na.intensity, na.stocks_json, na.category
-                FROM news_aggregated na WHERE na.date = :d
-            """), {"d": _scan_d})
-            news_rows = r_news.fetchall()
+        applied = 0
+        for r in results:
+            sector = r.get("industry") or r.get("sector") or ""
+            if sector and sector in sector_cache:
+                score, label = sector_cache[sector]
+                # 映射到 composite_score 调整: -3~+3 → -9~+9
+                adj = round(score * 3, 1)
+                r["composite_score"] = round(max(0, min(100, r.get("composite_score", 50) + adj)), 1)
+                r["news_signal"] = label
+                applied += 1
 
-            if not news_rows:
-                return results  # clean exit — no news to inject
-
-            # 构建 symbol → news adjustments 快速查找表
-            news_adj: dict[str, list[tuple[str, float, str, str]]] = {}
-            tier_counts = {"verified": 0, "commodity": 0, "minimal": 0}
-            for row in news_rows:
-                commodity = row[0]
-                direction = row[1]
-                intensity = float(row[2])
-                stocks_json = row[3]
-                category = row[4]
-                if not stocks_json:
-                    continue
-                try:
-                    stocks = json.loads(stocks_json) if isinstance(stocks_json, str) else stocks_json
-                except Exception:
-                    continue
-                multiplier = 3 if category in ("policy", "macro") else 1
-                for sym in stocks:
-                    key = (commodity, direction, sym)
-                    # Phase 52: 三级门控
-                    if active_map and key in active_map:
-                        tier = 1.0;   tier_counts["verified"] += 1
-                    elif category == "commodity":
-                        tier = 0.3;   tier_counts["commodity"] += 1
-                    else:
-                        tier = 0.1;   tier_counts["minimal"] += 1
-
-                    adj = round(intensity * multiplier * tier * (3 if direction == "利好" else -3), 1)
-                    label = f"{commodity}{direction}×{intensity:.2f}"
-                    news_adj.setdefault(sym, []).append((adj, intensity, label, category))
-
-            # 应用到 results
-            applied = 0
-            for r in results:
-                sym = r["symbol"]
-                sym_adjs = news_adj.get(sym, [])
-                if sym_adjs:
-                    best = max(sym_adjs, key=lambda x: abs(x[0]))
-                    adj_val, intensity, label, category = best
-                    r["composite_score"] = round(max(0, min(100, r.get("composite_score", 50) + adj_val)), 1)
-                    r["news_signal"] = label
-                    applied += 1
-
-            if applied:
-                logger.info(f"Phase 52: news applied to {applied}/{len(results)} stocks "
-                           f"(v={tier_counts['verified']} c={tier_counts['commodity']} "
-                           f"m={tier_counts['minimal']})")
+        if applied:
+            logger.info(f"v4.8 macro signals: applied to {applied}/{len(results)} stocks "
+                       f"(sectors={len(sector_cache)})")
     except Exception as e:
-        logger.debug(f"News signals unavailable: {e}")
+        logger.debug(f"Macro signals unavailable: {e}")
 
     return results
 
 
 # ═══════════ Phase 4: Normalize ═══════════
 
-def _deep_normalize_phase(results: list[dict]) -> list[dict]:
-    """Normalize within archetype, compute composite_score, calibrate probability."""
+def _deep_normalize_phase(results: list[dict], market_coef: float = 1.0, sector_coefs: dict = None) -> list[dict]:
+    """Normalize within archetype, compute composite_score, calibrate probability.
+
+    v4.9: 增加三层 Regime 系数调整 (market × sector × stock).
+
+    Args:
+        results: 评分结果列表
+        market_coef: 大盘系数 (默认 1.0)
+        sector_coefs: 板块系数字典 {sector_code: coef}
+    """
     if not results:
         return results
+
+    if sector_coefs is None:
+        sector_coefs = {}
 
     # Normalize within archetype
     results = _normalize_within_archetype(results)
@@ -896,6 +1099,25 @@ def _deep_normalize_phase(results: list[dict]) -> list[dict]:
         # Composite = normalized base + sector bonus + event impact + fundamental adj
         composite = r.get("composite_score", raw_total) + sector_bonus * 1.5 + event_impact * 0.3 + funda_adj
         r["composite_score"] = round(float(np.clip(composite, 0, 100)), 1)
+
+        # ── v4.9: 三层 Regime 系数调整 ──
+        # 获取个股对应的板块系数
+        sector_code = r.get("sector_code")  # 需要外部传入
+        s_coef = sector_coefs.get(sector_code, 1.0) if sector_code else 1.0
+
+        # 计算最终系数
+        from app.services.regime_engine import calc_final_coef
+        final_result = calc_final_coef(market_coef, s_coef, 1.0)  # 个股系数默认 1.0
+        r["market_coef"] = final_result["market_coef"]
+        r["sector_coef"] = final_result["sector_coef"]
+        r["final_regime_coef"] = final_result["final_coef"]
+        r["regime_signal"] = final_result["signal"]
+        r["regime_signal_cn"] = final_result["signal_cn"]
+
+        # 应用最终系数调整 composite_score
+        r["regime_adjusted_score"] = round(float(np.clip(
+            r["composite_score"] * final_result["final_coef"], 0, 100)), 1)
+        # ── v4.9 end ──
 
         # Probability calibration
         try:
@@ -918,6 +1140,9 @@ def _deep_normalize_phase(results: list[dict]) -> list[dict]:
         r["entry_score"] = dims.get("multi_box", {}).get("score", 5.0)
         r["downside_risk"] = dims.get("downside_risk", {}).get("score", 5.0)
 
+        # ── v7.0.10: v2 字段占位 (v2 实际调用在 deep_analyze 主函数批量执行) ──
+        r["v2_active"] = False  # 默认 v1 模式, 主函数会按 feature_flag 覆盖
+
     return results
 
 
@@ -926,16 +1151,75 @@ def _deep_normalize_phase(results: list[dict]) -> list[dict]:
 async def _deep_persist_phase(session, results: list[dict], session_date) -> None:
     """UPSERT analysis_scores + INSERT recommendation_tracking.
 
-    v4.12: 每个 INSERT 用 savepoint 隔离，一行失败不影响其他行.
-    v4.13: 如果 session 事务已被 abort，回滚并重新开始.
+    v4.8: 批量 executemany 减少 roundtrip (使用独立session避免事务abort影响).
     """
     import json
 
+    if not results:
+        return
+
+    # ── 构建参数列表 ──
+    analysis_params = []
+    tracking_params = []
     for r in results:
-        sym = r["symbol"]
-        try:
-            # UPSERT analysis_scores
-            await session.execute(text("""
+        analysis_params.append({
+            "sd": session_date, "sym": r["symbol"],
+            "name": r.get("name", r["symbol"]),
+            "ts": r.get("tech_score", 5.0), "ks": r.get("kline_score", 5.0),
+            "fs": r.get("fund_score", 5.0), "sb": r.get("sector_bonus", 0),
+            "cs": r.get("composite_score", 50), "fa": r.get("fundamental_adjustment", 0),
+            "mc": r.get("market_correction", ""),
+            "det": json.dumps(sanitize_for_json({
+                "dimension_scores": r.get("dimension_scores", {}),
+                "predicted_return": r.get("predicted_return"),
+                "predicted_win_prob": r.get("predicted_win_prob"),
+                "macro_adjustment": r.get("macro_adjustment", 0),
+                "relative_position": r.get("relative_position"),
+                "sector_direction": r.get("sector_direction"),
+                "sector_lifecycle": r.get("sector_lifecycle"),
+                "sector_rank_5d": r.get("sector_rank_5d"),
+                "market_5d": r.get("market_5d"),
+                "news_signal": r.get("news_signal"),
+                "limit_up_flag": r.get("limit_up_flag"),
+                "rank_score": r.get("rank_score"),
+                # ── v4.9: 三层 Regime 系数 ──
+                "market_coef": r.get("market_coef", 1.0),
+                "sector_coef": r.get("sector_coef", 1.0),
+                "final_regime_coef": r.get("final_regime_coef", 1.0),
+                "regime_signal": r.get("regime_signal", "neutral"),
+                "regime_signal_cn": r.get("regime_signal_cn", "中性"),
+                # ── v7.0.10: v2 持仓期建议 (写入 details 供 /result/final 读取) ──
+                "v2_active": r.get("v2_active", False),
+                "best_horizon": r.get("best_horizon"),
+                "best_strategy": r.get("best_strategy"),
+                "v2_advice": r.get("v2_advice"),
+                "v2_net": r.get("v2_net"),
+                # ── v7.0.30: 铁三角死规则 (写入 details 供 /result/final 读取) ──
+                "hard_rules_passed": r.get("hard_rules_passed", []),
+                "hard_rules_failed": r.get("hard_rules_failed", []),
+                "hard_rules_blocked": r.get("hard_rules_blocked", False),
+                "hard_rules_summary": r.get("hard_rules_summary", ""),
+                "v7_version": "v7.0.30",
+            })),
+            "arch": r.get("archetype", "small_speculative"),
+            "ws": json.dumps(sanitize_for_json(r.get("weight_snapshot", {}))),
+            "ar": json.dumps(sanitize_for_json(r.get("adjustment_reasons", []))),
+            "dim": json.dumps(sanitize_for_json(r.get("dimension_scores", {}))),
+            "wp": r.get("win_probability", 0.35), "dr": r.get("downside_risk", 5.0),
+            "sq": r.get("signal_quality", 0.5), "tsc": r.get("trend_score", 5),
+            "esc": r.get("entry_score", 5), "sc": r.get("signal_count", 0),
+            "sl": r.get("strategy_label", None),
+        })
+        tracking_params.append({
+            "sd": session_date, "sym": r["symbol"], "rank": 0,
+            "cs": r.get("composite_score", 50), "cp": r.get("close_price", 0),
+        })
+
+    # ── 使用独立session批量写入, 避免父session事务abort影响 ──
+    from app.core.database import async_session_factory as _asf
+    try:
+        async with _asf() as ws:
+            await ws.execute(text("""
                 INSERT INTO analysis_scores (
                     scan_date, symbol, name, tech_score, kline_score, fund_score,
                     sector_bonus, composite_score, fundamental_adjustment,
@@ -965,74 +1249,19 @@ async def _deep_persist_phase(session, results: list[dict], session_date) -> Non
                     entry_score=EXCLUDED.entry_score,
                     signal_count=EXCLUDED.signal_count,
                     strategy_label=EXCLUDED.strategy_label
-            """), {
-                "sd": session_date,
-                "sym": sym,
-                "name": r.get("name", sym),
-                "ts": r.get("tech_score", 5.0),
-                "ks": r.get("kline_score", 5.0),
-                "fs": r.get("fund_score", 5.0),
-                "sb": r.get("sector_bonus", 0),
-                "cs": r.get("composite_score", 50),
-                "fa": r.get("fundamental_adjustment", 0),
-                "mc": r.get("market_correction", ""),
-                "det": json.dumps(sanitize_for_json({
-                    "dimension_scores": r.get("dimension_scores", {}),
-                    "predicted_return": r.get("predicted_return"),
-                    "predicted_win_prob": r.get("predicted_win_prob"),
-                    "macro_adjustment": r.get("macro_adjustment", 0),
-                    # Phase 26e: 三层相对强弱
-                    "relative_position": r.get("relative_position"),
-                    "sector_direction": r.get("sector_direction"),
-                    "sector_lifecycle": r.get("sector_lifecycle"),
-                    "sector_rank_5d": r.get("sector_rank_5d"),
-                    "market_5d": r.get("market_5d"),
-                    # Phase 49a: 新闻信号
-                    "news_signal": r.get("news_signal"),
-                    "limit_up_flag": r.get("limit_up_flag"),
-                    # Phase 55: 排序分
-                    "rank_score": r.get("rank_score"),
-                })),
-                "arch": r.get("archetype", "small_speculative"),
-                "ws": json.dumps(sanitize_for_json(r.get("weight_snapshot", {}))),
-                "ar": json.dumps(sanitize_for_json(r.get("adjustment_reasons", []))),
-                "dim": json.dumps(sanitize_for_json(r.get("dimension_scores", {}))),
-                "wp": r.get("win_probability", 0.35),
-                "dr": r.get("downside_risk", 5.0),
-                "sq": r.get("signal_quality", 0.5),
-                "tsc": r.get("trend_score", 5),
-                "esc": r.get("entry_score", 5),
-                "sc": r.get("signal_count", 0),
-                "sl": r.get("strategy_label", None),
-            })
+            """), analysis_params)
 
-            # INSERT recommendation_tracking
-            await session.execute(text("""
+            await ws.execute(text("""
                 INSERT INTO recommendation_tracking (scan_date, symbol, rank, composite_score, close_price)
                 VALUES (:sd, :sym, :rank, :cs, :cp)
                 ON CONFLICT (scan_date, symbol) DO UPDATE SET
                     composite_score=EXCLUDED.composite_score, close_price=EXCLUDED.close_price
-            """), {
-                "sd": session_date,
-                "sym": sym,
-                "rank": 0,
-                "cs": r.get("composite_score", 50),
-                "cp": r.get("close_price", 0),
-            })
-        except Exception as e:
-            logger.error(f"Persist failed for {sym}: {e}")
-            try:
-                await session.rollback()  # 回滚 abort 的事务
-            except Exception:
-                pass  # 事务已清
-            continue  # 下一行重建连接
+            """), tracking_params)
 
-    try:
-        await session.commit()
-        logger.info(f"Persisted {len(results)} analysis scores for {session_date}")
+            await ws.commit()
+            logger.info(f"Persisted {len(results)} analysis scores for {session_date}")
     except Exception as e:
-        logger.error(f"Commit failed: {e}")
-        await session.rollback()
+        logger.error(f"Batch persist failed for {session_date}: {e}")
 
 
 # ═══════════ Main Orchestrator ═══════════
@@ -1067,15 +1296,16 @@ async def deep_analyze(session, scan_date=None, session_date=None, min_composite
     l1_count, total_count = r.fetchone()
     if l1_count:
         logger.info(f"Phase 47: filtering {l1_count}/{total_count} L1 weak signals")
-    r = await session.execute(text(
-        "SELECT symbol FROM scan_results "
-        "WHERE scan_date=:d AND COALESCE(level,'L1') != 'L1' ORDER BY symbol"
-    ), {"d": scan_date})
+    # v4.9: 只过滤L1，nm_verdict检查在评分后执行
+    r = await session.execute(text("""
+        SELECT symbol FROM scan_results
+        WHERE scan_date=:d AND COALESCE(level,'L1') != 'L1'
+        ORDER BY symbol
+    """), {"d": scan_date})
     symbols = [row[0] for row in r.fetchall()]
     if not symbols:
-        logger.warning(f"No scan results for {scan_date}")
+        logger.warning(f"No scan results (non-L1) for {scan_date}")
         return []
-
     # ── Phase 69: 涨跌停入口过滤 — 涨停封板股直接排除, 不进评分管线 ──
     r_chg = await session.execute(text("""
         WITH latest AS (
@@ -1121,7 +1351,74 @@ async def deep_analyze(session, scan_date=None, session_date=None, min_composite
 
     # Phase 4: Normalize
     if progress_cb: await progress_cb("normalize", 4, 5, "组内归一化+模型预测...")
-    results = _deep_normalize_phase(results)
+
+    # ── v4.9: 获取三层 Regime 系数 ──
+    from app.services.regime_judger import get_regime_v2, REGIME_COEF
+    from app.services.sector_regime import get_cached_regimes
+
+    market_detail = await get_regime_v2(scan_date)
+    market_coef = REGIME_COEF.get(market_detail.get("regime", "range"), 1.0)
+    sector_regimes = await get_cached_regimes()
+    sector_coefs = {code: info.get("coef", 1.0) for code, info in sector_regimes.items()}
+    # ── v4.9 end ──
+
+    results = _deep_normalize_phase(results, market_coef=market_coef, sector_coefs=sector_coefs)
+
+    # ── v7.0.10: v2 feature_flag 批量分支 ──
+    # v2 关闭时: 完全跳过, 0 延迟 (v1 14 维评分不受影响)
+    # v2 开启时: 批量并发调 predict_optimal_horizon (asyncio.gather)
+    try:
+        from app.core.feature_flag import is_v2_active
+        if await is_v2_active() and results:
+            from app.services.deep_scorer_v2 import predict_optimal_horizon
+            symbols = [r.get("symbol") for r in results if r.get("symbol")]
+            v2_results = await asyncio.gather(
+                *[predict_optimal_horizon(s) for s in symbols],
+                return_exceptions=True
+            )
+            for r, v2r in zip(results, v2_results):
+                if isinstance(v2r, Exception):
+                    r["v2_active"] = False
+                    r["v2_error"] = str(v2r)[:100]
+                    continue
+                if v2r and v2r.get("status") == "success":
+                    r["best_horizon"] = v2r.get("best_horizon")
+                    r["best_strategy"] = v2r.get("best_strategy")
+                    r["v2_advice"] = v2r.get("advice", "")
+                    r["v2_net"] = v2r.get("best_net", 0.0)
+                    r["v2_active"] = True
+                    # v7.0.16: 4-horizon 评分 (基于 verified 实际收益)
+                    r["score_4h"] = v2r.get("score_4h", 6)  # 6-10
+                    r["score_4h_detail"] = v2r.get("score_4h_detail", {})
+                else:
+                    r["best_horizon"] = None
+                    r["v2_active"] = True  # flag 开但 no_data
+    except Exception as e:
+        # v2 全链路失败 → 降级 v1 (不影响主流程)
+        logger.warning(f"v2 feature_flag branch failed: {e}")
+        for r in results:
+            r.setdefault("v2_active", False)
+
+    # ★ v7.0.30 (铁三角实测校准): 死规则过滤器
+    # 5 条硬规则剔除假信号 (不依赖 v2, 不依赖 ML, 基于 1915 行 verified_5d 验证)
+    # v7.0.30: R2/R3 对 value_defensive / cyclical_resource 跳过; 阈值 -5%/-3%, +5%/+10%
+    try:
+        for r in results:
+            rules_passed, rules_failed = _apply_hard_rules(r)
+            r["hard_rules_passed"] = rules_passed
+            r["hard_rules_failed"] = rules_failed
+            r["hard_rules_blocked"] = len(rules_failed) > 0
+            # 给人/前端看的一句话总结
+            if rules_failed:
+                r["hard_rules_summary"] = "❌ " + ", ".join(
+                    f"{code}({reason})" for code, reason in rules_failed
+                )
+            else:
+                r["hard_rules_summary"] = f"✅ 通过 {len(rules_passed)}/{len(rules_passed)+len(rules_failed)} 条"
+    except Exception as e:
+        logger.warning(f"hard rules filter failed: {e}")
+        for r in results:
+            r.setdefault("hard_rules_blocked", False)
 
     # ★ Predictive model blend (v4.8): 仅在 <=300 条时启用 (scan 路径样本太多)
     if len(results) <= 300:
