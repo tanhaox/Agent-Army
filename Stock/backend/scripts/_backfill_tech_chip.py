@@ -32,7 +32,7 @@ DSN = settings.DATABASE_URL.replace('postgresql+asyncpg://', 'postgresql://')
 BATCH_SIZE = 500
 
 
-def calc_tech_at_date(close, high, low, idx):
+def backfill_tech_at_date(close, high, low, idx):
     """算在 idx 当天的 MACD/KDJ/RSI/BOLL/CCI."""
     close = close.iloc[:idx + 1]
     high = high.iloc[:idx + 1]
@@ -168,7 +168,7 @@ async def main():
                 if idx is None or idx < 20:
                     continue
                 try:
-                    tech = calc_tech_at_date(close_s, high_s, low_s, idx)
+                    tech = backfill_tech_at_date(close_s, high_s, low_s, idx)
                 except Exception as e:
                     continue
                 # 筹码

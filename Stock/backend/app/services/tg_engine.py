@@ -1,6 +1,13 @@
-"""TG 全市场扫描引擎 — 两阶段：下载新数据 → 本地扫描  → 周线信号叠加."""
+"""TG 全市场扫描引擎 — 两阶段：下载新数据 → 本地扫描  → 周线信号叠加.
+
+v7.0.11: TGIndicator.compute() 是纯 CPU 密集 (603 字符纯 pandas/numpy),
+           5000 只股票单循环串行只用了 1/32 核. 用 ProcessPoolExecutor 并行化 8-16 倍.
+"""
 import logging, pandas as pd
 import numpy as np
+import os
+import asyncio
+import concurrent.futures as cf
 from datetime import date, datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,14 +70,15 @@ async def get_kline_coverage(trade_date: date) -> tuple[int, int]:
 
 # ── 阶段一：下载最新日线数据 ──────────────────────
 
-async def download_latest_kline(progress_callback=None) -> int:
+async def download_latest_kline(progress_callback=None) -> tuple[int, list[str]]:
     """从 Tushare 下载所有股票的最新日线数据(智能批量模式).
 
     优先使用批量模式(一次 API 调用获取全部股票)，
     如数据被截断则回退到并发批量模式(15只股票并发，无单股sleep)。
-    返回插入的新行数。
+    返回 (插入的新行数, 更新的股票代码列表).
     """
     latest_date = await get_latest_kline_date()
+    updated_symbols: list[str] = []  # P2-6: 追踪更新的股票
     if latest_date is None:
         start_date = (date.today() - timedelta(days=365)).strftime("%Y%m%d")
     else:
@@ -78,7 +86,7 @@ async def download_latest_kline(progress_callback=None) -> int:
 
     end_date = date.today().strftime("%Y%m%d")
 
-    # 覆盖率检查：总是检查最新日期覆盖率 (Phase 36 修复)
+    # 覆盖率检查：总是检查最新日期覆盖率 (Phase 36 修复, v4.8: 缺失时回退 1 年)
     skip_download = False
     if latest_date is not None:
         covered, total = await get_kline_coverage(latest_date)
@@ -88,13 +96,14 @@ async def download_latest_kline(progress_callback=None) -> int:
             logger.info("K-line data is up to date, skipping download")
             skip_download = True
         elif coverage_pct < 95.0:
-            logger.warning(f"Coverage {coverage_pct:.1f}% < 95%, backfilling from {latest_date}")
-            start_date = latest_date.strftime("%Y%m%d")
+            # v4.8: 覆盖率不足, 回退到 1 年前重新下载 (避免漏掉中间缺失日)
+            start_date = (date.today() - timedelta(days=365)).strftime("%Y%m%d")
+            logger.warning(f"Coverage {coverage_pct:.1f}% < 95%, backfilling from {start_date}")
 
     if skip_download:
         if progress_callback:
             await progress_callback("download", 0, 0, extra=f"数据已是最新(覆盖率{covered}/{total})，跳过下载")
-        return 0
+        return 0, updated_symbols
 
     from datetime import datetime as dt
     logger.info(f"Downloading kline from {start_date} to {end_date}")
@@ -123,15 +132,17 @@ async def download_latest_kline(progress_callback=None) -> int:
     if not trading_days:
         if progress_callback:
             await progress_callback("download", 0, 0, extra="无交易日需要下载")
-        return 0
+        return 0, []
 
     total_days = len(trading_days)
     if progress_callback:
         await progress_callback("download", 0, total_days, extra=f"将下载 {total_days} 个交易日数据...")
 
-    async def _insert_rows(rows: list[dict]) -> int:
+    async def _insert_rows(rows: list[dict]) -> tuple[int, list[str]]:
+        """插入 K 线行，返回 (插入数, 股票代码列表)。"""
         if not rows:
-            return 0
+            return 0, []
+        symbols: list[str] = []
         async with async_session_factory() as s:
             for r in rows:
                 td_str = r.get("trade_date", "")
@@ -156,8 +167,9 @@ async def download_latest_kline(progress_callback=None) -> int:
                     "v": float(r.get("vol", 0) or 0),
                     "a": float(r.get("amount", 0) or 0),
                 })
+                symbols.append(r["ts_code"])
             await s.commit()
-        return len(rows)
+        return len(rows), symbols
 
     # ── 尝试批量模式(一次调用获取所有股票) ──
     MAX_BULK = 6000  # Tushare 单次返回上限
@@ -204,8 +216,9 @@ async def download_latest_kline(progress_callback=None) -> int:
 
         # 全市场约 5500 只，≥5500 视为完整，< 5500 可能截断
         if rows and len(rows) >= 5500:
-            n = await _insert_rows(rows)
+            n, syms = await _insert_rows(rows)
             inserted += n
+            updated_symbols.extend(syms)
             logger.info(f"Bulk mode: {n} rows for {trade_date}")
         elif rows:
             logger.warning(f"Bulk mode truncated at {len(rows)} rows, falling back to batched mode")
@@ -235,7 +248,9 @@ async def download_latest_kline(progress_callback=None) -> int:
                 results = await _asyncio.gather(*[_fetch_one(s) for s in batch])
                 all_rows = [r for sub in results for r in sub if r]
                 if all_rows:
-                    day_inserted += await _insert_rows(all_rows)
+                    n, syms = await _insert_rows(all_rows)
+                    day_inserted += n
+                    updated_symbols.extend(syms)
                 if progress_callback and len(symbols) > 300:
                     await progress_callback("download", day_i, total_days,
                                             extra=f"{trade_date}: {min(batch_start+150, len(symbols))}/{len(symbols)} | 已更新 {day_inserted} 只")
@@ -248,11 +263,48 @@ async def download_latest_kline(progress_callback=None) -> int:
     if progress_callback:
         await progress_callback("download", total_days, total_days,
                                 extra=f"下载完成: {inserted} 条日线 | {api_calls} 次API调用")
-    return inserted
+
+    # P2-6: 下载完成后清除受影响的特征缓存
+    try:
+        from app.services.feature_cache import invalidate_cache_for_symbols
+        if updated_symbols:
+            await invalidate_cache_for_symbols(updated_symbols)
+            logger.info(f"Feature cache invalidated for {len(updated_symbols)} symbols")
+    except Exception as e:
+        logger.warning(f"Feature cache invalidation failed: {e}")
+
+    return inserted, list(set(updated_symbols))
 
 # 避免与其他 asyncio.sleep 冲突
 import asyncio as _asyncio
 asyncio_sleep = _asyncio.sleep
+
+
+def _compute_indicator_worker(args):
+    """v7.0.11: ProcessPoolExecutor worker — 计算单只股票 TG 指标.
+
+    必须在 module 顶层 (picklable).
+    Args: (ts_code, klines_list_of_dict, board_params_dict)
+    Returns: (ts_code, last_row_dict, error_str_or_None)
+    """
+    ts_code, klines, board_params = args
+    try:
+        import pandas as pd
+        from app.services.tg_indicator import TGIndicator
+        df = pd.DataFrame(klines)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date").reset_index(drop=True)
+        indicator = TGIndicator(df, tg_signal_params=board_params)
+        full_df = indicator.compute()
+        # 只返回最后一行 (避免大量数据 marshal)
+        last = full_df.iloc[-1].to_dict()
+        # 转换 Timestamp 为 str (picklable)
+        for k, v in list(last.items()):
+            if hasattr(v, "isoformat"):
+                last[k] = v.isoformat()
+        return ts_code, last, None
+    except Exception as e:
+        return ts_code, None, str(e)[:200]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -265,8 +317,12 @@ def resample_daily_to_weekly(kline_df: pd.DataFrame) -> pd.DataFrame | None:
     方案 B：取周一开盘、周最高、周最低、周五收盘、周总成交量。
     如果周五无交易（节假日），取该周最后一个交易日。
 
+    ⭐ v7.0.31 fix: 兼容大小写列名 (Date/date, Open/open 等).
+    asyncpg Record 默认列名是小写, 传入 raw record 时不爆.
+
     Args:
         kline_df: 含 Date/Open/High/Low/Close/Volume 的日线 DataFrame
+                  (列名大小写不敏感)
 
     Returns:
         周线 DataFrame (索引为周五日期)，或 None（数据不足）
@@ -275,6 +331,20 @@ def resample_daily_to_weekly(kline_df: pd.DataFrame) -> pd.DataFrame | None:
         return None
 
     df = kline_df.copy()
+
+    # 列名规范化 (大小写不敏感)
+    col_map = {}
+    for col in df.columns:
+        cl = col.lower()
+        if cl in ('date', 'trade_date'): col_map['Date'] = col
+        elif cl == 'open': col_map['Open'] = col
+        elif cl == 'high': col_map['High'] = col
+        elif cl == 'low': col_map['Low'] = col
+        elif cl == 'close': col_map['Close'] = col
+        elif cl in ('volume', 'vol'): col_map['Volume'] = col
+    if col_map:
+        df = df.rename(columns={v: k for k, v in col_map.items()})
+
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.sort_values('Date').reset_index(drop=True)
 
@@ -480,11 +550,11 @@ async def scan_all_stocks(session: AsyncSession, min_level: int = 1, progress_ca
         if progress_callback:
             await progress_callback("download", 0, 1, extra="正在连接 Tushare 下载最新日线...")
         try:
-            new_rows = await download_latest_kline(progress_callback=progress_callback)
-            logger.info(f"Download phase complete: {new_rows} stocks updated")
+            new_rows, updated_symbols = await download_latest_kline(progress_callback=progress_callback)
+            logger.info(f"Download phase complete: {new_rows} rows, {len(updated_symbols)} symbols")
             if progress_callback:
                 await progress_callback("download", 1, 1,
-                    extra=f"下载完成: 更新 {new_rows} 条日线数据")
+                    extra=f"下载完成: 更新 {new_rows} 条日线数据 ({len(updated_symbols)} 只股票)")
         except Exception as e:
             logger.error(f"Download phase failed: {e}", exc_info=True)
             if progress_callback:
@@ -508,10 +578,12 @@ async def scan_all_stocks(session: AsyncSession, min_level: int = 1, progress_ca
     st_excluded = 0
     limit_excluded = 0
     try:
-        # 1. ST 股票过滤 (名称含 ST/*ST/ST退)
+        # 1. ST 股票过滤 (v4.8: 名称含 ST/*ST/ST退 — 修正正则, 不区分大小写)
+        #    修复: 旧 `[*]?ST` 不匹配中文 "ST" 开头 (如 "ST实达")
         st_r = await session.execute(text("""
             SELECT DISTINCT symbol FROM scan_results
-            WHERE name ~ '[*]?ST' AND symbol = ANY(:codes)
+            WHERE (name ~* '[* ]?ST' OR name LIKE '%ST%' OR name LIKE '%退%')
+              AND symbol = ANY(:codes)
         """), {"codes": all_codes})
         st_codes = {row[0] for row in st_r.fetchall()}
         if st_codes:
@@ -587,84 +659,123 @@ async def scan_all_stocks(session: AsyncSession, min_level: int = 1, progress_ca
     except Exception:
         get_stock_name = lambda x: x  # noqa
 
+    # ── v7.0.11: ProcessPoolExecutor 并行化 TGIndicator.compute ──
+    # 32 核 CPU, 5000 只股票只用了 1 核 = 4-5 分钟串行
+    # TGIndicator.compute() 是纯 CPU 密集 (603 字符纯 pandas/numpy, 无 await)
+    # 改成 8 worker 并行, 预计 30-60 秒完成 (8 倍加速)
     results = []
     scanned = 0
     skipped_kline = 0
     skipped_error = 0
     skipped_no_signal = 0
-    for ts_code, krows in df_dict.items():
-        if len(krows) < 60:
+
+    # 预过滤数据不足的票 (< 60 条 K 线)
+    valid_codes = [(ts, krows) for ts, krows in df_dict.items() if len(krows) >= 60]
+    skipped_kline = len(df_dict) - len(valid_codes)
+    if skipped_kline and progress_callback:
+        await progress_callback("scan", skipped_kline, total,
+                                extra=f"跳过数据不足: {skipped_kline} (共 {total} 只)")
+
+    # 把需要并行计算的输入打包 (避免大字典重复 marshal)
+    # 序列化 K 线数据为 list of dicts, 子进程反序列化
+    tasks = []
+    for ts_code, krows in valid_codes:
+        klines_serializable = [
+            {"Date": str(r["Date"]), "Open": float(r["Open"]), "High": float(r["High"]),
+             "Low": float(r["Low"]), "Close": float(r["Close"]), "Volume": float(r["Volume"])}
+            for r in krows
+        ]
+        tasks.append((ts_code, klines_serializable, _get_board_params(ts_code)))
+
+    # ProcessPoolExecutor 并行执行 TGIndicator.compute
+    # 用 os.cpu_count() 动态决定 worker 数 (32 核 → 16 worker, 留一半给 DB)
+    max_workers = max(4, min(16, (os.cpu_count() or 8) - 4))
+    logger.info(f"v7.0.11 ProcessPoolExecutor: {max_workers} workers, {len(tasks)} tasks")
+
+    loop = asyncio.get_event_loop()
+    with cf.ProcessPoolExecutor(max_workers=max_workers) as pool:
+        # 提交所有任务
+        futures = [loop.run_in_executor(pool, _compute_indicator_worker, t) for t in tasks]
+
+        # 收集结果 (带超时, 防止单只股票卡死)
+        completed = 0
+        for fut in asyncio.as_completed(futures, timeout=600):
+            try:
+                ts_code, full_df_dict, err = await fut
+            except Exception as e:
+                logger.warning(f"ProcessPool task failed: {e}")
+                continue
+            completed += 1
             scanned += 1
-            skipped_kline += 1
-            if scanned % 500 == 0 and progress_callback:
-                await progress_callback("scan", scanned, total,
-                                        extra=f"分析中 {scanned}/{total} | 信号:{len(results)} | 跳过(数据不足):{skipped_kline}")
-            continue
-        df = pd.DataFrame(krows).sort_values("Date").reset_index(drop=True)
-        try:
-            indicator = TGIndicator(df, tg_signal_params=_get_board_params(ts_code))
-            full_df = indicator.compute()
-        except Exception as e:
-            scanned += 1
-            skipped_error += 1
-            if skipped_error <= 5:
-                logger.warning(f"TGIndicator failed for {ts_code}: {e}")
-            if scanned % 200 == 0 and progress_callback:
-                await progress_callback("scan", scanned, total,
-                                        extra=f"分析中 {scanned}/{total} | 信号:{len(results)} | 跳过(异常):{skipped_error}")
-            if scanned % 10 == 0:
-                await asyncio_sleep(0)
-            continue
-        last = full_df.iloc[-1]
-        tier = int(last["层级买终"])
-        if not last["买方向"] or tier < min_level:
-            scanned += 1
-            skipped_no_signal += 1
-            if scanned % 200 == 0 and progress_callback:
-                await progress_callback("scan", scanned, total,
-                                        extra=f"分析中 {scanned}/{total} | 信号:{len(results)} | 跳过(无信号):{skipped_no_signal}")
-            # L1写为L1, deep_analyze侧会自动滤除但影子训练可用这大量基础数据进行训练
+
+            if err or full_df_dict is None:
+                skipped_error += 1
+                if skipped_error <= 5:
+                    logger.warning(f"TGIndicator failed for {ts_code}: {err}")
+                if scanned % max(1, total // 20) == 0 and progress_callback:
+                    await progress_callback("scan", scanned, total,
+                                            extra=f"分析中 {scanned}/{total} | 信号:{len(results)} | 跳过(异常):{skipped_error}")
+                continue
+
+            # full_df_dict 是 list of dicts (最后一行的指标)
+            last = full_df_dict
+
+            # 解析 last (TGIndicator.compute 最后一行的 Series, 转 dict)
+            buy_dir = last.get("买方向")
+            tier_raw = last.get("层级买终", 1)
+            try:
+                tier = int(tier_raw) if tier_raw is not None else 1
+            except (TypeError, ValueError):
+                tier = 1
+
+            if not buy_dir or tier < min_level:
+                skipped_no_signal += 1
+                if scanned % max(1, total // 20) == 0 and progress_callback:
+                    await progress_callback("scan", scanned, total,
+                                            extra=f"分析中 {scanned}/{total} | 信号:{len(results)} | 跳过(无信号):{skipped_no_signal}")
+                # L1 写为 L1, deep_analyze 侧会自动滤除但影子训练可用
+                results.append({
+                    "symbol": ts_code, "name": ts_code, "level": "L1",
+                    "tg_momentum": 0.0, "dist_low": 0.0, "j_value": 0.0,
+                    "vol_ratio": 0.0, "trigger_path": "no_signal",
+                    "market": "", "industry": industry_map.get(ts_code, ""),
+                })
+                continue
+
+            name = get_stock_name(ts_code) if 'get_stock_name' in dir() else ts_code
+
+            trigger = (
+                "大买刚" if last.get("大买刚", False)
+                else "企稳加分" if last.get("企稳加分", False)
+                else "突破升级" if last.get("突破升级有效", False)
+                else "标准维度"
+            )
+            # 安全解析浮点字段
+            def _f(v, default=0.0):
+                try: return float(v) if v is not None else default
+                except: return default
+
             results.append({
-                "symbol": ts_code, "name": ts_code, "level": "L1",
-                "tg_momentum": 0.0, "dist_low": 0.0, "j_value": 0.0,
-                "vol_ratio": 0.0, "trigger_path": "no_signal",
-                "market": "", "industry": industry_map.get(ts_code, ""),
+                "symbol": ts_code, "name": name, "level": f"L{tier}",
+                "tg_momentum": round(_f(last.get("TG动量")), 2),
+                "dist_low": round(_f(last.get("距低点")), 2),
+                "j_value": round(_f(last.get("J")), 2),
+                "vol_ratio": round(_f(last.get("量比")), 2),
+                "buy_strength": round(_f(last.get("买入强度")), 4),
+                "close_price": round(_f(last.get("Close")), 2),
+                "composite_score": calculate_composite_score(
+                    _f(last.get("TG动量")), _f(last.get("距低点")),
+                    _f(last.get("J")), _f(last.get("量比")),
+                    _f(last.get("买入强度")),
+                ),
+                "trigger_path": trigger, "industry": industry_map.get(ts_code, ""),
+                "market": _get_market(ts_code),
             })
-            if scanned % 10 == 0:
-                await asyncio_sleep(0)
-            continue
 
-        name = get_stock_name(ts_code) if 'get_stock_name' in dir() else ts_code
+            if scanned % 200 == 0 and progress_callback:
+                await progress_callback("scan", scanned, total,
+                                        extra=f"分析中 {scanned}/{total} | 信号:{len(results)} (L3:{sum(1 for r in results if r['level']=='L3')})")
 
-        trigger = (
-            "大买刚" if bool(last.get("大买刚", False))
-            else "企稳加分" if bool(last.get("企稳加分", False))
-            else "突破升级" if bool(last.get("突破升级有效", False))
-            else "标准维度"
-        )
-        results.append({
-            "symbol": ts_code, "name": name, "level": f"L{tier}",
-            "tg_momentum": round(float(last["TG动量"]), 2),
-            "dist_low": round(float(last["距低点"]), 2),
-            "j_value": round(float(last["J"]), 2),
-            "vol_ratio": round(float(last["量比"]), 2),
-            "buy_strength": round(float(last["买入强度"]), 4),
-            "close_price": round(float(last["Close"]), 2),
-            "composite_score": calculate_composite_score(
-                float(last["TG动量"]), float(last["距低点"]),
-                float(last["J"]), float(last["量比"]),
-                float(last["买入强度"]),
-            ),
-            "trigger_path": trigger, "industry": industry_map.get(ts_code, ""),
-            "market": _get_market(ts_code),
-        })
-
-        scanned += 1
-        if scanned % 200 == 0 and progress_callback:
-            await progress_callback("scan", scanned, total,
-                                    extra=f"分析中 {scanned}/{total} | 信号:{len(results)} (L3:{sum(1 for r in results if r['level']=='L3')})")
-        if scanned % 10 == 0:
-            await asyncio_sleep(0)
 
     # ═══════════════════════════════════════════════════════
     # 方案 B Phase 1.5: 周线独立信号叠加

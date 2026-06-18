@@ -87,7 +87,13 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
     """), {"lim": limit})
     data = []
     for row in r.fetchall():
-        # Parse details JSON (position 19 = a.details)
+        # SQL 实际顺序:
+        #   [0]symbol [1]name [2]tech [3]kline [4]fund [5]sector_bonus [6]composite
+        #   [7]fund_adj [8]archetype [9]adjustment [10]level [11]market_correction
+        #   [12]patterns [13]ambush [14]win_prob [15]downside [16]signal_quality
+        #   [17]trend [18]entry [19]market [20]details
+        #   [21]macd_dif [22]macd_dea [23]kdj_j [24]rsi_24 [25]boll_pos
+        #   [26]cci [27]cost_50pct [28]weight_avg [29]winner_rate [30]cost_spread
         raw_details = row[20] if len(row) > 20 and row[20] else {}
         if isinstance(raw_details, str):
             try: raw_details = json.loads(raw_details)
@@ -112,17 +118,17 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
         "entry_score": int(row[18]) if len(row) > 18 and row[18] is not None else 0,
         "market": row[19] if len(row) > 19 else "主板",
         "news_signal": details.get("news_signal"),
-        # v7.0.32: 新增技术/筹码字段 (row index 20-29)
-        "macd_dif": float(row[20]) if len(row) > 20 and row[20] is not None else None,
-        "macd_dea": float(row[21]) if len(row) > 21 and row[21] is not None else None,
-        "kdj_j": float(row[22]) if len(row) > 22 and row[22] is not None else None,
-        "rsi_24": float(row[23]) if len(row) > 23 and row[23] is not None else None,
-        "boll_pos": float(row[24]) if len(row) > 24 and row[24] is not None else None,
-        "cci": float(row[25]) if len(row) > 25 and row[25] is not None else None,
-        "cost_50pct": float(row[26]) if len(row) > 26 and row[26] is not None else None,
-        "weight_avg": float(row[27]) if len(row) > 27 and row[27] is not None else None,
-        "winner_rate": float(row[28]) if len(row) > 28 and row[28] is not None else None,
-        "cost_spread": float(row[29]) if len(row) > 29 and row[29] is not None else None,
+        # v7.0.32: 新增技术/筹码字段 (row index 21-30)
+        "macd_dif": float(row[21]) if len(row) > 21 and row[21] is not None else None,
+        "macd_dea": float(row[22]) if len(row) > 22 and row[22] is not None else None,
+        "kdj_j": float(row[23]) if len(row) > 23 and row[23] is not None else None,
+        "rsi_24": float(row[24]) if len(row) > 24 and row[24] is not None else None,
+        "boll_pos": float(row[25]) if len(row) > 25 and row[25] is not None else None,
+        "cci": float(row[26]) if len(row) > 26 and row[26] is not None else None,
+        "cost_50pct": float(row[27]) if len(row) > 27 and row[27] is not None else None,
+        "weight_avg": float(row[28]) if len(row) > 28 and row[28] is not None else None,
+        "winner_rate": float(row[29]) if len(row) > 29 and row[29] is not None else None,
+        "cost_spread": float(row[30]) if len(row) > 30 and row[30] is not None else None,
     })
 
     for d in data:
