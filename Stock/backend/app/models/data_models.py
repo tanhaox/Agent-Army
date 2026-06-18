@@ -30,6 +30,9 @@ class ScanResult(Base):
         comment="周线TG是否出现买入信号")
     weekly_tg_momentum: Mapped[float | None] = mapped_column(Float, nullable=True,
         comment="周线TG动量值")
+    # v4.9: 分钟线防伪判定 N/M 型
+    nm_verdict: Mapped[str | None] = mapped_column(String(20), nullable=True,
+        comment="分钟线判定: N_dominant/N_leaning/neutral/M_leaning/M_dominant/null(未检测)")
 
 class AnalysisScore(Base):
     __tablename__ = "analysis_scores"
@@ -55,6 +58,36 @@ class AnalysisScore(Base):
     entry_score: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     signal_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     strategy_label: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # v7.0.32: MACD 指标
+    macd_dif: Mapped[float | None] = mapped_column(Float, nullable=True)
+    macd_dea: Mapped[float | None] = mapped_column(Float, nullable=True)
+    macd_bar: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: KDJ 指标
+    kdj_k: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kdj_d: Mapped[float | None] = mapped_column(Float, nullable=True)
+    kdj_j: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: RSI 多周期
+    rsi_6: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rsi_12: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rsi_24: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: BOLL 布林带
+    boll_upper: Mapped[float | None] = mapped_column(Float, nullable=True)
+    boll_mid: Mapped[float | None] = mapped_column(Float, nullable=True)
+    boll_lower: Mapped[float | None] = mapped_column(Float, nullable=True)
+    boll_width: Mapped[float | None] = mapped_column(Float, nullable=True)
+    boll_pos: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: CCI 顺势指标
+    cci: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: 筹码 (从 daily_chip_perf join)
+    cost_5pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_50pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cost_95pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    weight_avg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    winner_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # v7.0.32: 衍生指标
+    cost_spread: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_vs_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 class StockFundamentalSnapshot(Base):
     __tablename__ = "stock_fundamental_snapshot"
@@ -343,10 +376,45 @@ async def ensure_indexes():
         "CREATE INDEX IF NOT EXISTS idx_min_kline_code_date ON min_kline(ts_code, trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_recommendation_scan ON recommendation_tracking(scan_date, symbol)",
     ]
+    # v4.9: 字段迁移
+    migrations = [
+        "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS nm_verdict VARCHAR(20)",
+    ]
     async with _asf() as s:
         for idx_sql in indexes:
             try:
                 await s.execute(_text(idx_sql))
             except Exception:
                 pass
+        for mig_sql in migrations:
+            try:
+                await s.execute(_text(mig_sql))
+            except Exception:
+                pass
         await s.commit()
+
+
+async def run_pending_migrations() -> list[str]:
+    """执行待执行的数据库迁移 (v4.9)."""
+    from sqlalchemy import text as _text
+    from app.core.database import async_session_factory as _asf
+
+    migrations = [
+        ("nm_verdict", "ALTER TABLE scan_results ADD COLUMN IF NOT EXISTS nm_verdict VARCHAR(20)"),
+    ]
+    executed = []
+    async with _asf() as s:
+        for name, sql in migrations:
+            try:
+                # 检查字段是否已存在
+                r = await s.execute(_text(f"""
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'scan_results' AND column_name = '{name}'
+                """))
+                if not r.fetchone():
+                    await s.execute(_text(sql))
+                    executed.append(name)
+            except Exception:
+                pass
+        await s.commit()
+    return executed
