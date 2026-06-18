@@ -297,15 +297,15 @@ export default function AnalysisPage() {
       <table style={{ width: '100%', borderCollapse: 'collapse', background: '#161b27', borderRadius: 12, overflow: 'hidden' }}>
         <thead><tr style={{ background: '#1a2030' }}>
           <th style={{ padding: '10px 8px', width: 36 }}></th>
-          {['代码', '名称', '综合分', '技术面', 'K线博弈', '资金面', '基本面调整', '板块加成', '原型', 'T+2胜率', '形态', '级别', '30日', '大神仙空'].map(h => (
+          {['代码', '名称', '综合分', '技术面', 'K线博弈', '资金面', '基本面调整', '板块加成', '原型', 'T+2胜率', '形态', '级别', '30日', '大神仙空', 'MACD DIF', 'MACD DEA', 'KDJ J', 'RSI 24', 'BOLL', 'CCI', '成本中位', '筹码宽度', '金过滤'].map(h => (
             <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: '#6e7a8a', fontWeight: 500 }}>{h}</th>
           ))}
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>加载中...</td></tr>
+            <tr><td colSpan={23} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>加载中...</td></tr>
           ) : filtered.length === 0 ? (
-            <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>暂无评分数据，请先运行 TG 扫描触发深度评分</td></tr>
+            <tr><td colSpan={23} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>暂无评分数据，请先运行 TG 扫描触发深度评分</td></tr>
           ) : filtered.map((r: any, i: number) => {
             const isSel = selected.has(r.symbol);
             return (
@@ -386,6 +386,45 @@ export default function AnalysisPage() {
                   </span>
                 </span> : <span style={{color:'#4b5563',fontSize:11}}>—</span>}
               </td>
+              {/* v7.0.32: 新增 8 列 — MACD/KDJ/BOLL/CCI/筹码/金过滤 */}
+              <td style={{ padding: '9px 10px', color: r.macd_dif == null ? '#6e7a8a' : (r.macd_dif > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+                {r.macd_dif != null ? r.macd_dif.toFixed(2) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.macd_dea == null ? '#6e7a8a' : (r.macd_dea > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+                {r.macd_dea != null ? r.macd_dea.toFixed(2) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.kdj_j == null ? '#6e7a8a' : (r.kdj_j > 80 ? '#ef4444' : r.kdj_j < 20 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+                {r.kdj_j != null ? r.kdj_j.toFixed(0) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.rsi_24 == null ? '#6e7a8a' : (r.rsi_24 > 70 ? '#ef4444' : r.rsi_24 < 30 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+                {r.rsi_24 != null ? r.rsi_24.toFixed(0) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.boll_pos == null ? '#6e7a8a' : (r.boll_pos > 0.9 ? '#ef4444' : r.boll_pos < 0.1 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+                {r.boll_pos != null ? r.boll_pos.toFixed(2) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.cci == null ? '#6e7a8a' : (r.cci > 200 || r.cci < -200 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
+                {r.cci != null ? r.cci.toFixed(0) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.cost_50pct == null ? '#6e7a8a' : (r.cost_50pct < 5 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
+                {r.cost_50pct != null ? r.cost_50pct.toFixed(1) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', color: r.cost_spread == null ? '#6e7a8a' : (r.cost_spread > 5 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+                {r.cost_spread != null ? r.cost_spread.toFixed(1) : '-'}
+              </td>
+              <td style={{ padding: '9px 10px', textAlign: 'center' }}>
+                {(() => {
+                  // 金过滤: MACD多头 + KDJ不超买 + 成本中位 > 20 + 筹码宽度 > 5
+                  const macdOk = r.macd_dif != null && r.macd_dif > 0;
+                  const kdjOk = r.kdj_j != null && r.kdj_j < 80;
+                  const chipOk = r.cost_50pct != null && r.cost_50pct > 20;
+                  const spreadOk = r.cost_spread != null && r.cost_spread > 5;
+                  const all = macdOk && kdjOk && chipOk && spreadOk;
+                  const hasData = r.macd_dif != null && r.kdj_j != null && r.cost_50pct != null && r.cost_spread != null;
+                  if (!hasData) return <span style={{ color: '#4b5563', fontSize: 10 }}>—</span>;
+                  if (all) return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>✓ 金过滤</span>;
+                  return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 600, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>⚠ 风险</span>;
+                })()}
+              </td>
             </tr>
             );
           })}
@@ -422,6 +461,15 @@ export default function AnalysisPage() {
           <div><span style={{ color: '#c9d1d9' }}>级别</span> — TG信号强度等级 (L3最强→L1)</div>
           <div><span style={{ color: '#c9d1d9' }}>30日</span> — 30个交易日内该股被推荐的累计次数</div>
           <div><span style={{ color: '#c9d1d9' }}>质量</span> — 护法反训练信号质量 (0~100%, 高=可靠, 低=假信号)</div>
+          <div style={{ gridColumn: '1 / -1', marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e2535' }}><span style={{ color: '#fbbf24', fontWeight: 600 }}>⭐ v7.0.32 新增</span></div>
+          <div><span style={{ color: '#c9d1d9' }}>MACD DIF/DEA</span> — MACD 指标 (>0 多头绿/&lt;0 空头红)</div>
+          <div><span style={{ color: '#c9d1d9' }}>KDJ J</span> — KDJ 指标 (&lt;20 超卖绿, &gt;80 超买红)</div>
+          <div><span style={{ color: '#c9d1d9' }}>RSI 24</span> — 24 日 RSI (&lt;30 超卖, &gt;70 超买)</div>
+          <div><span style={{ color: '#c9d1d9' }}>BOLL</span> — 布林带位置 0~1 (0.3-0.7 中性)</div>
+          <div><span style={{ color: '#c9d1d9' }}>CCI</span> — 顺势指标 (±200 极值)</div>
+          <div><span style={{ color: '#c9d1d9' }}>成本中位</span> — 筹码 50% 分位成本 (主力成本参考)</div>
+          <div><span style={{ color: '#c9d1d9' }}>筹码宽度</span> — 90% 筹码成本跨度 (越大越分散)</div>
+          <div><span style={{ color: '#10b981' }}>金过滤</span> — 4 维全通过 ✓ (MACD多头+KDJ不超买+成本适中+筹码分散)</div>
         </div>
       </div>
 

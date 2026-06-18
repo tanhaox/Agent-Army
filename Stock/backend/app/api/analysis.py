@@ -63,7 +63,10 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
                COALESCE(a.trend_score, 0) as trend_score,
                COALESCE(a.entry_score, 0) as entry_score,
                COALESCE(s.market, '主板') as market,
-               a.details
+               a.details,
+               -- v7.0.32: 新增技术/筹码字段
+               a.macd_dif, a.macd_dea, a.kdj_j, a.rsi_24, a.boll_pos, a.cci,
+               a.cost_50pct, a.weight_avg, a.winner_rate, a.cost_spread
         FROM analysis_scores a
         LEFT JOIN scan_results s ON a.symbol=s.symbol AND a.scan_date=s.scan_date
         LEFT JOIN stock_name_cache nc ON nc.symbol = a.symbol
@@ -109,6 +112,17 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
         "entry_score": int(row[18]) if len(row) > 18 and row[18] is not None else 0,
         "market": row[19] if len(row) > 19 else "主板",
         "news_signal": details.get("news_signal"),
+        # v7.0.32: 新增技术/筹码字段 (row index 20-29)
+        "macd_dif": float(row[20]) if len(row) > 20 and row[20] is not None else None,
+        "macd_dea": float(row[21]) if len(row) > 21 and row[21] is not None else None,
+        "kdj_j": float(row[22]) if len(row) > 22 and row[22] is not None else None,
+        "rsi_24": float(row[23]) if len(row) > 23 and row[23] is not None else None,
+        "boll_pos": float(row[24]) if len(row) > 24 and row[24] is not None else None,
+        "cci": float(row[25]) if len(row) > 25 and row[25] is not None else None,
+        "cost_50pct": float(row[26]) if len(row) > 26 and row[26] is not None else None,
+        "weight_avg": float(row[27]) if len(row) > 27 and row[27] is not None else None,
+        "winner_rate": float(row[28]) if len(row) > 28 and row[28] is not None else None,
+        "cost_spread": float(row[29]) if len(row) > 29 and row[29] is not None else None,
     })
 
     for d in data:
