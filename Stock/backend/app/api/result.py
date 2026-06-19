@@ -86,6 +86,14 @@ async def get_final_results(
                a.weight_snapshot, a.adjustment_reasons,
                a.dimension_scores, a.win_probability, a.downside_risk,
                a.details,
+               -- v7.0.32 新增 22 字段 (技术指标 + 筹码)
+               a.macd_dif, a.macd_dea, a.macd_bar,
+               a.kdj_k, a.kdj_d, a.kdj_j,
+               a.rsi_6, a.rsi_12, a.rsi_24,
+               a.boll_upper, a.boll_mid, a.boll_lower, a.boll_width, a.boll_pos,
+               a.cci,
+               a.cost_5pct, a.cost_50pct, a.cost_95pct, a.weight_avg, a.winner_rate,
+               a.cost_spread, a.price_vs_cost,
                fb.suggested_score as llm_score,
                fb.hidden_risks, fb.catalysts,
                COALESCE(s.resonance_type,'daily_only') as resonance_type,
@@ -142,6 +150,12 @@ async def get_final_results(
         details = raw_details if isinstance(raw_details, dict) else {}
         predicted_return = details.get("predicted_return")
         predicted_win_prob = details.get("predicted_win_prob")
+        # ── v7.0.10: 读取 v2 best_horizon (从 details JSON 解析) ──
+        best_horizon = details.get("best_horizon")
+        best_strategy = details.get("best_strategy")
+        v2_advice = details.get("v2_advice")
+        v2_net = details.get("v2_net")
+        v2_active = details.get("v2_active", False)
 
         d = {"symbol": r[0], "name": r[1], "tech_score": float(r[2] or 0),
              "kline_score": float(r[3] or 0), "fund_score": float(r[4] or 0),
@@ -155,11 +169,40 @@ async def get_final_results(
              "downside_risk": float(r[16]) if len(r) > 16 and r[16] is not None else None,
              "predicted_return": round(float(predicted_return), 2) if predicted_return is not None else None,
              "predicted_win_prob": round(float(predicted_win_prob), 3) if predicted_win_prob is not None else None,
-             "llm_score": float(r[18]) if len(r) > 18 and r[18] else None,
-             "hidden_risks": r[19] if len(r) > 19 and r[19] else [],
-             "catalysts": r[20] if len(r) > 20 and r[20] else [],
-             "resonance_type": r[21] if len(r) > 21 and r[21] else "daily_only",
-             "weekly_tg_momentum": float(r[22]) if len(r) > 22 and r[22] else 0,
+             # ── v7.0.10: v2 持仓期字段 (Step 3 修 Bug A) ──
+             "v2_active": bool(v2_active),
+             "best_horizon": best_horizon,
+             "best_strategy": best_strategy,
+             "v2_advice": v2_advice,
+             "v2_net": round(float(v2_net), 4) if v2_net is not None else None,
+             # ★ v7.0.32: 新增 22 字段 (技术指标 + 筹码)
+             "macd_dif": float(r[18]) if len(r) > 18 and r[18] is not None else None,
+             "macd_dea": float(r[19]) if len(r) > 19 and r[19] is not None else None,
+             "macd_bar": float(r[20]) if len(r) > 20 and r[20] is not None else None,
+             "kdj_k": float(r[21]) if len(r) > 21 and r[21] is not None else None,
+             "kdj_d": float(r[22]) if len(r) > 22 and r[22] is not None else None,
+             "kdj_j": float(r[23]) if len(r) > 23 and r[23] is not None else None,
+             "rsi_6": float(r[24]) if len(r) > 24 and r[24] is not None else None,
+             "rsi_12": float(r[25]) if len(r) > 25 and r[25] is not None else None,
+             "rsi_24": float(r[26]) if len(r) > 26 and r[26] is not None else None,
+             "boll_upper": float(r[27]) if len(r) > 27 and r[27] is not None else None,
+             "boll_mid": float(r[28]) if len(r) > 28 and r[28] is not None else None,
+             "boll_lower": float(r[29]) if len(r) > 29 and r[29] is not None else None,
+             "boll_width": float(r[30]) if len(r) > 30 and r[30] is not None else None,
+             "boll_pos": float(r[31]) if len(r) > 31 and r[31] is not None else None,
+             "cci": float(r[32]) if len(r) > 32 and r[32] is not None else None,
+             "cost_5pct": float(r[33]) if len(r) > 33 and r[33] is not None else None,
+             "cost_50pct": float(r[34]) if len(r) > 34 and r[34] is not None else None,
+             "cost_95pct": float(r[35]) if len(r) > 35 and r[35] is not None else None,
+             "weight_avg": float(r[36]) if len(r) > 36 and r[36] is not None else None,
+             "winner_rate": float(r[37]) if len(r) > 37 and r[37] is not None else None,
+             "cost_spread": float(r[38]) if len(r) > 38 and r[38] is not None else None,
+             "price_vs_cost": float(r[39]) if len(r) > 39 and r[39] is not None else None,
+             "llm_score": float(r[40]) if len(r) > 40 and r[40] is not None else None,
+             "hidden_risks": r[41] if len(r) > 41 and r[41] else [],
+             "catalysts": r[42] if len(r) > 42 and r[42] else [],
+             "resonance_type": r[43] if len(r) > 43 and r[43] else "daily_only",
+             "weekly_tg_momentum": float(r[44]) if len(r) > 44 and r[44] is not None else 0,
              # ★ Phase 26e: 三层相对强弱字段
              "relative_position": details.get("relative_position") if isinstance(details, dict) else None,
              "sector_direction": details.get("sector_direction") if isinstance(details, dict) else None,
@@ -168,6 +211,12 @@ async def get_final_results(
              "market_5d": details.get("market_5d") if isinstance(details, dict) else None,
              "news_signal": details.get("news_signal") if isinstance(details, dict) else None,
              "rank_score": details.get("rank_score") if isinstance(details, dict) else None,
+             # ★ v4.9: 三层 Regime 系数
+             "market_coef": details.get("market_coef") if isinstance(details, dict) else None,
+             "sector_coef": details.get("sector_coef") if isinstance(details, dict) else None,
+             "final_regime_coef": details.get("final_regime_coef") if isinstance(details, dict) else None,
+             "regime_signal": details.get("regime_signal") if isinstance(details, dict) else None,
+             "regime_signal_cn": details.get("regime_signal_cn") if isinstance(details, dict) else None,
              }
         data.append(d)
 

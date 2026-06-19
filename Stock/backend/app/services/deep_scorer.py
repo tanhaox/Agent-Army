@@ -769,6 +769,85 @@ async def _deep_score_phase(session, ctx: dict) -> list[dict]:
             dims["chip_winner"] = {"score": 5.0, "raw": 0}
             dims["chip_cost"] = {"score": 5.0, "raw": 0}
 
+        # ── v7.0.32: 新增 5 维技术/筹码 维度 (写入 dimension_scores 让 v2 trainer 能训练) ──
+        # MACD: DIF 0轴上=多头 (score 5~10), 下=空头 (0~5)
+        macd_dif_v = r.get("macd_dif")
+        if macd_dif_v is not None:
+            macd_bar_v = r.get("macd_bar") or 0
+            # clip to [-3, 3] 区间, 0轴附近 score≈5
+            macd_score = float(np.clip(5 + (macd_dif_v * 0.5) + (macd_bar_v * 0.05), 0, 10))
+            dims["macd"] = {"score": round(macd_score, 1), "raw": float(macd_dif_v),
+                            "bar": float(macd_bar_v)}
+
+        # KDJ: J值 0~100, 20~80 中性 (score 5), <20超卖 (8~10), >80超买 (2~5)
+        kdj_j_v = r.get("kdj_j")
+        if kdj_j_v is not None:
+            if kdj_j_v < 0: kdj_j_v = 0
+            if kdj_j_v > 100: kdj_j_v = 100
+            if kdj_j_v < 20:
+                kdj_score = 10 - (kdj_j_v / 20) * 2  # 0→10, 20→8
+            elif kdj_j_v > 80:
+                kdj_score = 5 - ((kdj_j_v - 80) / 20) * 3  # 80→5, 100→2
+            else:
+                # 中性区间, 接近 50 最佳
+                kdj_score = 5 + (1 - abs(kdj_j_v - 50) / 30) * 2  # 50→7, 20/80→5
+            kdj_score = float(np.clip(kdj_score, 0, 10))
+            dims["kdj"] = {"score": round(kdj_score, 1), "raw": float(kdj_j_v)}
+
+        # RSI_24: 0~100, 30~70 中性, <30超卖 (8~10), >70超买 (2~5)
+        rsi_24_v = r.get("rsi_24")
+        if rsi_24_v is not None:
+            if rsi_24_v < 0: rsi_24_v = 0
+            if rsi_24_v > 100: rsi_24_v = 100
+            if rsi_24_v < 30:
+                rsi_score = 8 + (30 - rsi_24_v) / 30 * 2  # 0→10, 30→8
+            elif rsi_24_v > 70:
+                rsi_score = 5 - (rsi_24_v - 70) / 30 * 3  # 70→5, 100→2
+            else:
+                rsi_score = 5 + (1 - abs(rsi_24_v - 50) / 20) * 2  # 50→7, 30/70→5
+            rsi_score = float(np.clip(rsi_score, 0, 10))
+            dims["rsi_24"] = {"score": round(rsi_score, 1), "raw": float(rsi_24_v)}
+
+        # BOLL: boll_pos 0~1, 0.3~0.7 中性, <0.1下轨外 (超跌=9), >0.9上轨外 (超涨=2)
+        boll_pos_v = r.get("boll_pos")
+        if boll_pos_v is not None:
+            if boll_pos_v < 0: boll_pos_v = 0
+            if boll_pos_v > 1: boll_pos_v = 1
+            if boll_pos_v < 0.1:
+                boll_score = 9 - boll_pos_v * 10  # 0→9, 0.1→8
+            elif boll_pos_v > 0.9:
+                boll_score = 3 - (boll_pos_v - 0.9) * 10  # 0.9→3, 1.0→2
+            elif boll_pos_v < 0.3:
+                boll_score = 5 + (0.3 - boll_pos_v) / 0.2 * 2  # 0.3→5, 0.1→7
+            elif boll_pos_v > 0.7:
+                boll_score = 5 - (boll_pos_v - 0.7) / 0.2 * 2  # 0.7→5, 0.9→3
+            else:
+                # 中性区间, 0.5 最佳
+                boll_score = 5 + (1 - abs(boll_pos_v - 0.5) / 0.2) * 2  # 0.5→7
+            boll_score = float(np.clip(boll_score, 0, 10))
+            dims["boll"] = {"score": round(boll_score, 1), "raw": round(boll_pos_v, 3)}
+
+        # CCI: -300~300, 极端值好/坏, ±100 中性
+        cci_v = r.get("cci")
+        if cci_v is not None:
+            if cci_v > 100:
+                cci_score = 7 - (cci_v - 100) / 200 * 4  # 100→7, 300→3 超买
+            elif cci_v < -100:
+                cci_score = 8 + (cci_v + 100) / 200 * 2  # -100→8, -300→10 超卖
+            else:
+                cci_score = 5 + (1 - abs(cci_v) / 100) * 1  # 0→6
+            cci_score = float(np.clip(cci_score, 0, 10))
+            dims["cci"] = {"score": round(cci_score, 1), "raw": float(cci_v)}
+
+        # chip_winner_rate: 30~50 黄金区间, 70+ 风险, <15 深套
+        wr_v2 = r.get("winner_rate")
+        if wr_v2 is not None and "chip_winner" in dims:
+            # dims["chip_winner"] 已经写过, 这里只保留"原生 winner_rate" 维度
+            # 名字跟 DIM_KEYS 'chip_winner_rate' 对应 (区别于 chip_winner 的归一化分)
+            dims["chip_winner_rate"] = {"score": dims["chip_winner"]["score"],
+                                        "raw": float(wr_v2),
+                                        "chip_winner_score": dims["chip_winner"]["score"]}
+
         results.append({
             "symbol": sym,
             "name": name,
@@ -890,8 +969,11 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
         r["proto_win_rate"] = round(proto_wr, 1)
         r["proto_discount"] = round(proto_discount, 2)
 
-        # ── Sector bonus (v4.8: preload sector rankings once per batch) ──
+        # ── Sector bonus (v7.0.32: 集成龙虎榜 + 历史涨幅) ──
         sector_bonus = 0.0
+        hot_individuals = set()
+        hot_sectors = set()
+        sf = None
         try:
             from app.services.sector_heat_engine import get_stock_sector_factor, get_sector_rankings, detect_theme_lifecycle
             if "_sector_preload" not in ctx:
@@ -899,14 +981,43 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
                     "rankings": await get_sector_rankings(),
                     "theme": await detect_theme_lifecycle(),
                 }
+                # v7.0.32: 加载龙虎榜热点 (失败不影响主流程)
+                try:
+                    from app.services.recommendation_gating import collect_hot_sectors
+                    hot_sec, hot_ind = await collect_hot_sectors()
+                    ctx["_sector_preload"]["hot_sectors"] = hot_sec
+                    ctx["_sector_preload"]["hot_individuals"] = hot_ind
+                    logger.info(f"Sector preload: {len(hot_sec)} hot sectors, {len(hot_ind)} hot individuals (from toplist)")
+                except Exception as e:
+                    logger.warning(f"collect_hot_sectors failed (non-fatal): {e}")
+                    ctx["_sector_preload"]["hot_sectors"] = set()
+                    ctx["_sector_preload"]["hot_individuals"] = set()
+
             sf = await get_stock_sector_factor(sym,
                 preloaded_rankings=ctx["_sector_preload"]["rankings"],
                 preloaded_theme=ctx["_sector_preload"]["theme"])
-            if sf:
-                if sf.get("heat_level") == "hot":
-                    sector_bonus = weights.get("sector_bonus_l3", 1.5)
-                elif sf.get("heat_level") == "warm":
-                    sector_bonus = weights.get("sector_bonus_l2", 0.5)
+
+            hot_individuals = ctx["_sector_preload"].get("hot_individuals", set())
+            hot_sectors = ctx["_sector_preload"].get("hot_sectors", set())
+
+            # v7.0.32: 龙虎榜直接命中加分 (v4.8 只看历史涨跌幅)
+            if sym in hot_individuals:
+                sector_bonus = max(sector_bonus, weights.get("sector_bonus_l3", 1.5))
+            elif sf and sf.get("sector_name") and sf["sector_name"] in hot_sectors:
+                sector_bonus = max(sector_bonus, weights.get("sector_bonus_l2", 0.5))
+            elif sf:
+                # v7.0.32 修复: lifecycle_stage 不是 heat_level
+                # 高潮/发酵 = hot, 萌芽/分化 = warm
+                lc_stage = sf.get("lifecycle_stage", "休眠")
+                if lc_stage in ("高潮", "发酵"):
+                    sector_bonus = max(sector_bonus, weights.get("sector_bonus_l3", 1.5))
+                elif lc_stage in ("萌芽", "分化"):
+                    sector_bonus = max(sector_bonus, weights.get("sector_bonus_l2", 0.5))
+                # 5日涨幅前 10 也算 hot
+                elif sf.get("sector_rank_5d", 99) <= 10:
+                    sector_bonus = max(sector_bonus, weights.get("sector_bonus_l3", 1.5))
+                elif sf.get("sector_rank_5d", 99) <= 20:
+                    sector_bonus = max(sector_bonus, weights.get("sector_bonus_l2", 0.5))
         except Exception:
             pass
         r["sector_bonus"] = round(sector_bonus, 1)
@@ -949,7 +1060,19 @@ async def _deep_enrich_phase(session, results: list[dict], ctx: dict) -> list[di
         if funda_adj != 0:
             reasons.append(f"基本面调整{funda_adj:+.1f}")
         if sector_bonus > 0:
-            reasons.append(f"板块加成+{sector_bonus:.1f}")
+            # v7.0.32: 标注加成来源 (龙虎榜 vs 历史涨幅)
+            reason_suffix = ""
+            if 'hot_individuals' in dir() and sym in hot_individuals:
+                reason_suffix = '(龙虎榜)'
+            elif sf and sf.get('sector_name') and sf['sector_name'] in hot_sectors:
+                reason_suffix = '(板块热点)'
+            elif sf:
+                lc_stage = sf.get('lifecycle_stage', '休眠')
+                if lc_stage in ('高潮', '发酵'):
+                    reason_suffix = '(生命周期)'
+                elif sf.get('sector_rank_5d', 99) <= 10:
+                    reason_suffix = '(5日涨幅)'
+            reasons.append(f'板块加成+{sector_bonus:.1f}{reason_suffix}')
         if abs(event_impact) > 1:
             reasons.append(f"事件影响{event_impact:+.1f}")
         if abs(macro_adj) > 0.5:
