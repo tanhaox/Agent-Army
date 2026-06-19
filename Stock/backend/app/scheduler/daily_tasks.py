@@ -28,13 +28,13 @@ async def task_refresh_fundamental():
         return {"status": "empty", "count": 0}
 
     r = await s.execute(sql_text(
-        """SELECT DISTINCT ON (ts_code) ts_code, roe, or_yoy, profit_dedt, debt_to_assets, current_ratio, end_date
+        """SELECT DISTINCT ON (ts_code) ts_code, roe, revenue_yoy, profit_yoy, debt_to_assets, current_ratio, end_date
            FROM fina_indicator WHERE ts_code = ANY(:syms)
            ORDER BY ts_code, end_date DESC"""
     ), {"syms": symbols})
     fina_map = {row[0]: {"roe": float(row[1]) if row[1] else None,
-                         "or_yoy": float(row[2]) if row[2] else None,
-                         "profit_dedt": float(row[3]) if row[3] else None,
+                         "revenue_yoy": float(row[2]) if row[2] else None,
+                         "profit_yoy": float(row[3]) if row[3] else None,
                          "debt": float(row[4]) if row[4] else None,
                          "cr": float(row[5]) if row[5] else None,
                          "end_date": row[6]}
@@ -50,21 +50,14 @@ async def task_refresh_fundamental():
               for row in r.fetchall()}
 
     r = await s.execute(sql_text(
-        """SELECT ts_code, profit_dedt FROM fina_indicator
+        """SELECT ts_code, profit_yoy FROM fina_indicator
            WHERE ts_code = ANY(:syms) AND EXTRACT(YEAR FROM end_date)=EXTRACT(YEAR FROM CURRENT_DATE)-1
            AND EXTRACT(MONTH FROM end_date)=12"""
     ), {"syms": symbols})
     prev_profit_map = {row[0]: float(row[1]) if row[1] else None for row in r.fetchall()}
 
-    try:
-        r = await s.execute(sql_text(
-            """SELECT DISTINCT ON (ts_code) ts_code, n_cashflow_act
-               FROM cashflow WHERE ts_code = ANY(:syms)
-               ORDER BY ts_code, end_date DESC"""
-        ), {"syms": symbols})
-        ocf_map = {row[0]: float(row[1]) if row[1] else None for row in r.fetchall()}
-    except Exception:
-        ocf_map = {}
+    # cashflow 表不存在，跳过 ocflow 字段
+    ocf_map = {}
 
     inserted = 0
     async with async_session_factory() as s2:
@@ -73,13 +66,13 @@ async def task_refresh_fundamental():
             if not fi and not db: continue
             td = db["trade_date"] if db else date.today()
             roe = fi["roe"] if fi else None
-            revenue_yoy = fi["or_yoy"] if fi else None
+            revenue_yoy = fi["revenue_yoy"] if fi else None
             debt = fi["debt"] if fi else None
             cr = fi["cr"] if fi else None
             pb = db["pb"] if db else None
             pe_ttm = db["pe_ttm"] if db else None
             profit_yoy = None
-            profit_cur = fi["profit_dedt"] if fi else None
+            profit_cur = fi["profit_yoy"] if fi else None
             if profit_cur is not None:
                 prev = prev_profit_map.get(sym)
                 if prev and prev != 0:
@@ -417,6 +410,21 @@ async def task_sync_limit_list():
     return {"inserted": n}
 
 
+async def task_train_4x2_v2():
+    """v7.0: 每日收盘后跑 4×2 全量训练, 写入 param_library_v2 (生产权重).
+
+    v1 链路不受影响 (S1/S2/S3 影子训练照常跑).
+    v2 跑通后用 feature_flag 切流量.
+    """
+    from app.services.scoring_trainer_v2 import train_4x2
+    result = await train_4x2(lookback_days=730)  # v7.0.33: 默认自动检测 market_style, lookback 730d
+    n_ok = result.get("n_success", 0)
+    n_skip = result.get("n_skipped", 0)
+    n_err = result.get("n_error", 0)
+    logger.info(f"[4x2_v2 训练] 成功 {n_ok}, 跳过 {n_skip} (样本不足), 错误 {n_err}")
+    return result
+
+
 async def task_verify_recommendations():
     """Step 8: Backfill real T+2/T+5/T+15 returns from daily_kline for unverified recommendations."""
     from scripts.verify_recommendations import main
@@ -454,3 +462,139 @@ async def task_update_market_status():
         await s.commit()
     logger.info(f"Market status: {regime}({risk})")
     return {"status": "done"}
+
+
+async def task_first_limit_scan():
+    """Phase 1: Scan first limit up stocks (潜龙猎手 - 首板猎人).
+
+    每日收盘后执行:
+    1. 从 limit_list 获取当日涨停股票
+    2. 过滤非主板股票
+    3. 检查是否为首板（过去10个交易日无涨停, v6.0: 30→10）
+    4. 使用5分钟线估算封板时间
+    5. 评估封板质量（S/A/B 级）
+    6. ★ v3.0: 立即调用 second_board_predictor 做预测
+    """
+    from app.services.first_limit_scanner import scan_first_limit_up
+    from datetime import date as dt_date
+
+    today = dt_date.today()
+    if today.weekday() >= 5:
+        logger.info("Today is weekend, skip first_limit_scan")
+        return {"status": "skipped", "reason": "weekend"}
+
+    result = await scan_first_limit_up(today)
+    if result.get("status") == "success":
+        logger.info(f"First limit scan: {result.get('first_limit', 0)} new, {result.get('saved', 0)} saved")
+    return result
+
+
+async def task_update_dragon_pool():
+    """v6.0: 每日收盘后更新潜龙池 + 全池评估.
+
+    流程:
+      1. join_pool_from_first_limit(today) — 今日 S/A/B 级首板入池
+      2. update_pool_state(today) — 更新 active 股价格/天数
+      3. evaluate_all_active() — 跑踢出+浮出判定
+    """
+    from datetime import date as dt_date
+    from app.services.dragon_pool_service import (
+        join_pool_from_first_limit,
+        update_pool_state,
+        evaluate_all_active,
+    )
+
+    today = dt_date.today()
+    if today.weekday() >= 5:
+        logger.info("Today is weekend, skip dragon_pool update")
+        return {"status": "skipped", "reason": "weekend"}
+
+    try:
+        joined = await join_pool_from_first_limit(today)
+        logger.info(f"[dragon_pool] joined {len(joined)} new stocks on {today}")
+
+        updated = await update_pool_state(today)
+        logger.info(f"[dragon_pool] updated {updated} active stocks")
+
+        eval_result = await evaluate_all_active()
+        logger.info(
+            f"[dragon_pool] evaluate done: "
+            f"exited={eval_result.get('exited_count', 0)} "
+            f"emerging={eval_result.get('emerging_count', 0)}"
+        )
+        return {
+            "status": "success",
+            "joined": len(joined),
+            "updated": updated,
+            **eval_result,
+        }
+    except Exception as e:
+        logger.error(f"[dragon_pool] update failed: {e}")
+        return {"status": "error", "detail": str(e)}
+
+
+async def task_retrain_second_board():
+    """周日晚: 重新训练二板预测模型 + 增量更新历史首板预测.
+
+    v3.0 新增. 每周日执行:
+    1. 跑 train_full_pipeline 训练新模型 (写入 second_board_model_version)
+    2. 增量更新: 对近 7 天的首板重新预测, 刷新 second_board_prob
+    3. 不影响实时交易, 模型版本切换通过 is_active 标志
+
+    注意: 训练可能耗时 1-3 分钟, 在 scheduler_loop 中独立运行
+    """
+    import sys
+    from datetime import date, timedelta
+    logger.info("[retrain_second_board] Start weekly retrain")
+
+    # 1. 调用训练脚本
+    try:
+        from scripts.train_full_pipeline import main as train_main
+        await train_main()
+    except Exception as e:
+        import traceback
+        logger.error(f"[retrain_second_board] train failed: {e}\n{traceback.format_exc()[:500]}")
+        return {"status": "error", "stage": "train", "detail": str(e)}
+
+    # 2. 增量更新 7 天内的首板预测
+    try:
+        from app.services.second_board_predictor import get_predictor
+        from app.core.database import async_session_factory
+        predictor = get_predictor()
+        cutoff = date.today() - timedelta(days=7)
+        async with async_session_factory() as s:
+            r = await s.execute(text("""
+                SELECT ts_code, limit_date FROM first_limit_up
+                WHERE limit_date >= :cutoff
+                AND (second_board_prob IS NULL OR prediction_reasons IS NULL)
+            """), {"cutoff": cutoff})
+            samples = [(row[0], row[1]) for row in r.fetchall()]
+            logger.info(f"[retrain_second_board] Found {len(samples)} recent first limits to update")
+
+        updated = 0
+        for ts_code, fd in samples:
+            try:
+                pred = await predictor.predict(ts_code, fd, date.today())
+                if 'error' not in pred:
+                    fld = pred['first_limit_date']
+                    if isinstance(fld, str):
+                        from datetime import date as _date
+                        fld = _date.fromisoformat(fld)
+                    async with async_session_factory() as s2:
+                        await s2.execute(text("""
+                            UPDATE first_limit_up
+                            SET second_board_prob = :p
+                            WHERE ts_code = :ts AND limit_date = :fd
+                        """), {"p": pred.get('overall_probability', 0), "ts": ts_code, "fd": fld})
+                        await s2.commit()
+                    updated += 1
+            except Exception as e:
+                logger.warning(f"[retrain_second_board] update {ts_code} failed: {e}")
+                continue
+
+        logger.info(f"[retrain_second_board] Updated {updated}/{len(samples)} first limits")
+        return {"status": "success", "train": "ok", "updated": updated}
+    except Exception as e:
+        import traceback
+        logger.error(f"[retrain_second_board] update failed: {e}\n{traceback.format_exc()[:500]}")
+        return {"status": "error", "stage": "update", "detail": str(e)}

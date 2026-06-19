@@ -230,8 +230,8 @@ async def trigger_scan(
                     ].reset_index(drop=True)
                     _logger.info(f"market_filter={market_filter} (allowed={allowed}): {pre_count} -> {len(results)}")
 
-                # ④ 潜伏猎手 (v4.8: 改用最新 scan_date, 非历史最早)
-                await progress_cb("ambush_scan", 0, 1, extra="TG扫描完成，开始潜伏猎手...")
+                # ④ 回调扫描 (v4.8 改用最新 scan_date; v3.0 改名: 不再叫"潜伏猎手", 那是 /ambush 页面专属)
+                await progress_cb("ambush_scan", 0, 1, extra="TG扫描完成，开始回调扫描...")
                 try:
                     from app.services.ambush_scanner import run_ambush_scan
                     from datetime import date as dt_date
@@ -240,11 +240,11 @@ async def trigger_scan(
                         amb_scan_date = r.scalar() or sd
                     amb = await run_ambush_scan(scan_date=amb_scan_date)
                     await progress_cb("ambush_scan", 1, 1,
-                                      extra=f"潜伏猎手完成: {amb.get('signals', 0)} 个信号")
+                                      extra=f"回调扫描完成: {amb.get('signals', 0)} 个信号")
                 except Exception as e:
                     import logging
-                    logging.getLogger("scan").error(f"Ambush scan failed: {e}")
-                    await progress_cb("ambush_scan", 1, 1, extra=f"潜伏猎手异常: {e}")
+                    logging.getLogger("scan").error(f"Callback scan failed: {e}")
+                    await progress_cb("ambush_scan", 1, 1, extra=f"回调扫描异常: {e}")
 
                 # ⑤ 形态识别
                 await progress_cb("pattern_scan", 0, 1, extra="开始形态识别...")
@@ -324,6 +324,26 @@ async def trigger_scan(
                 await _release_scan_lock()
                 await queue.put(result_data)
 
+                # ── v7.0.11: 扫描完成 → 自动级联 v2 训练 (笔记本一键化) ──
+                # 用户目标: /scan/trigger 一次动作, 把"tg今推"和"v2模训"都干完
+                # 不写调度, 不加按钮, 全部级联在扫描完成后
+                try:
+                    from app.services.scoring_trainer_v2 import train_4x2
+                    await _set_scan_state({"running": False, "phase": "v2_train", "current": 0, "total": 1, "pct": 100,
+                                          "extra": "v2 训练中 (用历史 verified 重训 8 套权重)...", "result": result_data})
+                    v2_result = await train_4x2(lookback_days=730)  # v7.0.33: 默认自动检测 market_style, lookback 730d
+                    n_ok = v2_result.get("n_success", 0)
+                    n_skip = v2_result.get("n_skipped", 0)
+                    _logger.info(f"v2 训练完成: 成功 {n_ok}, 跳过 {n_skip} (样本不足)")
+                    result_data["v2_train"] = {
+                        "n_success": n_ok,
+                        "n_skipped": n_skip,
+                        "n_error": v2_result.get("n_error", 0),
+                    }
+                except Exception as e:
+                    _logger.warning(f"v2 训练异常 (扫描已成功, 不影响结果): {e}")
+                    result_data["v2_train"] = {"error": str(e)[:200]}
+
                 # P2-5: 发送 scan_completed 事件
                 try:
                     from app.core.event_bus import event_bus
@@ -352,6 +372,247 @@ async def trigger_scan(
                 break
 
     return StreamingResponse(sse_gen(), media_type="text/event-stream")
+
+
+@router.post("/all")
+async def trigger_unified_scan_all(
+    skip_download: bool = Query(default=False, description="跳过数据预下载 (用于调试)"),
+    skip_alphaflow: bool = Query(default=False, description="跳过 AlphaFlow 阶段"),
+    skip_ambush: bool = Query(default=False, description="跳过 Ambush 阶段"),
+    market_filter: str = Query(default="全部", description="板块过滤: 全部/主板/中小板/创业板"),
+):
+    """统一扫描 v3.1: 数据预下载 + TG + AlphaFlow + Ambush.
+
+    一次流程完成三大模块的全部数据准备 + 扫描:
+      阶段 0: 数据预下载 (K线/指数/龙虎榜/筹码/涨停列表)
+      阶段 1: TG 信号扫描 → scan_results + analysis_scores
+      阶段 2: 🏆 AlphaFlow 主升浪扫描 → alphaflow_pool
+      阶段 3: 🐉 潜龙猎手扫描 → first_limit_up + second_board_prediction
+
+    各阶段失败不影响后续阶段 (fail-soft).
+    """
+    if not await _acquire_scan_lock():
+        return {"status": "error", "detail": "扫描已在运行中"}
+
+    await _set_scan_state({"running": True, "phase": "", "current": 0, "total": 0, "pct": 0, "extra": "启动统一扫描...", "result": None})
+
+    async def sse_gen():
+        queue = asyncio.Queue()
+
+        async def emit(phase, current=0, total=1, extra=""):
+            try:
+                await asyncio.wait_for(queue.put({
+                    "phase": phase, "current": current, "total": total, "extra": extra
+                }), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.QueueFull):
+                pass
+
+        async def run_unified():
+            import logging as _log
+            _logger = _log.getLogger("scan")
+            try:
+                # ========== 阶段 0: 数据预下载 ==========
+                if not skip_download:
+                    await emit("pre_kline", 0, 1, "阶段 0/3: K线下载...")
+                    try:
+                        from app.services.tg_engine import download_latest_kline
+                        n_new, _ = await download_latest_kline(progress_callback=None)
+                        await emit("pre_kline", 1, 1, f"K线下载完成: {n_new} 条新数据")
+                    except Exception as e:
+                        _logger.warning(f"K线预下载失败: {e}")
+                        await emit("pre_kline", 1, 1, f"K线预下载异常: {e}")
+
+                    await emit("pre_index", 0, 1, "上证指数下载...")
+                    try:
+                        from scripts.sync_index_daily import main as sync_index
+                        await sync_index()
+                        await emit("pre_index", 1, 1, "上证指数下载完成")
+                    except Exception as e:
+                        _logger.warning(f"指数预下载失败: {e}")
+                        await emit("pre_index", 1, 1, f"指数预下载异常: {e}")
+
+                    await emit("pre_toplist", 0, 1, "龙虎榜下载...")
+                    try:
+                        from app.services.sector_heat_engine import sync_recent_days
+                        await sync_recent_days(days=5)
+                        await emit("pre_toplist", 1, 1, "龙虎榜下载完成")
+                    except Exception as e:
+                        _logger.warning(f"龙虎榜预下载失败: {e}")
+                        await emit("pre_toplist", 1, 1, f"龙虎榜预下载异常: {e}")
+
+                    await emit("pre_chip", 0, 1, "筹码数据下载...")
+                    try:
+                        from scripts.sync_chip_perf import sync_day
+                        from datetime import date as _dt
+                        await sync_day(_dt.today().strftime("%Y%m%d"))
+                        await emit("pre_chip", 1, 1, "筹码数据下载完成")
+                    except Exception as e:
+                        _logger.warning(f"筹码预下载失败: {e}")
+                        await emit("pre_chip", 1, 1, f"筹码预下载异常: {e}")
+
+                    await emit("pre_limit", 0, 1, "涨停列表下载...")
+                    try:
+                        from scripts.sync_limit_list import sync_day as sync_limit
+                        from datetime import date as _dt
+                        await sync_limit(_dt.today().strftime("%Y%m%d"))
+                        await emit("pre_limit", 1, 1, "涨停列表下载完成")
+                    except Exception as e:
+                        _logger.warning(f"涨停预下载失败: {e}")
+                        await emit("pre_limit", 1, 1, f"涨停预下载异常: {e}")
+                else:
+                    await emit("pre_kline", 1, 1, "数据预下载跳过(skip_download=True)")
+
+                # ========== 阶段 1: TG 信号扫描 ==========
+                await emit("tg_start", 0, 1, "阶段 1/3: TG 信号扫描...")
+                try:
+                    # 复用 trigger_scan 的内部逻辑
+                    num_workers = int(os.getenv("NUM_WORKERS", "1"))
+                    if num_workers > 1:
+                        from app.services.scan_worker import parallel_scan_all_stocks as scan_func
+                    else:
+                        from app.services.tg_engine import scan_all_stocks as scan_func
+
+                    async def tg_progress(phase, current, total, extra=None):
+                        await emit(f"tg_{phase}", current, total, extra or "")
+
+                    async with async_session_factory() as s:
+                        results, sd = await scan_func(s, progress_callback=tg_progress, skip_download=skip_download)
+
+                    # 回调扫描 (原 ④ 步)
+                    from app.services.ambush_scanner import run_ambush_scan
+                    async with async_session_factory() as s:
+                        r2 = await s.execute(text("SELECT MAX(scan_date) FROM scan_results"))
+                        amb_scan_date = r2.scalar() or sd
+                    amb = await run_ambush_scan(scan_date=amb_scan_date)
+                    await emit("tg_done", 1, 1, f"TG扫描完成: 信号={amb.get('signals', 0)}")
+
+                    # 形态识别 (原 ⑤ 步)
+                    try:
+                        from app.services.pattern_engine import run_pattern_scan
+                        pat_result = await run_pattern_scan()
+                        await emit("tg_done", 1, 1, f"形态识别: {pat_result['total_patterns']} 个形态")
+                    except Exception as e:
+                        _logger.warning(f"形态识别失败: {e}")
+
+                    # 多维度评分 (原 ⑥ 步)
+                    try:
+                        from app.services.deep_scorer import deep_analyze
+                        async def deep_cb(phase, current, total, message=""):
+                            await emit("tg_deep_score", current, total, message)
+                        async with async_session_factory() as s:
+                            scored = await deep_analyze(s, scan_date=sd, progress_cb=deep_cb)
+                        await emit("tg_done", 1, 1, f"评分完成: {len(scored)} 只")
+                    except Exception as e:
+                        _logger.warning(f"评分失败: {e}")
+
+                except Exception as e:
+                    _logger.error(f"TG扫描失败: {e}", exc_info=True)
+                    await emit("error", 1, 1, f"TG扫描异常: {e}")
+
+                # ========== 阶段 2: AlphaFlow 扫描 ==========
+                if not skip_alphaflow:
+                    await emit("alphaflow_phase1", 0, 1, "阶段 2/3: 🏆 AlphaFlow 池内扫描...")
+                    try:
+                        from app.services.alphaflow_pool import daily_scan as af_scan
+                        async def af_progress(phase, current, total, extra=None):
+                            await emit(f"alphaflow_{phase}", current, total, extra or "")
+
+                        # Phase 1: 池内股票
+                        async with async_session_factory() as s:
+                            r = await s.execute(text("SELECT ts_code FROM alphaflow_pool"))
+                            pool_codes = [row[0] for row in r.fetchall()]
+                        if pool_codes:
+                            result1 = await af_scan(progress_callback=af_progress, restrict_symbols=pool_codes)
+                            await emit("alphaflow_phase1", 1, 1, f"池内扫描完成: {len(pool_codes)} 只")
+
+                        # Phase 2: 全市场扫新
+                        await emit("alphaflow_phase2", 0, 1, "🏆 AlphaFlow 全市场扫新蛋...")
+                        async with async_session_factory() as s:
+                            r = await s.execute(text("SELECT ts_code FROM alphaflow_pool"))
+                            existing = {row[0] for row in r.fetchall()}
+                            r = await s.execute(text("""
+                                SELECT DISTINCT ts_code FROM daily_kline
+                                WHERE trade_date >= CURRENT_DATE - 5
+                            """))
+                            all_codes = [row[0] for row in r.fetchall()]
+                        _SKIP = ("000300.SH","000016.SH","000905.SH","000852.SH","000001.SH",
+                                 "000688.SH","399001.SZ","399006.SZ","399005.SZ")
+                        new_codes = [c for c in all_codes
+                                     if c not in existing and not c.endswith(".SI") and c not in _SKIP]
+                        if new_codes:
+                            await af_scan(progress_callback=af_progress, restrict_symbols=new_codes)
+                        await emit("alphaflow_phase2", 1, 1, f"全市场扫描完成: 新增 {len(new_codes)} 只")
+                    except Exception as e:
+                        _logger.error(f"AlphaFlow扫描失败: {e}", exc_info=True)
+                        await emit("error", 1, 1, f"AlphaFlow异常: {e}")
+                else:
+                    await emit("alphaflow_phase1", 1, 1, "AlphaFlow跳过(skip_alphaflow=True)")
+
+                # ========== 阶段 3: Ambush 扫描 ==========
+                if not skip_ambush:
+                    await emit("ambush_first_limit", 0, 1, "阶段 3/3: 🐉 潜龙猎手首板识别...")
+                    try:
+                        from app.services.first_limit_scanner import scan_first_limit_up
+                        from datetime import date as _dt, timedelta as _td
+                        target_date = _dt.today() - _td(days=1)
+                        while target_date.weekday() >= 5:
+                            target_date -= _td(days=1)
+                        result = await scan_first_limit_up(target_date)
+                        await emit("ambush_first_limit", 1, 1,
+                                   f"首板识别完成: {result.get('first_limit', 0)} new, {result.get('saved', 0)} saved")
+                        # 二板预测已在 scan_first_limit_up 内部完成
+                        await emit("ambush_second_board", 1, 1, "二板预测完成")
+                    except Exception as e:
+                        _logger.error(f"Ambush扫描失败: {e}", exc_info=True)
+                        await emit("error", 1, 1, f"Ambush异常: {e}")
+                else:
+                    await emit("ambush_first_limit", 1, 1, "Ambush跳过(skip_ambush=True)")
+
+                # ========== 阶段 4: 🐉 潜龙池动态监控 (v6.0 新增) ==========
+                try:
+                    from app.services.dragon_pool_service import (
+                        join_pool_from_first_limit,
+                        update_pool_state,
+                        evaluate_all_active,
+                    )
+                    # 4.1 入池
+                    await emit("dragon_pool_join", 0, 3, "🐉 潜龙池入池...")
+                    joined = await join_pool_from_first_limit(target_date)
+                    await emit("dragon_pool_join", 1, 3,
+                               f"入池 {len(joined)} 只")
+                    # 4.2 状态更新
+                    await emit("dragon_pool_update", 1, 3, "🐉 潜龙池状态更新...")
+                    updated_n = await update_pool_state(target_date)
+                    await emit("dragon_pool_update", 2, 3,
+                               f"更新 {updated_n} 只")
+                    # 4.3 全池评估
+                    await emit("dragon_pool_evaluate", 2, 3, "🐉 潜龙池评估退出+浮出...")
+                    eval_result = await evaluate_all_active()
+                    await emit("dragon_pool_done", 3, 3,
+                               f"评估完成: 踢出 {eval_result.get('exited_count', 0)} 只, 浮出 {eval_result.get('emerging_count', 0)} 只")
+                except Exception as e:
+                    _logger.error(f"Dragon pool failed: {e}", exc_info=True)
+                    await emit("error", 1, 1, f"潜龙池异常: {e}")
+
+                # 全部完成
+                await emit("done", 1, 1, "统一扫描完成 ✅ (TG + AlphaFlow + 潜龙猎手 + 潜龙池)")
+            except Exception as e:
+                _logger.error(f"统一扫描失败: {e}", exc_info=True)
+                await emit("error", 1, 1, f"统一扫描失败: {e}")
+
+        asyncio.ensure_future(run_unified())
+
+        try:
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=1800)  # 30分钟超时
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("phase") in ("done", "error"):
+                    break
+        except asyncio.TimeoutError:
+            yield f"data: {json.dumps({'phase': 'timeout', 'extra': '扫描超过30分钟超时'})}\n\n"
+
+    return StreamingResponse(sse_gen(), media_type="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/tail-market")
