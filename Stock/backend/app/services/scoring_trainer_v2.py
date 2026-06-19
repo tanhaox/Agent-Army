@@ -298,26 +298,48 @@ async def load_training_data_v2(
     return X, y, symbols, feature_names
 
 
-async def train_single(horizon: int, model_type: str, lookback_days: int = 120, archetype: str = "__global__") -> dict:
-    """训练单套: (horizon, model_type, archetype).
+async def train_single(horizon: int, model_type: str, lookback_days: int = 730, archetype: str = "__global__", market_style: str = "all") -> dict:
+    """训练单套: (horizon, model_type, archetype, market_style).
 
     v7.0.12 (A 方案): archetype 参数
     - archetype='__global__': 全部样本 (兜底)
     - archetype='large_bluechip' 等: 该原型独立训练
     - 内部样本兜底 (load_training_data_v2 自动处理样本不足 50)
+
+    v7.0.33: market_style 参数 + 缺样本降级
+    - market_style='all': 全部样本
+    - market_style='bull'/'bear'/'range': 仅该 phase 样本
+    - 若 phase 样本 < MIN_SAMPLES (30), 自动 fallback to 'all'
+    - 返回的 market_style_actual 字段告诉 _persist_v2 实际用了哪个
     """
-    key = f"T+{horizon}_{model_type}_{archetype}"
+    key = f"T+{horizon}_{model_type}_{archetype}_{market_style}"
+    market_style_actual = market_style  # 记录实际用的风格 (降级时改)
     try:
-        X, y, syms, fns = await load_training_data_v2(lookback_days, horizon, model_type, archetype)
+        X, y, syms, fns = await load_training_data_v2(lookback_days, horizon, model_type, archetype, market_style)
     except Exception as e:
         return {
             "key": key, "horizon": horizon, "model_type": model_type, "archetype": archetype,
+            "market_style": market_style, "market_style_actual": market_style,
             "status": "error", "stage": "load", "detail": str(e),
         }
 
+    # v7.0.33: 缺样本降级 — market_style 不是 all 且样本不足 → fallback to all
+    if len(y) < MIN_SAMPLES_FOR_TRAINING and market_style != "all":
+        logger.warning(f"[v2] {key} 样本 {len(y)} < {MIN_SAMPLES_FOR_TRAINING}, fallback to 'all'")
+        market_style_actual = "all"
+        try:
+            X, y, syms, fns = await load_training_data_v2(lookback_days, horizon, model_type, archetype, "all")
+        except Exception as e:
+            return {
+                "key": key, "horizon": horizon, "model_type": model_type, "archetype": archetype,
+                "market_style": market_style, "market_style_actual": "all",
+                "status": "error", "stage": "load_fallback", "detail": str(e),
+            }
+
     if len(y) < MIN_SAMPLES_FOR_TRAINING:
         return {
-            "key": key, "horizon": horizon, "model_type": model_type,
+            "key": key, "horizon": horizon, "model_type": model_type, "archetype": archetype,
+            "market_style": market_style, "market_style_actual": market_style_actual,
             "status": "skipped",
             "n_samples": len(y),
             "reason": f"样本不足 {len(y)} < {MIN_SAMPLES_FOR_TRAINING}, 保留占位等数据积累",
@@ -344,6 +366,7 @@ async def train_single(horizon: int, model_type: str, lookback_days: int = 120, 
 
         return {
             "key": key, "horizon": horizon, "model_type": model_type, "archetype": archetype,
+            "market_style": market_style, "market_style_actual": market_style_actual,
             "status": "success",
             "n_samples": len(y),
             "win_rate": float(y.mean()),
@@ -355,6 +378,7 @@ async def train_single(horizon: int, model_type: str, lookback_days: int = 120, 
         logger.error(f"train_single({key}) failed: {e}", exc_info=True)
         return {
             "key": key, "horizon": horizon, "model_type": model_type, "archetype": archetype,
+            "market_style": market_style, "market_style_actual": market_style_actual,
             "status": "error", "stage": "fit", "detail": str(e),
         }
 
@@ -364,6 +388,7 @@ async def _persist_v2(result: dict, market_style: str = "all"):
 
     v7.0.12 (A 方案): archetype 字段写入 (替代写死 '__global__')
     v7.0.13 (regime): market_style 字段 (bull/bear/range/all)
+    v7.0.33: 使用 result['market_style_actual'] (降级后实际生效的风格)
     """
     horizon = result["horizon"]
     mt = result["model_type"]
@@ -371,7 +396,9 @@ async def _persist_v2(result: dict, market_style: str = "all"):
     weights = result["weights"]
     cv_auc = result["cv_auc"]
     strategy = HORIZON_TO_STRATEGY[horizon]
-    version = f"v2-{date.today().isoformat()}-T+{horizon}-{mt}-{archetype}-{market_style}"
+    # v7.0.33: 用实际生效的 market_style (避免 phase 样本不足时用 phase 标签写库)
+    market_style_actual = result.get("market_style_actual", market_style)
+    version = f"v2-{date.today().isoformat()}-T+{horizon}-{mt}-{archetype}-{market_style_actual}"
 
     async with async_session_factory() as s:
         # 1. 停用该 (strategy, horizon, model_type, archetype, market_style) 旧激活
@@ -380,7 +407,7 @@ async def _persist_v2(result: dict, market_style: str = "all"):
             SET is_active = false, updated_at = NOW()
             WHERE strategy = :st AND horizon_days = :h AND model_type = :mt
               AND archetype = :arch AND market_style = :ms AND is_active = true
-        """), {"st": strategy, "h": horizon, "mt": mt, "arch": archetype, "ms": market_style})
+        """), {"st": strategy, "h": horizon, "mt": mt, "arch": archetype, "ms": market_style_actual})
 
         # 2. 写入新激活
         await s.execute(text(f"""
@@ -405,13 +432,13 @@ async def _persist_v2(result: dict, market_style: str = "all"):
             "n": result["n_samples"],
             "cv": round(cv_auc, 4),
             "wr": round(result["win_rate"], 4),
-            "ms": market_style,
+            "ms": market_style_actual,
         })
         await s.commit()
-    logger.info(f"[v2] Persisted {strategy}/T+{horizon}/{mt}/{market_style}: cv_auc={cv_auc:.4f}")
+    logger.info(f"[v2] Persisted {strategy}/T+{horizon}/{mt}/{market_style_actual}: cv_auc={cv_auc:.4f}")
 
 
-async def train_4x2(lookback_days: int = 120, archetypes: list | None = None, dry_run: bool = False, market_style: str = "all") -> dict:
+async def train_4x2(lookback_days: int = 730, archetypes: list | None = None, dry_run: bool = False, market_style: str = "all") -> dict:
     """4×2 全量训练: 8 套独立权重, 写入 param_library_v2.
 
     v7.0.12 (A 方案): archetypes 参数
@@ -428,10 +455,25 @@ async def train_4x2(lookback_days: int = 120, archetypes: list | None = None, dr
     v7.0.14 (regime): market_style 参数 — 写入权重时标记市场风格
     - market_style='bull'/'bear'/'range'/'all'
     - 同一 (strategy, horizon, model_type, archetype) 多个 market_style 互不覆盖
+
+    v7.0.33: market_style=None 默认按当前市场状态自动检测
+    - 调用 get_current_regime_simple() 获取当前 bull/bear/range
+    - 解决"牛训的权重在熊市失效"的泛化问题
     """
     if archetypes is None:
         # 默认只训全局 (兼容旧接口)
         archetypes = ["__global__"]
+
+    # v7.0.33: 默认按当前市场状态训练 (auto-detect)
+    if market_style is None:
+        try:
+            from app.services.market_gate import get_current_regime_simple
+            market_style = await get_current_regime_simple()
+            logger.info(f"[v2] Auto-detected market_style: {market_style}")
+        except Exception as e:
+            logger.warning(f"[v2] get_current_regime_simple failed: {e}, fallback to 'all'")
+            market_style = "all"
+
     logger.info(f"[v2] train_4x2 start, lookback_days={lookback_days}, archetypes={archetypes}, dry_run={dry_run}, market_style={market_style}")
     results = {}
     persisted = []
@@ -439,16 +481,20 @@ async def train_4x2(lookback_days: int = 120, archetypes: list | None = None, dr
     for arch in archetypes:
         for horizon in ALL_HORIZONS:
             for mt in ALL_MODEL_TYPES:
-                r = await train_single(horizon, mt, lookback_days, archetype=arch)
+                r = await train_single(horizon, mt, lookback_days, archetype=arch, market_style=market_style)
                 results[r["key"]] = r
                 if r["status"] == "success" and not dry_run:
                     try:
+                        # v7.0.33: 用 result 里的 actual (避免降级后写错标签)
                         await _persist_v2(r, market_style=market_style)
-                        persisted.append({"archetype": arch, "horizon": horizon, "model_type": mt, "cv_auc": r["cv_auc"]})
+                        persisted.append({"archetype": arch, "horizon": horizon, "model_type": mt,
+                                          "cv_auc": r["cv_auc"],
+                                          "market_style_actual": r.get("market_style_actual", market_style)})
                     except Exception as e:
                         logger.error(f"persist {r['key']} failed: {e}", exc_info=True)
                 elif r["status"] == "success" and dry_run:
-                    logger.info(f"[v2] dry_run: 跳过持久化 {r['key']}/{market_style}, cv_auc={r.get('cv_auc')}")
+                    actual = r.get("market_style_actual", market_style)
+                    logger.info(f"[v2] dry_run: 跳过持久化 {r['key']}/{actual} (requested={market_style}), cv_auc={r.get('cv_auc')}")
 
     n_ok = sum(1 for v in results.values() if v.get("status") == "success")
     n_skip = sum(1 for v in results.values() if v.get("status") == "skipped")
