@@ -130,23 +130,62 @@ export default function CuratedRankingView({
     if (!containerRef.current || downloading) return;
     setDownloading(true);
     try {
-      // 临时折叠所有展开的卡片 (下载快照, 用户要求"保持折叠状态")
-      const prevExpanded = new Set(expandedCards);
-      setExpandedCards(new Set([0]));  // 保留第 0 张可能展开的
-      await new Promise(r => setTimeout(r, 100));  // 等 DOM 重渲染
-
-      // 找实际要下载的容器 (含 header + 所有 cards)
+      // ★ v7.0.33 修复 1: 不要强制展开第 0 张
+      //   之前 setExpandedCards(new Set([0])) 会把所有展开状态重置成"只 0 展开"
+      //   现在保持用户原状态, 不修改 expandedCards
+      //   用户要求: "保持所有标签都是折叠的状态"
+      //   解决: 用 CSS 临时强制所有 isExp 的展开区隐藏
       const target = containerRef.current;
+      const prevMaxHeight = target.style.maxHeight;
+
+      // ★ 修复截图位置: 强制滚到顶部, 避免视口位置影响截图
+      const prevScrollY = window.scrollY;
+      const targetRect = target.getBoundingClientRect();
+      window.scrollTo(0, window.scrollY + targetRect.top - 20);
+      // 等重绘 + 任何滚动收敛
+      await new Promise(r => setTimeout(r, 200));
+
+      // 临时注入 CSS: 所有展开区 (Expanded details) 强制 display:none
+      const styleEl = document.createElement('style');
+      styleEl.id = '__download_hide_expanded__';
+      styleEl.textContent = `
+        #__download_target__ [data-expanded="true"] { display: none !important; }
+      `;
+      document.head.appendChild(styleEl);
+      target.id = '__download_target__';
+
+      // 等待 DOM 重绘
+      await new Promise(r => setTimeout(r, 100));
+
+      // 计算完整高度: 容器 scrollHeight + 边距
+      const fullHeight = target.scrollHeight + 48;  // 上下 padding 各 24px
+      const fullWidth = Math.max(target.scrollWidth, 1400);
+
       const dataUrl = await toPng(target, {
         backgroundColor: '#0b0e14',
         pixelRatio: 2,  // 高清
         cacheBust: true,
-        // 跳过所有展开/折叠状态 (用户要求"保持折叠")
-        style: { transform: 'translateZ(0)' },
+        // 关键: 让 html-to-image 知道完整高度, 截全所有内容
+        width: fullWidth,
+        height: fullHeight,
+        style: {
+          // 强制展示完整高度, 避免被 min-height 100vh 截断
+          transform: 'translateZ(0)',
+          maxHeight: 'none',
+          height: fullHeight + 'px',
+          overflow: 'visible',
+          // ★ 修复 2: 居中对齐 - 强制容器宽度固定, 避免被父级 flex 影响
+          maxWidth: '1400px',
+          marginLeft: 'auto',
+          marginRight: 'auto',
+        },
       });
 
-      // 恢复原状态
-      setExpandedCards(prevExpanded);
+      // 清理: 移除临时 style + 还原 + 滚回原位置
+      document.head.removeChild(styleEl);
+      target.removeAttribute('id');
+      target.style.maxHeight = prevMaxHeight;
+      window.scrollTo(0, prevScrollY);
 
       // 下载
       const link = document.createElement('a');
@@ -334,7 +373,7 @@ export default function CuratedRankingView({
 
             {/* Expanded details */}
             {isExp && (
-              <div style={{ padding: '0 20px 16px', borderTop: '1px solid #1e2535' }}>
+              <div data-expanded="true" className="expanded-details" style={{ padding: '0 20px 16px', borderTop: '1px solid #1e2535' }}>
                 <div style={{ display: 'flex', gap: 24, padding: '14px 0', flexWrap: 'wrap', borderBottom: '1px solid #1e2535' }}>
                   {(() => {
                     const ds = r.dimension_scores || {};
