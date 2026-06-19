@@ -240,6 +240,8 @@ async def main():
                 WHERE scan_date = $23 AND symbol = $24
             ''', values)
             total_updated += len(batch)
+            # v7.0.33 fix: 缺少 commit 导致数据没真正写入, 验证发现 5683 行原数
+            await conn.execute('COMMIT')
             if (i // BATCH_SIZE) % 5 == 0:
                 print(f'  进度: {total_updated}/{len(update_records)}')
 
