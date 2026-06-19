@@ -113,6 +113,60 @@ Bash 工具使用 `/tmp/` 和 `~/`，但 Read/Edit/Write/Glob/Grep 工具需要 
 - 从 Bash 输出拿到路径后先转换为 Windows 格式再传给 Read 工具
 - 不确定路径时用 `pwd` 或 `ls` 确认
 
+### 🚨 bash → cmd `start "title"` 反斜杠转义陷阱 ⚠️ **2026-06-19 新增 (高频复发)**
+
+**症状**: 用 `start "MyTitle" /MIN cmd /k ...` 启动后台程序时，弹出 Windows 错误框:
+> Windows 找不到文件 '\MyTitle\'。请确定文件名是否正确后,再试一次。
+
+**根因**: Bash 嵌套 `cmd //c "start \"title\" ..."` 时，bash 反斜杠转义会**吃掉** title 里的反斜杠。例如 `"StockAnalyst-Backend"` 里的 `-` 不会触发，但含路径或带空格字符时, 反斜杠被双重转义后 cmd 把 title 解析成路径 `"\StockAnalyst-Backend\"`，找不到该文件。
+
+**❌ 错误写法 (容易复发)**:
+```bash
+# 双引号被 bash + cmd 双重解析, 反斜杠经常丢失
+cmd //c 'start "StockAnalyst-Backend" /MIN cmd /k "python -m uvicorn ..."'
+cmd //c "start \"StockAnalyst-Backend\" /MIN cmd /k \"python -m uvicorn ...\""
+```
+
+**✅ 正确写法 1**: **写临时 .bat 文件, 避免命令行嵌套转义**
+```bash
+# Step 1: Write 一个临时 bat
+Write:  C:\Users\tanha\AppData\Local\Temp\restart_backend.bat
+  内容:
+    @echo off
+    chcp 65001 >nul
+    cd /d C:\AI-Agent-Local\Stock\backend
+    set NUM_WORKERS=4
+    python -B -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# Step 2: start bat 文件 (无需嵌套转义)
+cmd //c 'start "StockAnalyst-Backend" /MIN C:\Users\tanha\AppData\Local\Temp\restart_backend.bat'
+```
+
+**✅ 正确写法 2**: **PowerShell Start-Process (最稳定)**
+```bash
+# PowerShell 的 Start-Process 不受 bash 反斜杠转义影响
+powershell -Command 'Start-Process -FilePath "C:\Users\tanha\AppData\Local\Temp\restart_backend.bat" -WindowStyle Minimized'
+```
+
+**✅ 正确写法 3**: **Python 直接调 (避免 cmd 嵌套)**
+```python
+import subprocess
+subprocess.Popen(
+    ['cmd', '/c', 'start', '"StockAnalyst-Backend"', '/MIN', 'cmd', '/k', 'python -m uvicorn ...'],
+    shell=False,  # 关键: 不通过 cmd.exe shell
+)
+```
+
+**⚠️ 触发场景 (高频)**:
+- 编辑本地 `.bat` 文件后想**重启服务**测试 (uvicorn / vite / docker / 后台进程)
+- 任何需要 `start "title" /开关 cmd /k 命令` 的场景
+- 在 Git Bash 或 MSYS bash 里运行 `cmd //c "..."`
+
+**排查步骤**:
+1. 看到 "Windows 找不到文件 '\\xxx\\'" 错误 → 90% 是这个坑
+2. 检查 title 是否含特殊字符 (`-`, 空格, 中文)
+3. 优先用 PowerShell `Start-Process` 而不是 bash → cmd 嵌套
+
 ### GitHub 访问策略 ⚠️
 
 HTTPS (443) 被墙，仅 SSH (22) 可用：
@@ -294,6 +348,81 @@ cp -r src backup/src-$(date +%Y%m%d)
 - package.json（version 字段）
 - 批处理脚本（VERSION 变量）
 - 相关文档（更新日期）
+
+---
+
+## 🛡️ Checkpoint 机制（Context 防爆）⚠️ **2026-06-17 新增** 🔴 **强制执行**
+
+> **目的**: 防止长任务跑爆 context window，把任务状态从 RAM 外置到磁盘文件。
+>
+> **📂 模板位置**: `Stock/docs/improvements/CHECKPOINT_TEMPLATE.md`
+> **📖 使用说明**: `Stock/docs/improvements/README.md`
+
+### 🔴 强制规则
+
+1. **新任务（涉及 ≥ 2 个模块 或 预计 ≥ 20 轮对话）开始时**：
+   - **必须**先 cp 一份 checkpoint 文件到 `Stock/docs/improvements/进行中-YYYYMMDD-任务名.md`
+   - 至少填好"任务目标"+"已确认的事实"
+   - 让用户在确认时看到 checkpoint 路径
+
+2. **每完成 1-2 个子任务后**：
+   - 更新 checkpoint 的"已完成"和"进度总览"
+   - 在"工具调用记录"加一行
+   - 主动 `/compact`（**别等爆了才 compact**）
+
+3. **Context 超过 50% 时**（用户提醒或 AI 自我判断）：
+   - **立即**主动建议用户 `/compact` 或 `/clear`
+   - 提示："建议先 /compact，避免 context 爆炸；如果担心丢失信息，/clear 后新窗口读 checkpoint 继续"
+
+4. **崩溃恢复**：
+   - 用户说"继续上次的任务" → 读 `Stock/docs/improvements/进行中-*.md` 中最新的文件
+   - 用户说"我刚才 context 爆了" → 提示 `/clear` 后新窗口读 checkpoint
+
+### AI 触发检查清单
+
+每次新会话开始时，AI 应主动检查：
+
+```
+[ ] 用户消息是否涉及多模块/多文件？
+[ ] 预估对话轮次是否 > 20？
+[ ] 是否需要 Read > 500 行的大文件？
+    → 任一为真：必须先建 checkpoint
+```
+
+### 快速命令
+
+```bash
+# 创建 checkpoint
+cp "C:\AI-Agent-Local\Stock\docs\improvements\CHECKPOINT_TEMPLATE.md" \
+   "C:\AI-Agent-Local\Stock\docs\improvements\进行中-$(date +%Y%m%d)-任务名.md"
+
+# 列出当前所有 checkpoint
+ls "C:\AI-Agent-Local\Stock\docs\improvements\进行中-*.md"
+```
+
+### 与 8 阶段工作流的关系
+
+```
+CLAUDE.md 8 阶段（过程）     Checkpoint（状态）
+─────────────────────       ──────────────────
+阶段 1-4 讨论+确认    →    docs/improvements/待改进-*.md
+阶段 5-7 实现+测试    →    docs/improvements/进行中-*.md  ← 长任务必填
+阶段 8 完成报告       →    移到 docs/improvements/已完成/
+```
+
+### 为什么必须做
+
+- Claude Code 的 context window 是硬限制，**1M token 模型也会爆**（参数超限）
+- `/compact` 失败后只能 `/clear`，所有上下文归零
+- **长任务不建 checkpoint = 主动放弃半成品**
+- 一个崩溃的窗口可能丢失数小时工作
+
+### ❌ 反例（禁止）
+
+- "我们先聊聊看要做什么"（不建 checkpoint）→ 聊了 30 轮后 context 爆了
+- Read 一个 2000 行的大文件完整内容 → 一次性吃掉大量 context
+- 把刚 Read 的内容又粘贴回来让 AI "参考" → 重复消耗 context
+- 子任务完成不更新 checkpoint → checkpoint 失去意义
 
 ---
 
@@ -895,6 +1024,12 @@ python create_project.py --type skill --name my-skill
 | 2026-03-05 | **添加单单易项目规范** ⭐⭐⭐⭐⭐ |
 | 2026-03-05 | 明确本地 vs 远程命名规范 |
 | 2026-03-05 | 强调秒应项目已停止维护 |
+| 2026-05-07 | **Skill 自动加载注册表** + Karpathy 编码四原则 |
+| 2026-05-07 | 知识自动沉淀机制（claudeception） |
+| 2026-06-07 | **Stock Analyst 量化系统规范** v4.5 |
+| 2026-06-17 | **Checkpoint 机制（Context 防爆）** 🔴 **强制执行** |
+| 2026-06-17 | 新增 `Stock/docs/improvements/CHECKPOINT_TEMPLATE.md` 模板 |
+| 2026-06-17 | 新增长任务强制 cp checkpoint 规则 |
 
 ---
 
@@ -1146,6 +1281,8 @@ python -m projects.skills.service_manager --skills # JSON 格式完整清单
 | ❌ 跳过 `stock_name_cache` 直接查 `scan_results` | 5 处绕过 | `get_stock_name()` |
 | ❌ 新增任何除权检测代码 | 系统已全局前复权 (`daily_kline.adj_factor`) | 直接用 `daily_kline` |
 | ❌ 修改现有系统代码只为 DNA 实验室接入 | 违反并行原则 | DNA 在独立 schema/API/前端 |
+| ❌ **删除数据库或数据库表** | **400万+条 K 线数据永久丢失** | **只使用 SELECT/INSERT/UPDATE** |
+| ❌ **执行 DROP/TRUNCATE/DELETE 全表** | **数据无法回滚，无备份机制** | **使用 UPDATE 逐行修改** |
 
 ### 开发工作流
 
