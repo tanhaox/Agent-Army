@@ -318,7 +318,10 @@ export default function AnalysisPage() {
                     style={{ width: 15, height: 15, cursor: 'pointer', accentColor: '#8b5cf6' }} />
                 </td>
               <td style={{ padding: '9px 14px' }}><code style={{ color: '#06b6d4' }}>{r.symbol}</code></td>
-              <td style={{ padding: '9px 14px', fontWeight: 600 }}>{r.name}{r.ambush_score > 0 && <span style={{marginLeft:6,padding:'1px 5px',borderRadius:3,fontSize:9,background:'rgba(239,68,68,0.12)',color:'#ef4444'}}>潜伏</span>}</td>
+              <td style={{ padding: '9px 14px', fontWeight: 600 }} title={r.symbol}>
+                {r.name && r.name !== r.symbol && !r.name.match(/\.(SH|SZ|BJ)$/) ? r.name : <span style={{color:'#f59e0b',fontStyle:'italic'}}>{r.symbol} (无名称)</span>}
+                {r.ambush_score > 0 && <span style={{marginLeft:6,padding:'1px 5px',borderRadius:3,fontSize:9,background:'rgba(239,68,68,0.12)',color:'#ef4444'}}>潜伏</span>}
+              </td>
               <td style={{ padding: '9px 14px' }}>
                 <span style={{
                   padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: 12,

@@ -9,6 +9,7 @@ import logging
 logger = logging.getLogger("analysis")
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db, async_session_factory
+from app.core.name_resolver import get_stock_name
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -130,6 +131,24 @@ async def get_analysis_results(db: AsyncSession = Depends(get_db), limit: int = 
         "winner_rate": float(row[29]) if len(row) > 29 and row[29] is not None else None,
         "cost_spread": float(row[30]) if len(row) > 30 and row[30] is not None else None,
     })
+
+    # ★ 名称兜底: 如果后端 SQL COALESCE 仍返回 symbol (老扫描/stock_basic 没数据),
+    #   用 name_resolver.get_stock_name() 4 层兜底 (stock_basic → cache → scan_results → fallback)
+    need_name_fix = [(d["symbol"], d["name"]) for d in data
+                     if not d["name"] or d["name"] == d["symbol"] or d["name"].endswith(".SH") or d["name"].endswith(".SZ") or d["name"].endswith(".BJ")]
+    if need_name_fix:
+        logger.info(f"[analysis] {len(need_name_fix)} stocks need name fallback (symbol-only)")
+        for sym, _ in need_name_fix:
+            try:
+                real_name = await get_stock_name(sym)
+                if real_name and real_name != sym:
+                    # 找到对应 d 改 name
+                    for d in data:
+                        if d["symbol"] == sym:
+                            d["name"] = real_name
+                            break
+            except Exception as e:
+                logger.warning(f"Name fallback failed for {sym}: {e}")
 
     for d in data:
         sq = d.get("signal_quality")

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db, async_session_factory
+from app.core.name_resolver import get_stock_name
 import logging
 import numpy as np
 logger = logging.getLogger("result")
@@ -219,6 +220,24 @@ async def get_final_results(
              "regime_signal_cn": details.get("regime_signal_cn") if isinstance(details, dict) else None,
              }
         data.append(d)
+
+    # ★ 名称兜底: 如果后端 SQL COALESCE 仍返回 symbol (老扫描/stock_basic 没数据),
+    #   用 name_resolver.get_stock_name() 4 层兜底 (stock_basic → cache → scan_results → fallback)
+    need_name_fix = [(d["symbol"], d["name"]) for d in data
+                     if not d["name"] or d["name"] == d["symbol"]
+                     or (d["name"] and (d["name"].endswith(".SH") or d["name"].endswith(".SZ") or d["name"].endswith(".BJ")))]
+    if need_name_fix:
+        logger.info(f"[result] {len(need_name_fix)} stocks need name fallback (symbol-only)")
+        for sym, _ in need_name_fix:
+            try:
+                real_name = await get_stock_name(sym)
+                if real_name and real_name != sym:
+                    for d in data:
+                        if d["symbol"] == sym:
+                            d["name"] = real_name
+                            break
+            except Exception as e:
+                logger.warning(f"Name fallback failed for {sym}: {e}")
 
     # S3 风险分类: 按原型内 composite_score 分位 (与 analysis.py 一致)
     arch_scores: dict[str, list[float]] = {}
