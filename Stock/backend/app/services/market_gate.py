@@ -111,6 +111,45 @@ async def get_market_state() -> dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════
+#  v7.0.33: 训练风格映射 (6→3 种), 供 v2 trainer 调用
+# ═══════════════════════════════════════════════════════════
+
+def regime_to_market_style(regime: str) -> str:
+    """6 种市场状态 → 3 种训练风格.
+
+    v7.0.33 新增: 解决 v2 trainer 默认全市场训练的泛化失败问题.
+
+    映射规则:
+      - 趋势上涨 → bull  (动量/技术驱动)
+      - 恐慌杀跌, 弱势探底 → bear  (防御/估值驱动)
+      - 结构行情, 缩量博弈, 维稳行情, 震荡整理 → range  (博弈/形态驱动)
+      - unknown → all (兜底, 走全局训练)
+    """
+    if regime == "趋势上涨":
+        return "bull"
+    elif regime in ("恐慌杀跌", "弱势探底"):
+        return "bear"
+    elif regime in ("结构行情", "缩量博弈", "维稳行情", "震荡整理"):
+        return "range"
+    else:
+        return "all"
+
+
+async def get_current_regime_simple() -> str:
+    """返回当前市场风格 (bull/bear/range).
+
+    v7.0.33 新增: v2 trainer 默认自动检测当前市场风格, 按风格训练对应权重.
+    """
+    try:
+        state = await get_market_state()
+        regime = state.get("regime", "unknown")
+        return regime_to_market_style(regime)
+    except Exception as e:
+        logger.warning(f"get_current_regime_simple failed: {e}, fallback to 'all'")
+        return "all"
+
+
 async def _get_market_breadth() -> dict:
     """市场宽度: 涨跌家数比 + 新高新低比."""
     try:
@@ -415,21 +454,26 @@ async def get_gate_config() -> dict:
 
 
 async def _get_adaptive_thresholds(session) -> dict:
-    """Phase 31: 从 recommendation_tracking 统计各分数段真实胜率，自适应调整门控阈值.
+    """Phase 31: 从 signal_history 统计各分数段真实胜率，自适应调整门控阈值.
 
-    最低 30 条验证样本才信任该分数段数据.
+    最低 50 条验证样本才信任该分数段数据.
     每天 16:00 get_gate_config() 时自动调用，阈值随数据积累动态收敛.
+
+    优先使用 signal_history (已验证的历史信号)，其次使用 recommendation_tracking。
     """
-    MIN_SAMPLES = 30
+    MIN_SAMPLES = 50
+
+    # 优先从 signal_history 获取数据（更丰富的历史验证）
     r = await session.execute(text("""
         SELECT
             FLOOR(composite_score / 5) * 5 AS score_bucket,
             COUNT(*) AS n,
-            AVG(return_2d) AS avg_ret,
-            SUM(CASE WHEN was_profitable_2d THEN 1 ELSE 0 END)::float
+            AVG(ret_t5) AS avg_ret,
+            SUM(CASE WHEN outcome_label IN ('strong_win', 'weak_win') THEN 1 ELSE 0 END)::float
                 / NULLIF(COUNT(*), 0) AS win_rate
-        FROM recommendation_tracking
-        WHERE verified_2d = true AND scan_date >= CURRENT_DATE - 60
+        FROM signal_history
+        WHERE ret_t5 IS NOT NULL
+          AND scan_date >= CURRENT_DATE - 180
         GROUP BY score_bucket
         ORDER BY score_bucket DESC
     """))
@@ -440,9 +484,33 @@ async def _get_adaptive_thresholds(session) -> dict:
         for row in r.fetchall() if int(row[1]) >= MIN_SAMPLES
     ]
 
+    # 如果 signal_history 没有足够数据，尝试 recommendation_tracking
+    if not buckets:
+        r = await session.execute(text("""
+            SELECT
+                FLOOR(composite_score / 5) * 5 AS score_bucket,
+                COUNT(*) AS n,
+                AVG(return_2d) AS avg_ret,
+                SUM(CASE WHEN was_profitable_2d THEN 1 ELSE 0 END)::float
+                    / NULLIF(COUNT(*), 0) AS win_rate
+            FROM recommendation_tracking
+            WHERE verified_2d = true AND scan_date >= CURRENT_DATE - 60
+            GROUP BY score_bucket
+            ORDER BY score_bucket DESC
+        """))
+        buckets = [
+            {"score": int(row[0]), "n": int(row[1]),
+             "avg_ret": round(float(row[2] or 0), 2),
+             "win_rate": round(float(row[3] or 0), 3)}
+            for row in r.fetchall() if int(row[1]) >= MIN_SAMPLES
+        ]
+        data_source = "recommendation_tracking"
+    else:
+        data_source = "signal_history"
+
     if not buckets:
         return {"status": "insufficient_data", "fallback": "hardcoded",
-                "note": f"< {MIN_SAMPLES} verified per bucket"}
+                "note": f"< {MIN_SAMPLES} verified per bucket (tried signal_history + recommendation_tracking)"}
 
     # 找到胜率 > 50% 的最低分数段 → 推荐阈值
     rec_threshold = 40
@@ -460,6 +528,7 @@ async def _get_adaptive_thresholds(session) -> dict:
 
     return {
         "status": "adaptive",
+        "data_source": data_source,
         "samples_per_bucket": MIN_SAMPLES,
         "buckets": len(buckets),
         "min_score": rec_threshold,
