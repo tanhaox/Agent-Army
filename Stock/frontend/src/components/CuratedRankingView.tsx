@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { toPng } from 'html-to-image';
 import api from '../lib/api';
 
 const ARCH_CN: Record<string, string> = {
@@ -122,6 +123,43 @@ export default function CuratedRankingView({
   expandedCards, setExpandedCards, scoringBatch, loadError,
 }: Props) {
   const navigate = useNavigate();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = async () => {
+    if (!containerRef.current || downloading) return;
+    setDownloading(true);
+    try {
+      // 临时折叠所有展开的卡片 (下载快照, 用户要求"保持折叠状态")
+      const prevExpanded = new Set(expandedCards);
+      setExpandedCards(new Set([0]));  // 保留第 0 张可能展开的
+      await new Promise(r => setTimeout(r, 100));  // 等 DOM 重渲染
+
+      // 找实际要下载的容器 (含 header + 所有 cards)
+      const target = containerRef.current;
+      const dataUrl = await toPng(target, {
+        backgroundColor: '#0b0e14',
+        pixelRatio: 2,  // 高清
+        cacheBust: true,
+        // 跳过所有展开/折叠状态 (用户要求"保持折叠")
+        style: { transform: 'translateZ(0)' },
+      });
+
+      // 恢复原状态
+      setExpandedCards(prevExpanded);
+
+      // 下载
+      const link = document.createElement('a');
+      const filename = `精选反哺排名_${curatedDate || scanDate || new Date().toISOString().slice(0, 10)}.png`;
+      link.download = filename;
+      link.href = dataUrl;
+      link.click();
+    } catch (e: any) {
+      alert('下载失败: ' + (e?.message || '未知错误'));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const sorted = [...data].sort((a, b) => {
     const ra = a.rec_index ?? 0;
@@ -131,7 +169,7 @@ export default function CuratedRankingView({
   });
 
   return (
-    <div style={{ maxWidth: 1400, margin: '0 auto', padding: 24, background: '#0b0e14', minHeight: '100vh', color: '#c9d1d9', fontFamily: 'system-ui' }}>
+    <div ref={containerRef} style={{ maxWidth: 1400, margin: '0 auto', padding: 24, background: '#0b0e14', minHeight: '100vh', color: '#c9d1d9', fontFamily: 'system-ui' }}>
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4 }}>
         <div style={{display:'flex',alignItems:'center',gap:12}}>
           <h1 style={{fontSize:22,margin:0}}>精选反哺排名</h1>
@@ -148,6 +186,22 @@ export default function CuratedRankingView({
         <div style={{display:'flex',gap:12,alignItems:'center'}}>
           {scoringBatch && <span style={{fontSize:12,color:'#f59e0b'}}>⏳ LLM横向评分中...</span>}
           <span style={{fontSize:12,color:'#6e7a8a'}}>{scanDate} | {data.length} 只 | LLM反哺后重排</span>
+          {/* ★ v7.0.33: 下载按钮 — 导出当前所有票为 PNG, 文件名用日期 */}
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            title="下载当前所有票为 PNG (文件名带日期, 如 精选反哺排名_2026-06-19.png)"
+            style={{
+              padding:'5px 12px', borderRadius:4, fontSize:11, fontWeight:600,
+              border: '1px solid #10b981',
+              background: downloading ? '#1a2030' : 'rgba(16,185,129,0.08)',
+              color: downloading ? '#6b7280' : '#10b981',
+              cursor: downloading ? 'wait' : 'pointer',
+              display:'inline-flex', alignItems:'center', gap:4,
+            }}
+          >
+            {downloading ? '⏳ 生成中...' : '📥 下载 PNG'}
+          </button>
         </div>
       </div>
       <p style={{color:'#6e7a8a',marginBottom:20,fontSize:12}}>
