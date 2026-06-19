@@ -1,8 +1,8 @@
-# Stock Analyst 开发施工手册 v2.1
+# Stock Analyst 开发施工手册 v2.5
 
 > **用途**: 给开发窗口的 AI 使用。每次修改代码前，先查找你要改的文件/表，
 > 然后看"连带影响"表格 + 全局约定。新增/修改任何模块前，先查阅第七章"统一工具库"。
-> **最近更新**: 2026-06-09 — 大神仙空 v2.0 + AlphaFlow 信号规则 + 事件过滤
+> **最近更新**: 2026-06-19 — v7.0.33 v2 Trainer 按 regime 训练 + v7.0.32 系统评分 22 字段全链路透传
 
 ---
 
@@ -18,6 +18,7 @@
 | 代码规范 | `from app.utils.stock_code import normalize_ts_code, strip_suffix` | 不要再写 `startswith('6') → .SH` |
 | 名称查询 | `from app.core.name_resolver import get_stock_name, batch_get_stock_names` | 不要再直接查 scan_results |
 | 前复权K线 | `from app.services.kline_utils import get_adjusted_kline, get_ex_rights_dates` | K线已全局前复权, 除权日可精确识别 |
+| **涨跌幅颜色 (A 股惯例)** | `import { getPnlColor } from '../../lib/signalColor'` (前端) | **红涨绿跌**, 涨=`#ef4444` 跌=`#10b981`, 不要再手写颜色 |
 
 ---
 
@@ -40,6 +41,8 @@
 
 **职责**: 深度评分主引擎。`deep_analyze()` 是 5 管线段的编排者 (v4.4: JSON 序列化已加边界守卫 sanitize_for_json)。
 
+**v7.0.30 新增铁三角死规则**: `_apply_hard_rules()` (line 132-203), 5 条规则 (MA20+RSI+VOL) 后置过滤 TG 信号。详见 [docs/improvements/已完成/20260618-v7.0.30-铁三角死规则接入.md](../improvements/已完成/20260618-v7.0.30-铁三角死规则接入.md)
+
 **连带影响** (改这个文件必须检查):
 
 | 如果你改了 | 必须同步检查 |
@@ -50,10 +53,18 @@
 | | `frontend/src/pages/ResultPage.tsx` — 前端渲染该字段 |
 | `_deep_persist_phase()` INSERT 列 | `app/models/data_models.py` — ORM 模型列对齐 |
 | | 数据库 ALTER TABLE — 新列必须在 DB 中存在 |
+| | ⚠️ **details JSON 新字段**: 必须在 `_deep_persist_phase` 第 1119-1124 行写库,否则 score_4h 覆辙再演 |
+| `_apply_hard_rules()` 规则阈值/增删 | `backend/scripts/backfill_hard_rules.py` — 改完后必须重跑补历史 details |
+| | ⚠️ **archetype 适配**: value_defensive / cyclical_resource 默认跳过 R2/R3,不要随便改 |
 | `DEFAULT_WEIGHTS` | `app/services/shadow_trainer.py:75` — import 此常量 |
 | `_deep_preload_phase()` 预加载调用 | `app/services/predictive_features.py` — 训练特征预加载 |
 
 **进度回调**: ⭐ v4.5 已统一为 4 参数 `progress_cb(phase, current, total, message)`。不要再传 3 参数。
+
+**⭐ v7.0.30 重要约定**:
+- **`_apply_hard_rules` 永远 try/except 包裹**: 失败不影响主流程 (line 1386-1390)
+- **字段写入不丢**: 任何 `r["xxx"] = ...` 都必须在 `_deep_persist_phase` 的 details dict 里序列化
+- **archetype 适配**: R2/R3 跳过 value/cyclical 是数据驱动的结论,不能改回"全员剔除"
 
 ---
 
@@ -86,6 +97,81 @@
 - `_bench_ret()` 函数已完全移除, 改为 `_index_ret()`
 - 基准加载改用 `app.core.market_data.get_benchmark_closes()` (模块级缓存)
 - ⚠️ **旧 shadow 训练结果需重训**: param_library 中 is_shadow=true 的权重基于旧 (日历日) 标签
+
+---
+
+### `app/services/dragon_pool_service.py` ⭐ v6.0 新增
+
+**职责**: 潜龙池动态监控服务 (首板 → 二波型浮出)，4 核心函数 + 编排函数。
+
+**核心方法**:
+
+| 函数 | 输入 | 输出 | 用途 |
+|------|------|------|------|
+| `join_pool_from_first_limit(trade_date)` | 日期 | `[{ts_code, first_limit_id, relay_prob, waveback_prob}, ...]` | 从 `first_limit_up` 选 S/A/B 级入池 (UNIQUE 防重) |
+| `update_pool_state(trade_date)` | 日期 | 更新行数 | 更新 current_price / min_price / days_in_pool (基于 daily_kline) |
+| `get_active_pool_symbols()` | — | `[{ts_code, added_at, days_in_pool, waveback_prob, ...}]` | 列出所有 active 池中股 |
+| `evaluate_exit(symbol, days_in_pool)` | symbol + 天数 | `{exit, reason, confidence}` | **5 触发任一即踢出** (v6.0.4): 见下方踢出规则表 |
+| `detect_emerging(symbol)` | symbol | `{emerging, pattern, confidence, signal_quality, nm_score}` | 浮出二板信号: waveback > 0.3 + 强制分时验真 |
+| `evaluate_all_active()` | — | `{total, exited_count, emerging_count, exited[], emerging[], errors[]}` | 全池评估编排 |
+
+**踢出规则 (v6.0.4, 5 触发任一)**:
+
+| # | reason | 触发条件 | v6.0 |
+|---|--------|---------|------|
+| 1 | `atr_stop` | exit_signal_detector critical/high | v6.0 |
+| 2 | `fatigue_broken` | fatigue_detector broken/capitulation | v6.0 |
+| 3 | `time_decay_10d` | days_in_pool >= 10 | v6.0 |
+| 4 | `not_first_limit` | added_at 前 10 天内 prev-based 涨幅 ≥9.9% (v6.0.3: 用 prev_close 不用 open-close) | v6.0.3 |
+| 5 | `consecutive_board` | added_at **后**任何一天 prev-based 涨幅 ≥9.9% (连板成功退出) | v6.0.4 |
+
+**v6.0.3 关键修复**: 所有涨跌幅判定改用 `LAG(close) OVER (...)` 算 prev-based，不再用 `(close - open) / open` (后者是当日振幅，不是涨跌幅)
+
+**业务常量** (语义标注，不参与判定):
+- `EMERGING_WAVEBACK_THRESHOLD = 0.30` (二波型浮出门槛)
+- `MAX_DAYS_IN_POOL = 10` (强制清理上限)
+- `SIGNAL_QUALITY_MIN = 0.5` (分时验真质量分下限)
+- `NM_SCORE_MIN = 0.0` (N 形分下限)
+
+**复用** (不复制代码):
+- `app.services.second_board_predictor.get_predictor().predict()` — 双模式二板概率
+- `app.services.exit_signal_detector.detect_exit_signals()` — ATR 动态止损
+- `app.services.fatigue_detector.detect_fatigue()` — 平台破位 5 阶段
+- `app.services.signal_quality_scorer.verify_signals_with_minute_bars()` — 分时验真 (强制)
+- `app.services.minute_nm_detector.detect_nm_pattern()` — N/M 形态 (verify 内部调用)
+
+**连带影响** (改这个文件必须检查):
+| 如果你改了 | 必须同步检查 |
+|-----------|------------|
+| `evaluate_exit()` 踢出逻辑 | `app/scheduler/daily_tasks.py:task_update_dragon_pool` 调度依赖 |
+| `detect_emerging()` 浮出门槛 | `app/api/dragon.py:GET /waveback-potential` 前端期望格式 |
+| `join_pool_from_first_limit()` 入选条件 | `app/api/scan.py:551-575` 阶段 4 调用方 |
+| `dragon_pool` 表结构 | `scripts/migrations.py:120-122` migration |
+| 业务常量 (阈值) | `docs/README.md` v6.0 章节 + `docs/architecture.md` §10 v6.0 变更日志 |
+
+**数据库**: `dragon_pool` 表 (migrations 120-122) — 22 列 + 2 索引
+- 主键: `id UUID`
+- 唯一约束: `UNIQUE(ts_code, added_at)` (防止重复入池)
+- 部分索引: `idx_dragon_pool_emerging WHERE emerging = TRUE`
+
+**API 端点** (`app/api/dragon.py`):
+- `GET  /api/dragon/pool?status=active|exited|all` — 池中股票列表
+- `GET  /api/dragon/waveback-potential` — 仅 emerging 池中股 (二波型 tab)
+- `POST /api/dragon/pool/scan?trade_date=YYYY-MM-DD` — 手动入池
+- `POST /api/dragon/pool/evaluate` — 手动全池评估
+- `POST /api/dragon/pool/update-state` — 手动状态更新
+
+**扫描阶段集成** (`app/api/scan.py:551-575`):
+- `/api/scan/all` 阶段 4 (v6.0 新增)
+- 4 个 SSE 事件: `dragon_pool_join / dragon_pool_update / dragon_pool_evaluate / dragon_pool_done`
+- ⚠️ `/api/scan/trigger` 旧路径不含阶段 4 (不破坏旧调用方)
+
+**约束遵守** (DEVELOPER_GUIDE 铁律):
+- ✅ 数值安全: 0.0 兜底，无内联 NaN 守卫
+- ✅ 进度回调: 4 参数标准 (SSE `emit(phase, current, total, msg)`)
+- ✅ 不复制代码: 全部 `from app.services.X import Y`
+- ✅ 不用 DROP/TRUNCATE: `CREATE TABLE IF NOT EXISTS`
+- ✅ 不写死硬指标 (除 2 个语义标注常量)
 
 ---
 
@@ -185,9 +271,16 @@ A 股配色: 红涨绿跌: rec_index ≥ 80 → 红, < 40 → 绿。
 ```
 deep_scorer._deep_enrich_phase
   → deep_scorer._deep_persist_phase (details JSON, ⭐ sanitize_for_json guarded)
+    → ⭐ v7.0.30: _apply_hard_rules 后置过滤 (5 条铁三角规则) → 写 hard_rules_* 字段到 details
     → result.py get_final_results (SELECT → data dict)
       → ResultPage.tsx (渲染)
 ```
+
+**v7.0.30 死规则字段透出** (前端可消费):
+- `details->>'hard_rules_blocked'` (bool 字符串)
+- `details->>'hard_rules_summary'` ("❌ R2_weak(价格低于 MA20 -5.2%)" 或 "✅ 通过 5/5 条")
+- `details->>'hard_rules_passed'` (JSON list, 前端可解析)
+- `details->>'hard_rules_failed'` (JSON list, 失败原因列表)
 
 ### 改"训练→预测"链路
 
@@ -522,7 +615,155 @@ filterByMarket(events, market) → filtered events
 
 ---
 
-## 九、数据库迁移脚本 ⭐ v4.7 新增
+## 九、v7.0.32+ 系统评分 27 维 ⭐ v7.0.32 新增
+
+### 9.1 评分维度清单 (27 维)
+
+| # | 维度 | 字段名 (DB column) | dim_scores key | 类型 | 来源 |
+|---|------|----------------------|-----------------|------|------|
+| 1 | 技术面 | `tech_score` | `technical` | 老 | v3.0 |
+| 2 | K线博弈 | `kline_score` | `kline_game` | 老 | v3.0 |
+| 3 | 资金面 | `fund_score` | `fund_flow` | 老 | v3.0 |
+| 4 | TG动量 | `tg_momentum` | `tg_momentum` | 老 | v3.0 |
+| 5 | 量比 | `vol_ratio` | `vol_ratio` | 老 | v3.0 |
+| 6 | ARBR情绪 | `arbr` | `arbr` | 老 | v3.0 |
+| 7 | 行业Alpha | `sector_alpha` | `sector_alpha` | 老 | v3.0 |
+| 8 | 大盘相对 | `market_relative` | `market_relative` | 老 | v3.0 |
+| 9 | 估值 | `valuation` | `valuation` | 老 | v3.0 |
+| 10 | 均线趋势 | `ma_trend` | `ma_trend` | 老 | v3.0 |
+| 11 | 形态 | `pattern` | `pattern` | 老 | v3.0 |
+| 12 | 趋势偏离 | `trend_deviation` | `trend_deviation` | 老 | v3.0 |
+| 13 | BBI多空 | `bbi` | `bbi` | 老 | v3.0 |
+| 14 | 箱体 | `multi_box` | `multi_box` | 老 | v3.0 |
+| 15 | 趋势偏离 | `dist_low` | `dist_low` | 老 | v3.0 |
+| 16 | J值 | `j_value` | `j_value` | 老 | v3.0 |
+| 17 | 下跌风险 | `downside_risk` | `downside_risk` | 老 | v3.0 |
+| 18 | 基本面 | `fundamentals` | `fundamentals` | 老 | v3.0 |
+| 19 | 周线共振 | `weekly_resonance` | `weekly_resonance` | 老 | v4.2 |
+| 20 | 龙虎榜板块 | `toplist_sector` | `toplist_sector` | 老 | v3.0 |
+| 21 | 潜伏猎手 | `ambush` | `ambush` | 老 | v4.7 |
+| 22 | 筹码胜率 | `chip_winner` | `chip_winner` | 老 | v4.5 |
+| 23 | 筹码成本 | `chip_cost` | `chip_cost` | 老 | v4.5 |
+| **24** | **MACD** | **`macd_dif/dea/bar`** | **`macd`** | **新 v7.0.32** | TDX 函数 |
+| **25** | **KDJ** | **`kdj_k/d/j`** | **`kdj`** | **新 v7.0.32** | TDX 函数 |
+| **26** | **RSI** | **`rsi_6/12/24`** | **`rsi_24`** | **新 v7.0.32** | TDX 函数 |
+| **27** | **BOLL** | **`boll_upper/mid/lower/width/pos`** | **`boll`** | **新 v7.0.32** | TDX 函数 |
+| **28** | **CCI** | **`cci`** | **`cci`** | **新 v7.0.32** | TDX 函数 |
+| **29** | **筹码 winner_rate** | **`winner_rate`** | **`chip_winner_rate`** | **新 v7.0.32** | Tushare cyq_perf |
+
+**注**: 27 = 23 老 + 5 新技术 (MACD/KDJ/BOLL/CCI + chip_winner_rate)
+
+### 9.2 22 字段名清单 (v7.0.32 新增)
+
+```python
+# 技术指标 15 字段
+macd_dif, macd_dea, macd_bar,
+kdj_k, kdj_d, kdj_j,
+rsi_6, rsi_12, rsi_24,
+boll_upper, boll_mid, boll_lower, boll_width, boll_pos,
+cci
+
+# 筹码分布 7 字段
+cost_5pct, cost_50pct, cost_95pct,
+weight_avg, winner_rate,
+cost_spread, price_vs_cost
+```
+
+### 9.3 全链路透传 (5 处必须改)
+
+新加的字段必须穿透到:
+
+| # | 文件 | 函数 | 作用 |
+|---|------|------|------|
+| 1 | `services/deep_scorer.py` | `_deep_normalize_phase` (line 770 后) | 写 `dimension_scores` dict |
+| 2 | `services/llm_deep_analyzer.py` | `get_stock_context` + `_batch_get_stock_contexts` SQL | DeepSeek 接收 22 字段 |
+| 3 | `services/llm_deep_analyzer.py` | `build_analysis_prompt` + `_build_tech_section` / `_build_chip_extended_section` | prompt 渲染 5 维技术 + 5 维筹码 |
+| 4 | `api/result.py` | `get_final_results` `base_select` + dict 输出 | ResultPage SQL 加 22 字段 |
+| 5 | `frontend/src/components/CuratedRankingView.tsx` | `checkGoldFilter` + `techCell` | 加 7 列 + 金过滤判定 |
+
+### 9.4 dim_scores 兼容性
+
+`_extract_score()` (scoring_trainer_v2.py:53) 兼容 3 种 schema:
+- 嵌套: `{"macd": {"score": 7.5, "raw": 0.5}}` ✅ 优先
+- 平铺: `{"macd": 7.5}` ✅ 回退
+- 老 `_score` 后缀: `{"macd_score": 7.5}` ✅ 回退
+
+新增 dim 字段时, 必须用嵌套格式 + score 子键。
+
+### 9.5 v2 Trainer 调用 (v7.0.33)
+
+```python
+from app.services.scoring_trainer_v2 import train_4x2, train_single, load_training_data_v2
+from app.services.market_gate import get_current_regime_simple, regime_to_market_style
+
+# 自动检测当前市场训练 (默认行为)
+result = await train_4x2(lookback_days=730)  # market_style=None → auto-detect
+
+# 强制指定 regime 训练
+result = await train_4x2(lookback_days=730, market_style='bull')
+result = await train_4x2(lookback_days=730, market_style='bear')
+result = await train_4x2(lookback_days=730, market_style='range')
+
+# 加载训练数据 (按 regime 过滤)
+X, y, syms, fns = await load_training_data_v2(
+    lookback_days=730,
+    horizon_days=5,
+    model_type='win',
+    market_style='bear',  # 只取 bear 段样本
+)
+
+# 单套训练 (含缺样本降级)
+result = await train_single(
+    horizon=5, model_type='win',
+    lookback_days=730, archetype='__global__',
+    market_style='bear',  # 自动降级: n<30 → 'all'
+)
+```
+
+### 9.6 regime 标签 SQL (与 v1 一致)
+
+```sql
+-- 700001.TI LAG(10) close ±2%
+WITH market_phases AS (
+    SELECT trade_date,
+           CASE
+             WHEN LAG(close, 10) OVER (ORDER BY trade_date) IS NULL THEN 'range'
+             WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date))
+                  / NULLIF(LAG(close, 10) OVER (ORDER BY trade_date), 0) * 100 > 2.0 THEN 'bull'
+             WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date))
+                  / NULLIF(LAG(close, 10) OVER (ORDER BY trade_date), 0) * 100 < -2.0 THEN 'bear'
+             ELSE 'range'
+           END as phase
+    FROM daily_kline WHERE ts_code = '700001.TI'
+)
+```
+
+**注**: 必须用 700001.TI (唯一可用指数, 沪深300 在本项目没数据)。
+
+### 9.7 数据回填脚本
+
+```bash
+# 回填 v7.0.32 新 22 字段 (含 commit bug 修复)
+python -m scripts._backfill_tech_chip
+
+# ⚠️ 该脚本需要 COMMIT, 已修复 (v7.0.33 commit 69d46c5b)
+# ⚠️ 缺 COMMIT 时, executemany 在事务里执行, 连接 close 时回滚
+#    表现: 脚本报告"实际更新 5676 条"但 DB 实际未变
+```
+
+### 9.8 /result/final API 加 22 字段 (索引)
+
+`api/result.py` `base_select` 顺序:
+- r[0..16]: 老字段 (含 details 在 r[17])
+- r[17]: details
+- r[18..39]: 22 个新字段 (macd_dif..price_vs_cost)
+- r[40..44]: llm_score / hidden_risks / catalysts / resonance_type / weekly_tg_momentum
+
+**新增字段时必须更新**: 1) base_select SQL 2) dict 输出索引 3) 总字段数 (现 82 字段)
+
+---
+
+## 十、数据库迁移脚本 ⭐ v4.7 新增
 
 ### 迁移管理工具
 

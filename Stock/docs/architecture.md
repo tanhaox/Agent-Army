@@ -1,7 +1,13 @@
 # Stock Analyst 系统架构文档
 
-> **版本**: v4.8 | **日期**: 2026-06-14 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型 + 大神仙空 v2.0
-> **审计状态**: v4.8 — DNA实验室自动化 + 新闻采集优化 + 宏观数据改造 + TG扫描阶段重组 + 新闻去重修复
+> **版本**: v7.0.33 | **日期**: 2026-06-19 | **核心依赖**: DeepSeek API + XGBoost + PostgreSQL + DNA 个性化模型 + 大神仙空 v2.0 + v2 学习链路 (4×2 + 按 regime 训练) + 铁三角死规则 (5 条) + 27 维评分 (含 v7.0.32 新增 5 维)
+> **v7.0.30 审计状态**: 🎯 铁三角死规则 (MA20+RSI+VOL) 接入 deep_scorer 流水线 + 24,279 行 backfill + 生产验证 PASS wr 56.6% / E +102%
+> **v7.0 审计状态**: 🎯 v2 学习链路 (4 horizon × 2 model_type 独立训练) — 不破坏 v1 链路
+> **v6.0.4 审计状态**: 🐉 5 触发踢出（consecutive_board + not_first_limit 复核）
+> **v6.0.3 审计状态**: 🩺 涨跌幅 prev-based 修复 (避免 open-close 误判)
+> **v6.0.2 审计状态**: 🐉 前端 tab 改名 + 监控天数列
+> **v6.0.1 审计状态**: 🩺 冒烟测试修复 `limit_cpt_list_service.py` Windows GBK 编码 bug (hot-sectors 端点 500 → 200)
+> **v6.0 审计状态**: 🐉 潜龙池动态监控上线（dragon_pool 表 + 模型驱动踢出/浮出 + 删连板天梯）
 
 ---
 
@@ -423,10 +429,10 @@ MonitorPage.tsx           # ★ v4.3 系统监控 (老兵回测+校准+就绪状
 | 形态识别 | `pattern_engine.py` | `run_pattern_scan()` | `pattern_signals` 表 |
 | 潜伏猎手 | `ambush_scanner.py` | `run_ambush_scan()` (用最新 scan_date) | `ambush_signals` 表 |
 
-**v4.8 扫描阶段流程 (10 阶段, 修复 toplist_sync 重复 + DNA 异步化)**：
+**v6.0 扫描阶段流程 (11 阶段, 新增🐉 阶段 4 潜龙池动态监控)**：
 
 ```
-POST /api/scan/trigger
+POST /api/scan/all
   ① toplist        → ensure_toplist_fresh() (skip_download 时跳过, 与 ⑧ 合并)
   ② download       → tg_engine 内部: download_latest_kline() + 覆盖率回退 365 天
   ③ scan           → 本地 TG 计算 (5% 步长推送 SSE, 5000只 → 100 事件)
@@ -434,11 +440,14 @@ POST /api/scan/trigger
   ⑤ pattern_scan   → 形态识别
   ⑥ deep_score     → 14 维深度评分 (文案修正: 12→14)
   ⑦ nm_defense     → 分钟线防伪 (异常不影响后续, 仍受 try/except 保护)
-  ⑧ toplist_sync   → ⛔ v4.8 移除 (与 ① 重复, 合并到 toplist)
+  ⑧ toplist_sync   → ⛔ v6.0 仍移除 (与 ① 重复, 合并到 toplist)
   ⑨ accuracy_feedback → isolated_meta=True 写独立列, 不覆盖主 discrimination
   ⑩ dna_auto_join  → asyncio.create_task 异步训练, 60-180s/只不阻塞 done
+  ⑪ 🆕 dragon_pool → 🐉 潜龙池: 入池 + 状态更新 + 评估 (4 SSE 事件: join/update/evaluate/done)
   done 事件 ────→ 前端 currentPhase='done' 触发 load()
 ```
+
+> **注**: `/api/scan/trigger` 路径（v4.8 旧版）不含阶段 ⑪ 潜龙池。需使用 `/api/scan/all` 触发完整 11 阶段。
 
 **市场过滤 (v4.8 后端真正过滤)**：
 
@@ -1229,6 +1238,496 @@ StockAnalyst.bat
 
 ## 10. 变更日志
 
+### v7.0.33 (2026-06-19) — 🧠 v2 Trainer 按 Regime 训练 (解决跨周期泛化失败)
+
+**核心问题**:
+- 旧 `train_4x2(market_style="all")` 不按市场状态分组训练
+- 实测: 牛市训的 win 模型在熊市完全失效 (胜率 74.8% → 24.3%, cv_auc 0.45)
+- 旧 `get_4x2_status()` 用 (h, mt) 作 key, 多 regime 权重互相覆盖 (32 套 → 只显示 8 套)
+
+**解决方案**:
+- 用 700001.TI LAG(10) ±2% 打 phase 标签 (bull/bear/range)
+- v2 trainer 按 phase 分组训练, 缺样本自动降级到 all
+- train_4x2 默认自动检测当前市场状态
+
+**4 步改造**:
+1. `market_gate.py` 加 `regime_to_market_style()` (6→3 映射) + `get_current_regime_simple()`
+2. `scoring_trainer_v2.py` `load_training_data_v2()` 加 phase CTE (LAG(10) ±2%)
+3. `train_single()` 缺样本降级 (n<30 → 'all')
+4. `train_4x2()` 默认 `market_style=None` → 自动检测当前市场
+
+**修复的 2 个严重 bug**:
+1. `_backfill_tech_chip.py` 缺 COMMIT: `executemany` 后未 commit, 数据回滚 (5676 条实际未写入)
+2. `get_4x2_status()` multi-regime 覆盖: SQL `WHERE is_active=true` + (h,mt) 作 key, 多 regime 互相覆盖
+
+**新增/修改文件 (4 个修改 + 2 个新建)**:
+
+#### 修改
+- `backend/app/services/market_gate.py`: +`regime_to_market_style()`, +`get_current_regime_simple()`
+- `backend/app/services/scoring_trainer_v2.py`: 3 处改 (load_training_data_v2 + train_single + train_4x2) + get_4x2_status 加 market_style
+- `backend/app/api/scan.py`: line 334 lookback 120→730
+- `backend/app/scheduler/daily_tasks.py`: line 420 lookback 120→730
+
+#### 新建
+- `backend/scripts/_backfill_tech_chip.py` — 5676 条 v7.0.32 新字段回填 (含 commit bug 修复)
+- `backend/scripts/_pk_v1_v2.py` — v1 vs v2 PK 回归测试脚本
+
+**生产权重 (32 套, 2026-06-19 写入)**:
+- all (8 套): 1307 样本, cv_auc 0.4645-0.6788
+- bull (8 套): 145 样本, cv_auc 0.4667-0.5505
+- bear (8 套): 211-643 样本, cv_auc 0.2988-0.6519 (跨周期核心)
+- range (8 套): 176-519 样本, cv_auc 0.4463-0.6662
+
+**v1 vs v2 PK (3 天 × 3 组, T+1 均价买入)**:
+| 组 | v1 T+5 | **v2 T+5** | v1 T+10 | **v2 T+10** |
+|----|--------|-----------|---------|------------|
+| Top 5 | +0.01% | **+0.98%** | -0.94% | **+1.73%** |
+| Rank 5-10 | -0.32% | **+0.54%** | -1.01% | -0.67% |
+| Rank 10-15 | -0.44% | -0.26% | +1.03% | -0.35% |
+
+**结论**: v2 在 Top 5 显著胜出 (T+5 +0.97pt, T+10 +2.67pt)。`feature_flag.learning_v2_active=true` 已生产启用 (2026-06-18 扫描 100% v2_active=True)。
+
+### v7.0.32 (2026-06-19) — 📊 系统评分维度扩展 (22 字段) + 全链路透传
+
+**核心改动**: 加 22 个新字段 (技术指标 + 筹码分布), 全链路修复确保 DeepSeek + ResultPage + CuratedRankingView 都能消费。
+
+**新增 22 字段**:
+- **技术指标 (15)**: macd_dif/dea/bar, kdj_k/d/j, rsi_6/12/24, boll_upper/mid/lower/width/pos, cci
+- **筹码分布 (7)**: cost_5/50/95pct, weight_avg, winner_rate, cost_spread, price_vs_cost
+
+**数据回填**:
+- `_backfill_tech_chip.py` 修复 commit bug 后, 5676 条回填成功 (2024-01 ~ 2026-05)
+- T+5 verified (1915 条) macd 字段: 6.5% → **64.4%** (+57.9pt)
+- 筹码字段: 16.6% (受 Tushare cyq_perf 限制, 仅 6 月起)
+- regime 训练样本: bull=145, bear=428, range=228 (全部 ≥30, 不触发降级)
+
+**全链路修复** (5 处):
+
+1. `deep_scorer.py` line 770+: `dims` dict 加 5 维评分函数 (macd_score/kdj_score/rsi_24_score/boll_score/cci_score/chip_winner_rate)
+   - 让 v2 trainer 能学到 22 字段权重
+   - 注意: 新维度写入只在**新扫描**后生效
+
+2. `llm_deep_analyzer.py` SQL + Prompt:
+   - `get_stock_context()` + `_batch_get_stock_contexts()` SQL 加 22 字段
+   - 加 `_build_tech_section()` + `_build_chip_extended_section()` 2 个格式化函数
+   - Prompt 头部: "14 个维度" → "22 个维度 (含 v7.0.32 新增的 MACD/KDJ/RSI/BOLL/CCI/筹码分布 6 维度)"
+
+3. `api/result.py` `/result/final` SQL:
+   - `base_select` 加 22 字段 (line 87-95)
+   - dict 输出加 22 字段 (r[18..39]), 索引重排
+
+4. `frontend/src/components/CuratedRankingView.tsx`:
+   - 加 7 列折叠行: MACD/KDJ/RSI/BOLL/CCI/成本/信号
+   - 加 1 行展开区: v7.0.32 详细 (5 维 + 筹码 + 获利盘 + 金过滤标签)
+   - 加金过滤判定 (`checkGoldFilter`):
+     - ✓ 金过滤: 至少 4 维度 + 全 isGold + 没有 isWarn
+     - ⚠ 风险: 任何 KDJ/RSI/BOLL/CCI 超买 OR price_vs_cost > 20%
+
+**新增/修改文件 (1 个修改 + 1 个新建)**:
+
+#### 修改
+- `backend/app/services/deep_scorer.py`: +5 维评分函数 (line 770 后)
+- `backend/app/services/llm_deep_analyzer.py`: SQL 加 22 字段 + 2 个格式化函数
+- `backend/app/api/result.py`: SQL 加 22 字段 + dict 输出索引重排
+- `frontend/src/components/CuratedRankingView.tsx`: 加 7 列 + 1 行展开 + 金过滤
+- `Stock/backend/scripts/_backfill_tech_chip.py`: 加 `await conn.execute('COMMIT')`
+
+**验证**: 002326.SZ (永太科技) /result/final 返回 82 字段 (含 22 个新字段), DeepSeek prompt 输出含 5 维技术 + 5 维筹码。
+
+### v7.0.31 (2026-06-18) — 🐉 5 触发踢出 + Dragon 端点补全 + 路由统一 + 数据一致性 bug 修复 + OSError64 稳定性修复 + MonitorPage 升级
+
+### v7.0.30 (2026-06-18) — 🎯 铁三角死规则接入 (MA20+RSI+VOL)
+
+**需求 (用户 2026-06-18 实战理论)**:
+1. **铁三角短线理论** = MA20(趋势) + RSI(动能) + VOL(真伪)
+2. **三层过滤**: MA20 方向 → 回调 MA20 + RSI 底背离 → 放量确认
+3. **数据驱动阈值校准**: 1915 行 verified_5d 实测,不用直觉
+4. **archetype 适配**: 周期/价值股本来在 MA20 下方操作,R2/R3 跳过
+5. **修 score_4h 覆辙**: 算了的字段必须写库,前端能消费,验证脚本能统计
+
+**新增/修改文件 (1 个修改 + 3 个新建)**:
+
+#### 修改
+- `backend/app/services/deep_scorer.py`:
+  - `_apply_hard_rules` (line 132-203): 阈值校准 (-5%→-3% / +5%→+10%) + archetype 跳过 + 函数 docstring
+  - `_deep_persist_phase` (line 1119-1124): details dict 加 5 字段写入
+  - 主流程 (line 1377-1397): 加 hard_rules_summary 字符串生成
+
+#### 新建
+- `backend/scripts/backfill_hard_rules.py` — 24,279 行 analysis_scores backfill
+- `backend/scripts/_v7_30_validate.py` — 第一轮验证 (R6/R7/R8 反向发现)
+- `backend/scripts/_v7_30_validate2.py` — 第二轮精细验证 (期望值视角)
+- `backend/scripts/_v7_30_verify_production.py` — backfill 后生产数据验证
+- `backend/scripts/_v7_30_smoke_test.py` — 8 项冒烟测试 (47 断言)
+
+**新增 details 字段 (analysis_scores)**:
+| 字段 | 类型 | 用途 |
+|------|------|------|
+| `hard_rules_passed` | list[str] | 通过的规则名 (e.g. `['R1_micro_cap', 'R2_weak', ...]`) |
+| `hard_rules_failed` | list[[code, reason]] | 失败的规则 + 原因 (e.g. `[['R2_weak', '价格低于 MA20 -5.2%']]`) |
+| `hard_rules_blocked` | bool | 是否被任意规则剔除 |
+| `hard_rules_summary` | str | 一句话诊断 (`❌ R2_weak(价格低于 MA20 -5.2%)` 或 `✅ 通过 5/5 条`) |
+| `v7_version` | str | 版本标记 (`'v7.0.30'`) |
+
+**5 条铁三角规则 (按期望值差排序)**:
+| ID | 规则 | 阈值 | E 差 | 评价 |
+|----|------|------|------|------|
+| R4 | RSI 超买 | > 70 | +260.8% | ⭐⭐⭐ 黄金规则 (30 样本, 27 亏) |
+| R2 | 弱势股 (bias<-3%) | < -3% | +239.7% | ⭐⭐ 极强 |
+| R1 | 微盘股 (mcap<50亿) | < 50亿 | +197.5% | 强 |
+| R5 | 严格空头 (MA5<MA10<MA20) | strict=0 | +152.7% | ⭐⭐ 强 |
+| R3 | 追高 (bias>10%) | > 10% | +71.2% | 中 |
+
+**Archetype 适配**:
+- R2/R3 对 `value_defensive` / `cyclical_resource` **跳过**
+- 数据依据: value 上 R2 Δwr=+16.4% (反向), cyclical 上 Δwr=+15.2% (反向)
+- 周期/价值股本来在 MA20 下方操作,超跌反弹是机会
+
+**生产数据验证 (backfill 后实测, verified_5d 真交集)**:
+| | n | wr | win_avg | loss_avg | avg_r | E(期望值) |
+|---|---|----|---------|----------|-------|-----------|
+| **5 条全过 (PASS)** | 343 | **56.6%** | +446% | -347% | **+101.65%** | **+101.96%** |
+| **任一被剔 (FAIL)** | 1572 | 45.2% | +361% | -404% | -57.79% | **-58.01%** |
+
+- PASS wr - FAIL wr = **+11.4%** (胜率差)
+- PASS E - FAIL E = **+159.98%** (期望值差)
+- **期望值由负转正**: -58% → +102%
+
+**跨年稳定性**:
+| 年 | R2 Δwr | R4 Δwr | R5 Δwr | 评价 |
+|----|--------|--------|--------|------|
+| 2024 | -20.7% | -39.8% | -17.9% | ✅ 三条都有效 |
+| 2025 | -33.7% | -48.1% | -16.4% | ✅ 三条都更强 |
+| 2026 | -14.9% | -24.4% | -13.3% | ✅ 三条都有效 |
+
+**冒烟测试 (47/47 全过, 8 项测试)**:
+1. ✅ import 检查 (改完代码后模块能加载)
+2. ✅ `_apply_hard_rules` 8 个边界 case
+3. ✅ details JSON round-trip (5 字段不丢)
+4. ✅ deep_analyze 签名 + sanitize_for_json 健壮性
+5. ✅ DB query `details->>` 读 5 字段 (24,279 行 100% 覆盖)
+6. ✅ 5 条规则互相独立 (单/多/全过)
+7. ✅ value/cyclical archetype 正确跳过 R2/R3
+8. ✅ 旧 v2 字段不丢 (backfill 不覆盖 v2, 10,158 行同时含 v2+v7)
+
+**关键设计**:
+- **数据驱动阈值校准** (不是凭直觉): 第一轮测试发现 R6/R7/R8 反向 → 去掉
+- **测试上下文明确**: 用户提醒"规则是加在 TG 扫描信号之后的" — 改测试设计
+- **期望值视角**: 不只看 wr,还看 win_avg / loss_avg / E(期望值)
+- **修了 score_4h 覆辙**: "算了没写" 的 bug 不会再犯
+- **archetype 适配**: 不是一刀切,根据股票类型跳过不适用的规则
+- **跨年稳定性**: 2024/2025/2026 三主规则全有效,不是过拟合
+
+**v2 状态**:
+- v2_active=true 仍生效 (best_horizon / best_strategy 仍写库)
+- param_library_v2 64 套权重仍激活
+- 铁三角规则与 v2 **并行不冲突**: 死规则在前,v2 概率调整在后
+- v2 暂时挂起(用户原话"v2 的事先挂起,后面有时间再继续")
+
+**业务价值**:
+- 期望值由负转正 (-58% → +102%) — **核心目标**
+- 通过规则 vs 未通过 wr 差 11.4%
+- 5 条规则每条 E 差都为正(数据验证)
+- 跨年稳(2024/2025/2026 三主规则都有效)
+
+---
+
+### v7.0 (2026-06-17) — 🎯 v2 学习链路 (4 horizon × 2 model_type)
+
+**需求 (用户 2026-06-17 敲定口径)**:
+1. T+N 验证只用 **2/3/5/10** 四个模式 (去掉 15)
+2. **4 模式必须独立训练** (同一股票不同 T+N 方向可能不同)
+3. 盈利/避坑两套独立模型 (不是 1=1, 0=0 二分类)
+4. **完全新建一套 v2**, 跑通后用 feature_flag 切流量 (不破坏 v1)
+
+**新增/修改文件 (8 个新建 + 6 个修改)**:
+
+#### 新建
+- `backend/scripts/migrate_v2.sql` — v2 表迁移 (param_library_v2 + feature_flag)
+- `backend/scripts/run_migrate_v2.py` — 迁移执行器
+- `backend/app/core/feature_flag.py` — feature flag 模块 (is_v2_active / get_flag / set_flag)
+- `backend/app/services/scoring_trainer_v2.py` — v2 trainer (Logistic Regression, 4×2 独立训练)
+- `backend/app/services/deep_scorer_v2.py` — v2 主推荐融合 (predict_optimal_horizon)
+- `backend/app/api/learning_v2.py` — v2 API (7 个端点, 前缀 /learning/v2/*)
+- `frontend/src/pages/LearningV2Page.tsx` — v2 学习面板 (8 套权重 + 切换开关 + 预测测试)
+
+#### 修改
+- `backend/app/models/data_models.py:228` — 删 T+15 字段 (暂留, v2 跑通后再删)
+- `backend/app/services/accuracy_tracker.py:149` — 循环 [2,3,5,10] (去掉 15)
+- `backend/scripts/verify_recommendations.py` — 加 T+3 验证 (修复 0/618 bug) + 加 T+10
+- `backend/app/scheduler/daily_tasks.py` — 加 task_train_4x2_v2
+- `backend/app/scheduler/scheduler_loop.py:193` — 注册新任务
+- `backend/app/api/__init__.py` — 注册 learning_v2_router
+
+**新增数据表**:
+- `param_library_v2` — 8 套权重 (archetype='__global__', horizon × model_type 唯一)
+- `feature_flag` — 切换开关 (默认 learning_v2_active=false)
+
+**新增字段 (recommendation_tracking)**:
+- `return_10d`, `was_profitable_10d`, `verified_10d` (v7.0)
+
+**新增 API 端点 (7 个)**:
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/learning/v2/train-weights` | POST | 全跑或单跑 (4×2) |
+| `/learning/v2/4x2-status` | GET | 8 套权重状态 |
+| `/learning/v2/panel` | GET | v2 学习面板 |
+| `/learning/v2/predict-optimal?symbol=` | POST | 单只股票推荐最佳持仓期 |
+| `/learning/v2/feature-flag` | GET/POST | 切换 v2 主推开关 |
+| `/learning/v2/health` | GET | v2 链路健康检查 |
+
+**修复 bug (T+3=0)**:
+- **根因**: `verify_recommendations.py` 之前只处理 T+2/T+5/T+15, 完全没写 T+3
+- **现状**: 修复后 T+3 verified=164, wr=33.5%
+- **业务价值**: shadow_trainer 之前只 T+3 训练, 但 T+3 一直 0 验证, 训练数据为空 (用户核心需求)
+
+**8 套独立训练 (4 horizon × 2 model_type)**:
+```
+T+2_win  / T+2_loss    ← 短期: 盈利模型 / 避坑模型
+T+3_win  / T+3_loss    ← 短中
+T+5_win  / T+5_loss    ← 中线
+T+10_win / T+10_loss   ← 长线
+```
+
+**关键设计**:
+- **win 模型**: 标签 = was_profitable_Nd (盈利=1, 亏损=0)
+- **loss 模型**: 标签 = NOT was_profitable_Nd (亏损=1, 盈利=0) — **反例独立训练**
+- **不是 51%/49% 镜像** — 损失样本特征分布与盈利样本独立
+- **样本不足 (n<30) 跳过 + warning, 保留占位** — 等用户补历史数据
+
+**当前训练数据 (2026-06-17 13:25)**:
+```
+[OK]   T+2_win      n=214 cv_auc=0.4290
+[OK]   T+2_loss     n=214 cv_auc=0.4290
+[OK]   T+3_win      n= 69 cv_auc=0.4646
+[OK]   T+3_loss     n= 69 cv_auc=0.4646
+[SKIP] T+5_win      n=  5  (待用户补历史)
+[SKIP] T+5_loss     n=  5
+[SKIP] T+10_win     n=  0  (待 1-2 周数据积累)
+[SKIP] T+10_loss    n=  0
+```
+
+**predict_optimal_horizon 输出**:
+```json
+{
+  "best_horizon": 2,
+  "best_strategy": "S1",
+  "best_p_win": 1.0,
+  "best_p_loss": 0.0,
+  "best_net": 1.0,
+  "advice": "建议持仓 T+2 (S1), 净胜率 +100%"
+}
+```
+
+**切换流程 (跑通后)**:
+1. 前端 /learning-v2 页面看 8 套权重状态
+2. feature_flag.learning_v2_active 默认 false
+3. 跑通 8 套训练 → 点 "开启 v2 主推" → TG 主推走 v2
+4. 1 周后看 4 模式胜率独立追踪
+5. 3 个月后 v1 退役 (param_library_v2 改名 param_library)
+
+**已知问题**:
+- v1 `app/api/regime.py` 模块缺失, 影响 main.py 启动 (与 v2 无关, 已存在)
+- 6/8 当日 `analysis_scores` 0 行, 导致 T+5 训练样本不足 (待用户补历史数据)
+
+**用户需提供**:
+- 6/8 之前的历史推荐数据 (有 analysis_scores 配套) → 提升 T+5/T+10 训练样本
+
+---
+
+### v6.0.5 (2026-06-17) — 🎨 A 股惯例颜色统一
+
+**需求**: 用户报告 "+330% 当前是绿色"，违反 A 股惯例
+
+**改动 (6 文件)**:
+- `lib/signalColor.ts`: 新增 `getPnlColor()` 工具函数 + 修复 `getPnlRowStyle`
+- `pages/AmbushPage.tsx:279`: `drawdownPct<0` 红涨绿跌
+- `pages/AlphaFlowPage.tsx:209`: `breakout_pct>15` 红
+- `components/CuratedRankingView.tsx:134,185,326,333,340`: predicted_return/pred5/seWr/curAr/看多 红涨绿跌
+- `components/DnaLab.tsx:302`: avg_breakout_return 红涨绿跌
+- `pages/ResultPage.tsx:207,263`: predicted_return (C.red) 红涨绿跌
+
+**新工具函数**:
+```typescript
+export function getPnlColor(pnlPct: number | null | undefined, neutralColor: string = '#6e7a8a'): string {
+  if (pnlPct == null || pnlPct === 0) return neutralColor;
+  return pnlPct > 0 ? '#ef4444' : '#10b981';
+}
+```
+
+**保留原样 (非涨跌幅)**:
+- 市场情绪 (bull=绿/bear=红)
+- 评分高低 (tech_score 等)
+- 进度条/就绪状态
+
+---
+
+### v6.0.4 (2026-06-17) — 🐉 5 触发踢出
+
+**需求**: 000777.SZ 中核科技 6-15+6-16 连续涨停不应在池；600226.SH 6-04/6-09 涨停误判入池
+
+**evaluate_exit 5 规则**:
+
+| # | reason | 触发条件 |
+|---|--------|---------|
+| 1 | `atr_stop` | exit_signal_detector critical/high |
+| 2 | `fatigue_broken` | fatigue_detector broken/capitulation |
+| 3 | `time_decay_10d` | days_in_pool >= 10 |
+| 4 | `not_first_limit` | added_at 前 10 天内 prev-based 涨幅 ≥9.9% |
+| 5 | `consecutive_board` | added_at **后**任何一天 prev-based 涨幅 ≥9.9% |
+
+**SQL 关键修复**: 规则 4 用 `trade_date < added_at`，规则 5 用 `trade_date > added_at` (首板日本身不算)
+
+**数据修复**:
+- 600226.SH 标记 exited (not_first_limit, 入池前 6-04/6-09 涨停)
+- 000777.SZ 标记 exited (consecutive_board, 6-15+6-16 连续涨停)
+- 000012.SZ / 600192.SH 标记 exited (consecutive_board, 6-15 实际未涨停不应入池)
+
+---
+
+### v6.0.3 (2026-06-17) — 🩺 涨跌幅修复
+
+**Bug 1: 历史 `close_price=21.11` 数据污染**
+- 6-15 入池的 6 只股 (000070/000593/000777/600226/603052/603093) 全部 close_price=21.11（错值）
+- 修复: 用 daily_kline 真实 close 覆盖 6 行 + 同步 dragon_pool.first_limit_close
+
+**Bug 2: 10 天检查规则没起作用**
+- 现象: 600226.SH 在 6-04/6-09 都有涨停 (昨收对比 10%)，但被判定为首板
+- 根因: `check_first_limit` 用 `(close - open) / open * 100`（**当日振幅**），不是 `(close - prev_close) / prev_close`（**真实涨跌幅**）
+- 修复: `first_limit_scanner.py` `check_first_limit` + `get_today_limit_list` 改用 `LAG(close)` 算 prev-based 涨幅
+
+**Bug 3: 1666 个 first_limit_up.name 错误**
+- 现象: 名称字段全是 ts_code (603052.SH 显示 "603052.SH" 而不是"可川科技")
+- 根因: 历史扫描写入时 name fallback 为 ts_code
+- 修复: 批量 UPDATE 1666 行, 用 `get_stock_name` 取真实名称
+
+---
+
+### v6.0.2 (2026-06-17) — 🐉 前端改造
+
+**需求**:
+- "二波型潜力" tab 改名"龙抬头"（更符合 A 股语义）
+- "首板猎人" tab 改为显示"监控中"的首板股（不是历史所有 S/A/B）
+- 加"监控天数"列（10 天就要踢出，必须显眼）
+
+**改动 `frontend/src/pages/AmbushPage.tsx`**:
+- tab 名字: "🐉 二波型潜力" → "🐉 龙抬头" / "🐉 首板猎人" → "🐉 首板监控"
+- "首板监控" 数据源: `/api/ambush-signals/first-limit` → `/api/dragon/pool?status=active`
+- `FirstLimitView` 重构:
+  - 加列标题 (监控 / 股票 / 起点 / 涨幅 / 二波/接力)
+  - 监控天数列 (X/10 天 + 进度条 + 监控中/后期/即将清理)
+  - 起点列 (首板日 added_at)
+  - 涨幅列 (首板价 → 现价 + A 股颜色)
+- SYNC 按钮: 触发 `/dragon/pool/scan + update-state + evaluate`
+- "龙抬头" tab SYNC: 触发 `update-state + evaluate`
+
+**前端字段类型**: `FirstLimitStock` interface 完全重写 (从历史首板字段 → dragon_pool 字段)
+
+---
+
+### v6.0.1 (2026-06-17) — 🩺 冒烟测试修复
+
+**Bug**: `services/limit_cpt_list_service.py` 在 Windows GBK (cp936) cmd 下报 SyntaxError
+
+**根因**:
+- 文件历史为 **CRLF 行尾** + Windows Python 3.13 默认 `cp936` locale
+- Python lexer 用 cp936 读 UTF-8 多字节字符 → 解码错误 → `"""` 配对失败
+- 我前一次用 `open('r', encoding='utf-8')` 文本模式写入时，**实际 Python 内部仍按 cp936 解码**，写回了损坏字节 (0x80 残留)
+- line 11 的 docstring 闭合符 `"""` 被错误转换为 `返回: ts_code, ...` 文字
+
+**影响**:
+- `/api/ambush-signals/hot-sectors` 端点返回 500
+- 前端"最强板块" tab 数据缺失 (ResultPage 首页 + AmbushPage 共享)
+
+**修复**:
+- 完全重写 `services/limit_cpt_list_service.py` (UTF-8 LF 编码)
+- 保留所有业务逻辑 + v6.0 清理备注
+- 验证 import OK + 端点恢复 200
+
+**完整冒烟测试**: 18/18 全过
+- 后端 API (GET 7 + POST 3): ✅ 全部 200
+- 前端页面 (8 个核心路由): ✅ 全部 200
+- 端到端业务流: ✅ join → update → evaluate 全部正常
+- 业务单测: ✅ 10d 强制清理 / 5d 不清理 / detect_emerging 全过
+
+**预防**:
+- 未来创建 .py 文件一律用 LF 行尾 + Write 工具
+- 不在 Windows GBK cmd 下用 `open('r', encoding='utf-8')` 文本模式读写中文文件
+
+**关联文档**:
+- `docs/README.md` v6.0.1 章节
+- `docs/DEVELOPER_GUIDE.md` v2.2 头部
+- 改进意见归档: `docs/improvements/进行中/20260616-潜龙池-v6.0.md` → `已完成/`
+
+---
+
+### v6.0 (2026-06-16) — 🐉 潜龙池动态监控上线
+
+**新增 dragon_pool 表** (`migrations 120-122`):
+- 22 列: `id, ts_code, first_limit_id, added_at, status, exit_date, exit_reason, exit_confidence, current_price, min_price_since_join, first_limit_close, days_in_pool, emerging, emerging_at, emerging_pattern, relay_prob, waveback_prob, signal_quality, nm_score, last_evaluated_at, created_at, updated_at`
+- 2 索引: `idx_dragon_pool_status (status, added_at DESC)` + 部分索引 `idx_dragon_pool_emerging WHERE emerging=TRUE`
+- 唯一约束: `UNIQUE(ts_code, added_at)` (防止重复入池)
+
+**新增 dragon_pool_service.py** (408 行, 6 个核心函数):
+- `join_pool_from_first_limit(trade_date)`: 从 `first_limit_up` 选 S/A/B 级入池
+- `update_pool_state(trade_date)`: 更新 current_price / min_price / days_in_pool (基于 daily_kline)
+- `get_active_pool_symbols()`: 获取所有 active 池中股
+- `evaluate_exit(symbol, days_in_pool)`: 模型驱动踢出判定（**3 触发任一**）
+  - exit_signal_detector (ATR 动态止损) — `priority in (critical, high)`
+  - fatigue_detector (平台破位 5 阶段) — `status in (broken, capitulation)`
+  - **10 交易日未连板强制清理** (用户硬要求)
+- `detect_emerging(symbol)`: 浮出二板信号判定（**强制分时验真**）
+  - `waveback_prob > 0.3` (硬门槛) → 才进入分时验真
+  - 强制调 `signal_quality_scorer.verify_signals_with_minute_bars`
+  - 最终条件: `signal_quality > 0.5 + nm_score > 0`
+- `evaluate_all_active()`: 全池评估编排
+
+**新增 5 个 API 端点** (`app/api/dragon.py`):
+- `GET  /api/dragon/pool` — 池中所有 active 股票 + 状态
+- `GET  /api/dragon/waveback-potential` — 仅 emerging 的池中股（二波型 tab 用）
+- `POST /api/dragon/pool/scan` — 手动触发入池
+- `POST /api/dragon/pool/evaluate` — 手动触发全池评估
+- `POST /api/dragon/pool/update-state` — 手动触发状态更新
+
+**扫描流程升级** (`api/scan.py:551-575`):
+- `/api/scan/all` 阶段 4 新增：4 个 SSE 事件 `dragon_pool_join / update / evaluate / done`
+- `/api/scan/trigger` 旧路径**不包含**阶段 4（不破坏旧调用方）
+
+**调度集成** (`scheduler/daily_tasks.py` + `scheduler_loop.py`):
+- 新增 `task_update_dragon_pool()` — 每日收盘后跑 join + update + evaluate
+- 加入 `scheduler_loop.py` 日常任务列表
+
+**删除**:
+- `services/limit_step_service.py` 整个文件
+- `api/ambush.py` 的 `/limit-step` + `/limit-step/sync` 端点
+- `AmbushPage.tsx` "连板天梯" tab
+
+**修改**:
+- `first_limit_scanner.py:127` `LIMIT 30` → `LIMIT 10` (10 交易日无涨停)
+- `AmbushPage.tsx` 二波型 tab 改用 `/api/dragon/waveback-potential`
+- `App.tsx:32` label "潜伏猎手" → "🐉 潜龙猎手"
+- `ScanPage.tsx:144-146` 新增 4 个 dragon_pool SSE 事件标签
+
+**待清理** (1 周系统稳定后):
+- `services/ambush_scanner.py` — 旧"潜伏猎手"，仍被 `deep_scorer.py:48` 14 维评分使用
+- `api/ambush.py` — `/hot-sectors` 端点保留 (ResultPage 首页仍在用)
+- `services/limit_cpt_list_service.py` — 提供 `get_hot_sectors` / `get_sector_effect`
+
+**约束遵守** (DEVELOPER_GUIDE 铁律):
+- ✅ 数值安全: 0.0 兜底，无内联 NaN 守卫
+- ✅ 进度回调: 4 参数标准
+- ✅ 不复制代码: 全部 `from app.services.X import Y` 复用现有模型
+- ✅ 不用 DROP/TRUNCATE: `CREATE TABLE IF NOT EXISTS`
+- ✅ 不写死硬指标: 踢出/浮出全部调模型
+
+**文档**:
+- `docs/README.md` 更新 v6.0 状态 + 版本历史
+- `docs/architecture.md` 更新扫描流程图 + 变更日志（本文档）
+- `docs/潜龙猎手.md` 标记为 ⚠️ 滞后（设计蓝图，实际 v6.0 超出）
+- `docs/improvements/进行中/20260616-潜龙池-v6.0.md` 改进意见文档
+
+---
+
 **⭐ 新闻页面重复标题修复 (v4.9)**:
 - `app/services/event_aggregator.py`: 新增 SimHash 相似度去重
 - `_dedup_similar_events()`: 同一股票内相似标题去重
@@ -1264,6 +1763,41 @@ StockAnalyst.bat
 **前端**:
 - NewsPage: 板块共振 5 级强度 + 共振标签展示
 - NewsPage: 个股席位精细化 (北向/公募/社保/顶级/一线/二线) 标签
+
+### v4.9 (2026-06-15) — P0-1 批量查询优化 + P1-4 特征选择 + Redis 集成 + P0-2 多进程 Worker
+
+**P0-1 批量查询优化**:
+- `app/core/database.py`: 弹性连接池 (FULL_SCAN_MODE: pool=20/overflow=40, 正常: pool=5/overflow=10)
+- `app/services/alphaflow_pool.py`: 新增批量加载函数 `_batch_load_klines()` / `_batch_load_historical_klines()`
+- **效果**: SQL 查询减少 ~10,000 → ~10 (98% 减少)
+
+**P1-4 特征选择 & 正则化**:
+- 77 个特征全部有效，无低贡献特征需裁剪
+- Top 4 特征占 55.7% 重要性
+- 训练模型: CV AUC=0.8888, R²=0.7426, n=19,853
+
+**Redis 集成 (fakeredis 降级)**:
+- `app/core/redis_client.py`: 异步 Redis 客户端，支持生产 Redis + fakeredis 降级
+- `app/main.py`: FastAPI lifespan 中自动初始化 Redis
+
+**P0-2 多进程 Worker**:
+- `app/services/scan_worker.py`: ProcessPoolExecutor 并行 TG 计算
+- `app/api/scan.py`: NUM_WORKERS 环境变量切换
+- `StockAnalyst.bat`: --workers 参数支持
+- 性能: 4858 只股票 83.6s (2 workers)
+
+**P2-6 Redis 特征缓存**:
+- `app/services/feature_cache.py`: 缓存核心模块 + @cached_feature 装饰器
+- `app/services/wave_cache.py`: 波特征缓存包装
+- `app/services/tg_engine.py`: download 返回更新股票列表 + 缓存失效
+- 性能: 缓存命中加速 3284x
+
+**P2-5 事件总线解耦**:
+- `app/core/event_bus.py`: 异步事件总线 (Redis Pub/Sub + 内存订阅者)
+- `app/services/scan_listeners.py`: scan_completed 事件处理器
+- `app/api/scan.py`: 扫描完成后发送事件
+- `app/main.py`: lifespan 中注册订阅者
+- 订阅者: accuracy_tracker, dna_auto_join, alphaflow_pool
 
 ### v4.8 (2026-06-13) — DNA 实验室自动化 + 新闻采集优化 + 宏观数据改造 + TG 扫描阶段重组
 
