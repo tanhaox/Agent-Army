@@ -106,7 +106,7 @@ const COLUMNS: ColumnDef[] = [
   { key: 'win_prob', label: 'T+2胜率', hidden: true,  // ★ 用户要求隐藏
     render: (r) => r.win_probability != null ? (
       <span style={{ fontWeight: 600, fontSize: 12,
-        color: r.win_probability >= 0.45 ? '#10b981' : r.win_probability >= 0.35 ? '#f59e0b' : '#ef4444' }}>
+        color: r.win_probability >= 0.45 ? '#ef4444' : r.win_probability >= 0.35 ? '#f59e0b' : '#10b981' }}>
         {(r.win_probability * 100).toFixed(0)}%
         {r.downside_risk != null && r.downside_risk < -2 && (
           <span style={{ marginLeft: 4, fontSize: 10, color: '#ef4444' }}>⚠</span>
@@ -146,35 +146,43 @@ const COLUMNS: ColumnDef[] = [
       </span>
     ) : <span style={{color:'#4b5563',fontSize:11}}>—</span> },
   { key: 'macd_dif', label: 'MACD DIF',
-    render: (r) => <span style={{ color: r.macd_dif == null ? '#6e7a8a' : (r.macd_dif > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.macd_dif == null ? '#6e7a8a' : (r.macd_dif > 0 ? '#ef4444' : '#10b981'), fontWeight: 600, fontSize: 11 }}>
       {r.macd_dif != null ? r.macd_dif.toFixed(2) : '-'}
     </span> },
   { key: 'macd_dea', label: 'MACD DEA',
-    render: (r) => <span style={{ color: r.macd_dea == null ? '#6e7a8a' : (r.macd_dea > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.macd_dea == null ? '#6e7a8a' : (r.macd_dea > 0 ? '#ef4444' : '#10b981'), fontWeight: 600, fontSize: 11 }}>
       {r.macd_dea != null ? r.macd_dea.toFixed(2) : '-'}
     </span> },
   { key: 'kdj_j', label: 'KDJ J',
-    render: (r) => <span style={{ color: r.kdj_j == null ? '#6e7a8a' : (r.kdj_j > 80 ? '#ef4444' : r.kdj_j < 20 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.kdj_j == null ? '#6e7a8a' : (r.kdj_j > 80 ? '#10b981' : r.kdj_j < 20 ? '#ef4444' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
       {r.kdj_j != null ? r.kdj_j.toFixed(0) : '-'}
     </span> },
   { key: 'rsi_24', label: 'RSI 24', hidden: true,  // ★ 用户要求隐藏
-    render: (r) => <span style={{ color: r.rsi_24 == null ? '#6e7a8a' : (r.rsi_24 > 70 ? '#ef4444' : r.rsi_24 < 30 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.rsi_24 == null ? '#6e7a8a' : (r.rsi_24 > 70 ? '#10b981' : r.rsi_24 < 30 ? '#ef4444' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
       {r.rsi_24 != null ? r.rsi_24.toFixed(0) : '-'}
     </span> },
   { key: 'boll', label: 'BOLL', hidden: true,  // ★ 用户要求隐藏
-    render: (r) => <span style={{ color: r.boll_pos == null ? '#6e7a8a' : (r.boll_pos > 0.9 ? '#ef4444' : r.boll_pos < 0.1 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.boll_pos == null ? '#6e7a8a' : (r.boll_pos > 0.9 ? '#10b981' : r.boll_pos < 0.1 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
       {r.boll_pos != null ? r.boll_pos.toFixed(2) : '-'}
     </span> },
   { key: 'cci', label: 'CCI', hidden: true,  // ★ 用户要求隐藏
-    render: (r) => <span style={{ color: r.cci == null ? '#6e7a8a' : (r.cci > 200 || r.cci < -200 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
-      {r.cci != null ? r.cci.toFixed(0) : '-'}
-    </span> },
+    render: (r) => {
+      const v = r.cci;
+      let c = '#9ca3af';  // 默认中性
+      if (v != null) {
+        if (v > 200) c = '#10b981';        // 大幅超买 → 绿 (利空, A 股跌)
+        else if (v < -200) c = '#ef4444';  // 大幅超卖 → 红 (利空出尽, A 股涨)
+      }
+      return <span style={{ color: c, fontSize: 11 }}>
+        {v != null ? v.toFixed(0) : '-'}
+      </span>;
+    } },
   { key: 'cost', label: '成本中位',
-    render: (r) => <span style={{ color: r.cost_50pct == null ? '#6e7a8a' : (r.cost_50pct < 5 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.cost_50pct == null ? '#6e7a8a' : '#9ca3af', fontSize: 11 }}>
       {r.cost_50pct != null ? r.cost_50pct.toFixed(1) : '-'}
     </span> },
   { key: 'spread', label: '筹码宽度',
-    render: (r) => <span style={{ color: r.cost_spread == null ? '#6e7a8a' : (r.cost_spread > 5 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+    render: (r) => <span style={{ color: r.cost_spread == null ? '#6e7a8a' : (r.cost_spread > 5 ? '#ef4444' : '#10b981'), fontSize: 11 }}>
       {r.cost_spread != null ? r.cost_spread.toFixed(1) : '-'}
     </span> },
   { key: 'gold', label: '金过滤',
