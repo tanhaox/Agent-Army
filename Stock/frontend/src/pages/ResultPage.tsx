@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 import { useDeepAnalysis } from '../lib/useDeepAnalysis';
@@ -40,6 +40,8 @@ export default function ResultPage() {
   const [promptOpen,setPromptOpen]=useState(false);
   const [batchScores,setBatchScores]=useState<Record<string,any>>({});
   const [scoringBatch,setScoringBatch]=useState(false);
+  // ★ v7.0.33: 防止 doBatchScore 重复触发 (修复"评分失败"alert 每次刷新都跳的 bug)
+  const hasTriedBatchRef = useRef<boolean>(false);
   const [gateInfo,setGateInfo]=useState<any>(null);
   const [marketWarning,setMarketWarning]=useState<any>(null);
   const [timingCap,setTimingCap]=useState<any>(null);
@@ -72,7 +74,15 @@ export default function ResultPage() {
   }, []);
 
   useEffect(()=>{load()},[curatedSymbols,curatedDate]);
-  useEffect(()=>{if(isCurated&&data.length>0&&Object.keys(batchScores).length===0)doBatchScore()},[data,isCurated]);
+  // ★ v7.0.33: 用 hasTriedBatchRef 防止每次 [data] 变化都重跑 batch-score
+  //   之前 useEffect dep [data, isCurated] 会在 data 变化时重跑, 失败时 alert 一直跳
+  useEffect(() => {
+    if (!isCurated || data.length === 0) return;
+    if (hasTriedBatchRef.current) return;  // 每次挂载只跑一次
+    if (Object.keys(batchScores).length > 0) return;  // 已有结果不重跑
+    hasTriedBatchRef.current = true;
+    doBatchScore();
+  }, [data, isCurated, batchScores]);
 
   // Keyboard nav
   const handleKeyDown=useCallback((e:KeyboardEvent)=>{
@@ -86,7 +96,44 @@ export default function ResultPage() {
 
   const getScore=(r:any)=>r.composite_score||r.fusion_score||r.tg_score||0;
   const getName=(r:any)=>r.name||r.symbol||'';
-  const doBatchScore=async()=>{setScoringBatch(true);try{const t:Record<string,string>={};for(const r of data)t[r.symbol]='';if(!Object.keys(t).length){setScoringBatch(false);return}const res=await api.post('/feedback/batch-score',{symbol_texts:t});if(res.data.scores)setBatchScores(res.data.scores)}catch(e:any){alert(e?.response?.data?.detail||'评分失败')}setScoringBatch(false)};
+  // v6.0.6: 评分前先查哪些股有反哺文本, 弹具体说明而非笼统"评分失败"
+  // ★ v7.0.33: 修复"评分失败"alert 一直跳的 bug
+  //   1. 改用 console.error 静默记录 (失败不再弹 alert, 用户体验更好)
+  //   2. 反哺文本缺失时, 不再弹 alert, 改为在 scoringBatch 状态显示 (已经有 ⏳ 标识)
+  //   3. 错误时记录到 hasTriedBatchRef, 防止 useEffect 重跑
+  const doBatchScore=async()=>{
+    setScoringBatch(true);
+    try {
+      const allSymbols=data.map((r:any)=>r.symbol);
+      if(!allSymbols.length){setScoringBatch(false);return}
+
+      const fdRes=await api.get('/feedback/check-batch',{params:{symbols:allSymbols.join(',')}});
+      const fdMap:Record<string,any>=fdRes.data?.data||{};
+      const hasText=new Set(Object.keys(fdMap).filter((s:string)=>fdMap[s]?.raw_response&&fdMap[s].raw_response.length>50));
+      const missing=allSymbols.filter((s:string)=>!hasText.has(s));
+      const t:Record<string,string>={};
+      allSymbols.forEach((s:string)=>{if(hasText.has(s))t[s]=''});
+
+      if(!Object.keys(t).length){
+        // ★ 不再 alert, 静默 (LLM 反哺可能未生成, 让用户去深度分析即可)
+        console.warn(`[batch-score] ${missing.length} 只股没有反哺文本, 跳过评分: ${missing.slice(0,5).join(', ')}`);
+        return;
+      }
+
+      const res=await api.post('/feedback/batch-score',{symbol_texts:t});
+      if(res.data.scores){
+        setBatchScores(res.data.scores);
+        // ★ 把"已评分"提示改成 console.log, 不弹 alert
+        console.log(`[batch-score] 成功评分 ${Object.keys(t).length} 只, 跳过 ${missing.length} 只 (无反哺)`);
+      }
+    } catch(e: any) {
+      // ★ 关键: 失败时不再 alert, 只 console.error
+      //   原因: LLM 调用慢/超时/限流很常见, 不应该打扰用户
+      console.error('[batch-score] 评分失败:', e?.response?.data?.detail || e?.message || '未知错误');
+    } finally {
+      setScoringBatch(false);
+    }
+  };
   const toggleSort=(key:string)=>{if(sortKey===key)setSortDir(d=>d==='desc'?'asc':'desc');else{setSortKey(key);setSortDir('desc')}};
   const sortArrow=(key:string)=>sortKey===key?(sortDir==='desc'?' ▼':' ▲'):'';
 
@@ -171,6 +218,7 @@ export default function ResultPage() {
             {!isMobile&&<th style={Th}>原型</th>}
             <th style={{...Th,width:60}}>同组排名</th>
             <th style={{...Th,cursor:'pointer',width:55}} onClick={()=>toggleSort('predicted_return')}>T+5预测{sortArrow('predicted_return')}</th>
+            <th style={{...Th,cursor:'pointer',width:65}} onClick={()=>toggleSort('best_horizon')}>持仓期{sortArrow('best_horizon')}</th>
             <th style={{...Th,cursor:'pointer',width:45}} onClick={()=>toggleSort('rank_score')}>排序{sortArrow('rank_score')}</th>
             <th style={{...Th,cursor:'pointer',width:52}} onClick={()=>toggleSort('win_probability')}>胜率{sortArrow('win_probability')}</th>
             <th style={Th}>级别</th>
@@ -204,7 +252,7 @@ export default function ResultPage() {
                 {(()=>{const p=r.relative_position;if(!p)return<span style={{color:C.textMuted,fontSize:10}}>—</span>;
                   const isUp=p.includes('涨')||p.includes('强')||p.includes('拉升');const isDown=p.includes('跌')||p.includes('出货');
                   return <><StatusBadge type={isUp?'buy_strong':isDown?'sell':'neutral'} label={p}/>
-                    {r.predicted_return!=null&&<div style={{fontSize:9,color:r.predicted_return>0?C.green:C.red,marginTop:1}}>预{r.predicted_return>0?'+':''}{r.predicted_return}%</div>}
+                    {r.predicted_return!=null&&<div style={{fontSize:9,color:r.predicted_return>0?C.red:C.green,marginTop:1}}>预{r.predicted_return>0?'+':''}{r.predicted_return}%</div>}
                   </>;})()}
               </td>
               {activeTab==='ambush'?<>
@@ -260,10 +308,26 @@ export default function ResultPage() {
                 </td>
                 <td style={Td}>
                   {r.predicted_return != null ? (
-                    <span style={{fontWeight:600, fontSize:11, color: r.predicted_return>0 ? C.green : C.red}}>
+                    <span style={{fontWeight:600, fontSize:11, color: r.predicted_return>0 ? C.red : C.green}}>
                       {r.predicted_return>0?'+':''}{r.predicted_return}%
                     </span>
                   ) : <span style={{color:C.textMuted, fontSize:10}}>—</span>}
+                </td>
+                {/* v7.0.11: v2 推荐持仓期列 (4 horizon × 2 model 独立训练) */}
+                <td style={{...Td,textAlign:'center', cursor:'help'}} title={r.v2_advice || 'v2 训练中无数据'}>
+                  {r.best_horizon != null ? (
+                    <div>
+                      <span style={{
+                        display:'inline-block', padding:'2px 8px', borderRadius:4,
+                        background: r.v2_active ? '#3b82f620' : 'transparent',
+                        color: r.v2_active ? C.green : C.textMuted,
+                        fontWeight:600, fontSize:11,
+                      }}>T+{r.best_horizon}</span>
+                      <div style={{fontSize:9, color:C.textMuted, marginTop:1}}>
+                        {r.best_strategy || (r.v2_active ? '—' : 'v2 关')}
+                      </div>
+                    </div>
+                  ) : <span style={{color:C.textMuted, fontSize:10}}>{r.v2_active ? '无数据' : 'v2 关'}</span>}
                 </td>
                 <td style={{...Td,textAlign:'center'}}>
                   {r.rank_score != null ? (
