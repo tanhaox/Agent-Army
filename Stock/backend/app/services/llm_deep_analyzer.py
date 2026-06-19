@@ -38,6 +38,14 @@ async def get_stock_context(symbol: str) -> dict:
         r = await s.execute(text("""
             SELECT a.composite_score, a.tech_score, a.kline_score, a.fund_score,
                    a.fundamental_adjustment, a.archetype, a.adjustment_reasons,
+                   a.dimension_scores,
+                   a.macd_dif, a.macd_dea, a.macd_bar,
+                   a.kdj_k, a.kdj_d, a.kdj_j,
+                   a.rsi_6, a.rsi_12, a.rsi_24,
+                   a.boll_upper, a.boll_mid, a.boll_lower, a.boll_width, a.boll_pos,
+                   a.cci,
+                   a.cost_5pct, a.cost_50pct, a.cost_95pct, a.weight_avg, a.winner_rate,
+                   a.cost_spread, a.price_vs_cost,
                    s.tg_momentum, s.level, s.trigger_path, s.dist_low, s.j_value,
                    s.vol_ratio, s.buy_strength
             FROM analysis_scores a
@@ -55,13 +63,37 @@ async def get_stock_context(symbol: str) -> dict:
                 "fundamental_adjustment": float(row[4]) if row[4] else 0,
                 "archetype": row[5] or "unknown",
                 "adjustment_reasons": row[6] if row[6] else [],
-                "tg_momentum": float(row[7]) if row[7] else 0,
-                "level": row[8] or "",
-                "trigger_path": row[9] or "",
-                "dist_low": float(row[10]) if row[10] else 0,
-                "j_value": float(row[11]) if row[11] else 0,
-                "vol_ratio": float(row[12]) if row[12] else 0,
-                "buy_strength": float(row[13]) if row[13] else 0,
+                "dimension_scores": row[7] if row[7] else {},
+                # v7.0.32 新增 22 字段 (技术指标 + 筹码)
+                "macd_dif": float(row[8]) if row[8] is not None else None,
+                "macd_dea": float(row[9]) if row[9] is not None else None,
+                "macd_bar": float(row[10]) if row[10] is not None else None,
+                "kdj_k": float(row[11]) if row[11] is not None else None,
+                "kdj_d": float(row[12]) if row[12] is not None else None,
+                "kdj_j": float(row[13]) if row[13] is not None else None,
+                "rsi_6": float(row[14]) if row[14] is not None else None,
+                "rsi_12": float(row[15]) if row[15] is not None else None,
+                "rsi_24": float(row[16]) if row[16] is not None else None,
+                "boll_upper": float(row[17]) if row[17] is not None else None,
+                "boll_mid": float(row[18]) if row[18] is not None else None,
+                "boll_lower": float(row[19]) if row[19] is not None else None,
+                "boll_width": float(row[20]) if row[20] is not None else None,
+                "boll_pos": float(row[21]) if row[21] is not None else None,
+                "cci": float(row[22]) if row[22] is not None else None,
+                "cost_5pct": float(row[23]) if row[23] is not None else None,
+                "cost_50pct": float(row[24]) if row[24] is not None else None,
+                "cost_95pct": float(row[25]) if row[25] is not None else None,
+                "weight_avg": float(row[26]) if row[26] is not None else None,
+                "winner_rate": float(row[27]) if row[27] is not None else None,
+                "cost_spread": float(row[28]) if row[28] is not None else None,
+                "price_vs_cost": float(row[29]) if row[29] is not None else None,
+                "tg_momentum": float(row[30]) if row[30] else 0,
+                "level": row[31] or "",
+                "trigger_path": row[32] or "",
+                "dist_low": float(row[33]) if row[33] else 0,
+                "j_value": float(row[34]) if row[34] else 0,
+                "vol_ratio": float(row[35]) if row[35] else 0,
+                "buy_strength": float(row[36]) if row[36] else 0,
             }
 
     # ★ 技术面价格数据
@@ -246,7 +278,13 @@ def build_analysis_prompt(symbol: str, name: str, context: dict,
 
     dim_str = "\n".join(dim_lines[:10]) if dim_lines else "暂无维度分解"
 
-    return f"""{macro_context}请对A股 {symbol}({name})进行深度投资分析。系统已从14个维度完成量化评分。
+    # ★ v7.0.32 新增: 技术指标 5 维 (MACD/KDJ/RSI/BOLL/CCI)
+    tech_str = _build_tech_section(sc)
+
+    # ★ v7.0.32 新增: 筹码分布 5 维 (cyq_perf)
+    chip_ext_str = _build_chip_extended_section(sc, chip)
+
+    return f"""{macro_context}请对A股 {symbol}({name})进行深度投资分析。系统已从 22 个维度完成量化评分(含 v7.0.32 新增的 MACD/KDJ/RSI/BOLL/CCI/筹码分布 6 维度)。
 
 【★ 实际价格与均线】
 {price_str}
@@ -288,7 +326,152 @@ def build_analysis_prompt(symbol: str, name: str, context: dict,
 请在最后用JSON格式输出信号摘要:
 {{"stock_code":"{symbol}","positive_signals":[{{"type":"opportunity/financial/technical","description":"描述","confidence":0.0-1.0}}],"negative_signals":[{{"type":"valuation/financial_risk/fund_flow/technical_risk/sentiment_risk","description":"描述","confidence":0.0-1.0}}],"suggested_score":0-100,"t2_target":"目标价","stop_loss":"止损价"}}
 
+{tech_str}
+
+{chip_ext_str}
+
 [SA:{symbol}]"""
+
+
+def _build_tech_section(sc: dict) -> str:
+    """v7.0.32 新增: 格式化技术指标 5 维 (MACD/KDJ/RSI/BOLL/CCI) 为提示词段落.
+
+    输出: macd_dif/dea/bar + kdj_k/d/j + rsi_6/12/24 + boll 上下中轨 + boll_pos + cci
+    """
+    if not sc:
+        return ""
+    # 任何新字段都缺失就不输出
+    tech_fields = ["macd_dif", "macd_dea", "macd_bar", "kdj_k", "kdj_d", "kdj_j",
+                   "rsi_6", "rsi_12", "rsi_24", "boll_upper", "boll_mid", "boll_lower",
+                   "boll_pos", "cci"]
+    has_data = any(sc.get(f) is not None for f in tech_fields)
+    if not has_data:
+        return ""
+
+    lines = ["【★ v7.0.32 技术指标 5 维】"]
+
+    def _v(key, fmt=".3f", missing="—"):
+        v = sc.get(key)
+        return f"{v:{fmt}}" if v is not None else missing
+
+    # MACD
+    dif, dea, bar = sc.get("macd_dif"), sc.get("macd_dea"), sc.get("macd_bar")
+    if any(x is not None for x in (dif, dea, bar)):
+        macd_status = "多头" if (dif is not None and dea is not None and dif > dea) else ("空头" if (dif is not None and dea is not None and dif < dea) else "—")
+        bar_note = ""
+        if bar is not None:
+            if bar > 0: bar_note = " (柱状图红/向上)"
+            elif bar < 0: bar_note = " (柱状图绿/向下)"
+        lines.append(f"  MACD: DIF={_v('macd_dif')} | DEA={_v('macd_dea')} | BAR={_v('macd_bar')}{bar_note} → {macd_status}")
+
+    # KDJ
+    k, d, j = sc.get("kdj_k"), sc.get("kdj_d"), sc.get("kdj_j")
+    if any(x is not None for x in (k, d, j)):
+        if j is not None:
+            if j < 20: j_note = " (超卖)"
+            elif j > 80: j_note = " (超买)"
+            else: j_note = " (中性)"
+        else:
+            j_note = ""
+        lines.append(f"  KDJ: K={_v('kdj_k', '.1f')} | D={_v('kdj_d', '.1f')} | J={_v('kdj_j', '.1f')}{j_note}")
+
+    # RSI
+    r6, r12, r24 = sc.get("rsi_6"), sc.get("rsi_12"), sc.get("rsi_24")
+    if any(x is not None for x in (r6, r12, r24)):
+        r24_note = ""
+        if r24 is not None:
+            if r24 < 30: r24_note = " (超卖)"
+            elif r24 > 70: r24_note = " (超买)"
+        lines.append(f"  RSI: RSI6={_v('rsi_6', '.1f')} | RSI12={_v('rsi_12', '.1f')} | RSI24={_v('rsi_24', '.1f')}{r24_note}")
+
+    # BOLL
+    upper, mid, lower, pos = sc.get("boll_upper"), sc.get("boll_mid"), sc.get("boll_lower"), sc.get("boll_pos")
+    if any(x is not None for x in (upper, mid, lower, pos)):
+        boll_status = "—"
+        if pos is not None:
+            if pos < 0.1: boll_status = "下轨外 (极度弱势)"
+            elif pos < 0.3: boll_status = "下半轨 (偏弱)"
+            elif pos < 0.7: boll_status = "中轨区 (中性)"
+            elif pos < 0.9: boll_status = "上半轨 (偏强)"
+            else: boll_status = "上轨外 (极度强势)"
+        lines.append(f"  BOLL: 上轨=¥{_v('boll_upper', '.2f')} | 中轨=¥{_v('boll_mid', '.2f')} | 下轨=¥{_v('boll_lower', '.2f')}")
+        lines.append(f"        boll_pos={_v('boll_pos', '.2f')} (0=下轨, 1=上轨) → {boll_status}")
+
+    # CCI
+    cci = sc.get("cci")
+    if cci is not None:
+        cci_note = ""
+        if cci > 100: cci_note = " (超买)"
+        elif cci < -100: cci_note = " (超卖)"
+        lines.append(f"  CCI: {_v('cci', '.1f')}{cci_note}")
+
+    if len(lines) == 1:
+        return ""  # 只有标题没数据
+    return "\n".join(lines)
+
+
+def _build_chip_extended_section(sc: dict, chip_absorption: dict) -> str:
+    """v7.0.32 新增: 筹码分布 5 维 (cost_5/50/95 + weight_avg + winner_rate) + 衍生 (cost_spread, price_vs_cost).
+
+    数据来源: daily_chip_perf 表 (Tushare cyq_perf 接口)
+    """
+    if not sc:
+        return ""
+    chip_fields = ["cost_5pct", "cost_50pct", "cost_95pct", "weight_avg", "winner_rate",
+                   "cost_spread", "price_vs_cost"]
+    has_data = any(sc.get(f) is not None for f in chip_fields)
+    if not has_data:
+        return ""
+
+    lines = ["【★ v7.0.32 筹码分布 5 维 (Tushare cyq_perf)】"]
+
+    def _v(key, fmt=".2f", missing="—"):
+        v = sc.get(key)
+        return f"{v:{fmt}}" if v is not None else missing
+
+    cost5, cost50, cost95 = sc.get("cost_5pct"), sc.get("cost_50pct"), sc.get("cost_95pct")
+    wavg = sc.get("weight_avg")
+    wr = sc.get("winner_rate")
+    spread = sc.get("cost_spread")
+    pvc = sc.get("price_vs_cost")
+
+    # 成本分布
+    if any(x is not None for x in (cost5, cost50, cost95)):
+        cost_str = f"  成本分布: 5%分位=¥{_v('cost_5pct')} | 50%分位=¥{_v('cost_50pct')} | 95%分位=¥{_v('cost_95pct')}"
+        if spread is not None:
+            cost_str += f"\n        成本宽度(spread 95-5)=¥{_v('cost_spread')} (大=主力分歧,小=筹码集中)"
+        lines.append(cost_str)
+
+    # 主力成本 vs 现价
+    if wavg is not None:
+        wavg_line = f"  主力成本(加权均价) = ¥{_v('weight_avg')}"
+        if pvc is not None:
+            pvc_note = ""
+            if pvc > 20: pvc_note = " ⚠严重高估 (现价远高于主力成本, 套牢盘深)"
+            elif pvc > 5: pvc_note = " 高估"
+            elif pvc < -20: pvc_note = " 严重低估 (现价远低于主力成本, 抄底机会)"
+            elif pvc < -5: pvc_note = " 低估"
+            else: pvc_note = " 合理"
+            wavg_line += f"\n        现价相对主力成本: {_v('price_vs_cost', '+.1f')}%{pvc_note}"
+        lines.append(wavg_line)
+
+    # 获利盘比例
+    if wr is not None:
+        wr_note = ""
+        if wr > 70: wr_note = " (获利盘充足, 抛压小)"
+        elif wr < 30: wr_note = " (套牢盘深, 抛压重)"
+        lines.append(f"  获利盘比例(winner_rate) = {_v('winner_rate', '.1f')}%{wr_note}")
+
+    # 综合判断
+    if cost50 is not None and pvc is not None:
+        if pvc > 10:
+            lines.append("  ★ 综合判断: 现价显著高于筹码中位+主力成本,追高风险大,谨慎参与")
+        elif pvc < -10 and wr is not None and wr < 50:
+            lines.append("  ★ 综合判断: 现价低于主力成本+获利盘不足,可能进入吸筹区,关注反转信号")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
 
 
 def _build_chip_section(chip: dict) -> str:
@@ -539,11 +722,18 @@ async def _batch_get_stock_contexts(symbols: list[str]) -> dict[str, dict]:
         for row in r.fetchall():
             snapshots[row[0]] = {c: (round(float(row[i+1]), 2) if row[i+1] is not None else None) for i, c in enumerate(snap_cols)}
 
-        # 批量评分 (Phase E: 增加 win_probability, downside_risk, dimension_scores)
+        # 批量评分 (Phase E + v7.0.32: 增加 22 个技术+筹码字段)
         r = await s.execute(text("""
             SELECT a.symbol, a.composite_score, a.tech_score, a.kline_score, a.fund_score,
                    a.fundamental_adjustment, a.archetype, a.adjustment_reasons,
                    a.win_probability, a.downside_risk, a.dimension_scores,
+                   a.macd_dif, a.macd_dea, a.macd_bar,
+                   a.kdj_k, a.kdj_d, a.kdj_j,
+                   a.rsi_6, a.rsi_12, a.rsi_24,
+                   a.boll_upper, a.boll_mid, a.boll_lower, a.boll_width, a.boll_pos,
+                   a.cci,
+                   a.cost_5pct, a.cost_50pct, a.cost_95pct, a.weight_avg, a.winner_rate,
+                   a.cost_spread, a.price_vs_cost,
                    s.tg_momentum, s.level, s.trigger_path, s.dist_low, s.j_value,
                    s.vol_ratio, s.buy_strength
             FROM analysis_scores a
@@ -560,10 +750,33 @@ async def _batch_get_stock_contexts(symbols: list[str]) -> dict[str, dict]:
                 "win_probability": float(row[8]) if row[8] is not None else None,
                 "downside_risk": float(row[9]) if row[9] is not None else None,
                 "dimension_scores": row[10] if row[10] else {},
-                "tg_momentum": float(row[11]) if row[11] else 0, "level": row[12] or "",
-                "trigger_path": row[13] or "", "dist_low": float(row[14]) if row[14] else 0,
-                "j_value": float(row[15]) if row[15] else 0, "vol_ratio": float(row[16]) if row[16] else 0,
-                "buy_strength": float(row[17]) if row[17] else 0,
+                # v7.0.32 新增 22 字段 (技术指标 + 筹码)
+                "macd_dif": float(row[11]) if row[11] is not None else None,
+                "macd_dea": float(row[12]) if row[12] is not None else None,
+                "macd_bar": float(row[13]) if row[13] is not None else None,
+                "kdj_k": float(row[14]) if row[14] is not None else None,
+                "kdj_d": float(row[15]) if row[15] is not None else None,
+                "kdj_j": float(row[16]) if row[16] is not None else None,
+                "rsi_6": float(row[17]) if row[17] is not None else None,
+                "rsi_12": float(row[18]) if row[18] is not None else None,
+                "rsi_24": float(row[19]) if row[19] is not None else None,
+                "boll_upper": float(row[20]) if row[20] is not None else None,
+                "boll_mid": float(row[21]) if row[21] is not None else None,
+                "boll_lower": float(row[22]) if row[22] is not None else None,
+                "boll_width": float(row[23]) if row[23] is not None else None,
+                "boll_pos": float(row[24]) if row[24] is not None else None,
+                "cci": float(row[25]) if row[25] is not None else None,
+                "cost_5pct": float(row[26]) if row[26] is not None else None,
+                "cost_50pct": float(row[27]) if row[27] is not None else None,
+                "cost_95pct": float(row[28]) if row[28] is not None else None,
+                "weight_avg": float(row[29]) if row[29] is not None else None,
+                "winner_rate": float(row[30]) if row[30] is not None else None,
+                "cost_spread": float(row[31]) if row[31] is not None else None,
+                "price_vs_cost": float(row[32]) if row[32] is not None else None,
+                "tg_momentum": float(row[33]) if row[33] else 0, "level": row[34] or "",
+                "trigger_path": row[35] or "", "dist_low": float(row[36]) if row[36] else 0,
+                "j_value": float(row[37]) if row[37] else 0, "vol_ratio": float(row[38]) if row[38] else 0,
+                "buy_strength": float(row[39]) if row[39] else 0,
             }
 
     return {sym: {"snapshot": snapshots.get(sym, {}), "scoring": scorings.get(sym, {})} for sym in symbols}
@@ -682,16 +895,19 @@ async def process_and_store_deepseek_response(
     }
 
     async with async_session_factory() as s:
+        # 写入主表（无唯一约束，简单插入）
         await s.execute(text("""
             INSERT INTO stock_deep_feedback (ts_code, trade_date, user_id, source_type, raw_response,
-                suggested_score, hidden_risks, catalysts, generated_at)
-            VALUES (:ts, :td, :uid, 'auto_analyze', :raw, :ss, CAST(:hr AS jsonb), CAST(:ct AS jsonb), NOW())
-            ON CONFLICT (ts_code, trade_date, user_id) DO UPDATE SET
-                raw_response=EXCLUDED.raw_response, suggested_score=EXCLUDED.suggested_score,
-                hidden_risks=EXCLUDED.hidden_risks, catalysts=EXCLUDED.catalysts, generated_at=NOW()
+                suggested_score, hidden_risks, catalysts, positive_signals, negative_signals, generated_at)
+            VALUES (:ts, :td, :uid, :stype, :raw, :ss, CAST(:hr AS jsonb), CAST(:ct AS jsonb), CAST(:ps AS jsonb), CAST(:ns AS jsonb), NOW())
         """), {
-            "ts": ts_code, "td": trade_date, "uid": user_id, "raw": raw_response[:50000],
-            "ss": None, "hr": json.dumps(hidden_risks), "ct": json.dumps(catalysts),
+            "ts": ts_code, "td": trade_date, "uid": user_id, "stype": "auto_analyze",
+            "raw": raw_response[:50000],
+            "ss": None,
+            "hr": json.dumps(hidden_risks),
+            "ct": json.dumps(catalysts),
+            "ps": json.dumps(pos_signals),
+            "ns": json.dumps(neg_signals),
         })
 
         for sig in neg_signals:
