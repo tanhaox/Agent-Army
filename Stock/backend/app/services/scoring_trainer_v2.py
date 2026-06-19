@@ -511,18 +511,37 @@ async def train_4x2(lookback_days: int = 730, archetypes: list | None = None, dr
     }
 
 
-async def get_4x2_status() -> dict:
-    """查询 8 套权重状态 — 供前端展示."""
+async def get_4x2_status(market_style: str | None = None) -> dict:
+    """查询 8 套权重状态 — 供前端展示.
+
+    v7.0.33: 加 market_style 参数
+    - market_style=None: 返回当前 regime 的激活权重 (供前端 dashboard)
+    - market_style='all'/'bull'/'bear'/'range': 返回指定 regime 的激活权重
+    - 同时按 (archetype, market_style) 去重, 不再有"8 套互相覆盖"问题
+    """
+    if market_style is None:
+        from app.services.market_gate import get_current_regime_simple
+        try:
+            market_style = await get_current_regime_simple()
+        except Exception:
+            market_style = "all"
+
     async with async_session_factory() as s:
+        # 按 (horizon, model_type, archetype, market_style) 取最新激活
+        # 同一 (h, mt, arch, ms) 只能有 1 行 active (由 _persist_v2 保证)
+        # 加 market_style 过滤避免多 regime 互相覆盖
         r = await s.execute(text(f"""
-            SELECT horizon_days, model_type, discrimination, is_active, is_shadow,
-                   last_trained_at, version, cv_auc, n_samples, win_rate
+            SELECT horizon_days, model_type, archetype, market_style,
+                   discrimination, last_trained_at, version, cv_auc, n_samples, win_rate
             FROM {TARGET_TABLE}
-            WHERE is_active = true
+            WHERE is_active = true AND archetype = '__global__'
+              AND (CAST(:ms AS text) = 'all' OR market_style = CAST(:ms AS text))
             ORDER BY horizon_days, model_type
-        """))
+        """), {"ms": market_style})
         active = {(row[0], row[1]): {
-            "disc": float(row[2]) if row[2] else 0,
+            "disc": float(row[4]) if row[4] else 0,
+            "archetype": row[2],
+            "market_style": row[3],
             "trained_at": str(row[5]) if row[5] else None,
             "version": row[6],
             "cv_auc": float(row[7]) if row[7] else 0,
@@ -534,12 +553,15 @@ async def get_4x2_status() -> dict:
     for h in ALL_HORIZONS:
         for mt in ALL_MODEL_TYPES:
             info = active.get((h, mt), {"disc": 0, "trained_at": None, "version": "untrained",
-                                          "cv_auc": 0, "n_samples": 0, "win_rate": 0})
+                                          "cv_auc": 0, "n_samples": 0, "win_rate": 0,
+                                          "archetype": "__global__", "market_style": market_style})
             panel.append({
                 "horizon_days": h,
                 "model_type": mt,
                 "key": f"T+{h}_{mt}",
                 "strategy": HORIZON_TO_STRATEGY[h],
+                "archetype": info.get("archetype", "__global__"),
+                "market_style": info.get("market_style", market_style),
                 "discrimination": info["disc"],
                 "cv_auc": info["cv_auc"],
                 "trained_at": info["trained_at"],
@@ -548,4 +570,4 @@ async def get_4x2_status() -> dict:
                 "win_rate": info["win_rate"],
                 "can_upgrade": info["disc"] > 0.55 and info["n_samples"] >= MIN_SAMPLES_FOR_TRAINING,
             })
-    return {"panels": panel, "count": len(panel)}
+    return {"panels": panel, "count": len(panel), "market_style": market_style}
