@@ -25,6 +25,98 @@ interface Props {
   loadError: boolean;
 }
 
+// ── v7.0.32: 金过滤判定 (基于 5 维技术指标 + 筹码) ──
+interface GoldFilterResult {
+  isGold: boolean;          // 是否金过滤 (强买入信号)
+  isWarn: boolean;          // 是否风险警告
+  label: string;           // '✓ 金过滤' | '⚠ 风险' | ''
+  details: string[];        // 命中的条件列表
+}
+
+function checkGoldFilter(r: any): GoldFilterResult {
+  const details: string[] = [];
+  let isGold = true;
+  let isWarn = false;
+
+  // MACD 多头 (DIF > DEA 或 bar > 0)
+  const macdDif = r.macd_dif;
+  const macdDea = r.macd_dea;
+  if (macdDif != null && macdDea != null) {
+    if (macdDif > macdDea) details.push('MACD多头');
+    else { isGold = false; details.push('MACD空头'); }
+  }
+  // KDJ 正常 (20 < J < 80)
+  const kdjJ = r.kdj_j;
+  if (kdjJ != null) {
+    if (kdjJ >= 20 && kdjJ <= 80) details.push('KDJ正常');
+    else if (kdjJ > 80) { isGold = false; isWarn = true; details.push('KDJ超买'); }
+    else details.push('KDJ超卖');
+  }
+  // RSI 正常 (30 < RSI24 < 70)
+  const rsi24 = r.rsi_24;
+  if (rsi24 != null) {
+    if (rsi24 >= 30 && rsi24 <= 70) details.push('RSI正常');
+    else if (rsi24 > 70) { isGold = false; isWarn = true; details.push('RSI超买'); }
+    else details.push('RSI超卖');
+  }
+  // BOLL 中位区 (0.2 < boll_pos < 0.8)
+  const bollPos = r.boll_pos;
+  if (bollPos != null) {
+    if (bollPos >= 0.2 && bollPos <= 0.8) details.push('BOLL中位');
+    else if (bollPos > 0.9) { isWarn = true; details.push('BOLL上轨外'); }
+    else if (bollPos < 0.1) details.push('BOLL下轨外');
+    else isGold = false;
+  }
+  // CCI 正常 (-100 < CCI < 100)
+  const cci = r.cci;
+  if (cci != null) {
+    if (cci >= -100 && cci <= 100) details.push('CCI正常');
+    else if (cci > 100) { isWarn = true; details.push('CCI超买'); }
+    else details.push('CCI超卖');
+  }
+  // 筹码: 主力成本贴近 (price_vs_cost < 20%)
+  const pvc = r.price_vs_cost;
+  if (pvc != null) {
+    if (pvc < 20) details.push('成本贴近');
+    else { isGold = false; isWarn = true; details.push('高估>20%'); }
+  }
+
+  // 金过滤条件: 全部命中 (isGold && !isWarn), 至少 5 个 details
+  let label = '';
+  if (details.length >= 4 && isGold && !isWarn) label = '✓ 金过滤';
+  else if (isWarn) label = '⚠ 风险';
+
+  return { isGold: isGold && !isWarn, isWarn, label, details };
+}
+
+// ── v7.0.32: 单维度格式化 (MACD/KDJ/RSI/BOLL/CCI/筹码) ──
+function techCell(key: string, value: number | null | undefined, format: 'pct' | 'num' | 'pos' = 'num') {
+  if (value == null) return <span style={{ fontSize: 10, color: '#4b5563' }}>—</span>;
+  let color = '#9ca3af';
+  let display = '';
+  if (key === 'macd') {
+    // DIF 0轴上下
+    color = value > 0.1 ? '#10b981' : value < -0.1 ? '#ef4444' : '#9ca3af';
+    display = value > 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+  } else if (key === 'kdj') {
+    color = value > 80 ? '#ef4444' : value < 20 ? '#10b981' : '#9ca3af';
+    display = value.toFixed(0);
+  } else if (key === 'rsi') {
+    color = value > 70 ? '#ef4444' : value < 30 ? '#10b981' : '#9ca3af';
+    display = value.toFixed(0);
+  } else if (key === 'boll') {
+    color = value > 0.9 ? '#ef4444' : value < 0.1 ? '#10b981' : '#9ca3af';
+    display = value.toFixed(2);
+  } else if (key === 'cci') {
+    color = value > 100 ? '#ef4444' : value < -100 ? '#10b981' : '#9ca3af';
+    display = value > 0 ? `+${value.toFixed(0)}` : value.toFixed(0);
+  } else if (key === 'chip') {
+    display = `¥${value.toFixed(1)}`;
+    color = '#c9d1d9';
+  }
+  return <span style={{ fontSize: 11, fontWeight: 600, color }}>{display}</span>;
+}
+
 export default function CuratedRankingView({
   data, batchScores, scanDate, curatedDate,
   expandedCards, setExpandedCards, scoringBatch, loadError,
@@ -67,12 +159,13 @@ export default function CuratedRankingView({
         const bs = batchScores[r.symbol];
         const rank = i + 1;
         const isGold = rank === 1;
+        const gf = checkGoldFilter(r);  // v7.0.32: 金过滤/风险判定
 
         return (
           <div key={r.symbol} onClick={() => setExpandedCards(prev => { const n = new Set(prev); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
             style={{
               marginBottom: 10, borderRadius: 12, cursor: 'pointer',
-              border: isGold ? '1px solid rgba(245,158,11,0.3)' : '1px solid #1e2535',
+              border: isGold ? '1px solid rgba(245,158,11,0.3)' : gf.isWarn ? '1px solid rgba(239,68,68,0.25)' : '1px solid #1e2535',
               background: isExp ? '#161b27' : '#111620',
               transition: 'all .2s', overflow: 'hidden',
             }}>
@@ -131,8 +224,47 @@ export default function CuratedRankingView({
                   r.relative_position?.includes('跌')||r.relative_position?.includes('出货')?'#ef4444':'#6e7a8a' }}>
                   {r.relative_position||'—'}
                 </div>
-                {r.predicted_return!=null&&<div style={{fontSize:9,color:r.predicted_return>0?'#10b981':'#ef4444'}}>预{r.predicted_return>0?'+':''}{r.predicted_return}%</div>}
+                {r.predicted_return!=null&&<div style={{fontSize:9,color:r.predicted_return>0?'#ef4444':'#10b981'}}>预{r.predicted_return>0?'+':''}{r.predicted_return}%</div>}
               </div>
+              {/* ★ v7.0.32: 5 维技术指标列 */}
+              <div style={{ textAlign: 'center', minWidth: 50 }} title={`MACD DIF: ${r.macd_dif?.toFixed(2) ?? '—'} | DEA: ${r.macd_dea?.toFixed(2) ?? '—'}`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>MACD</div>
+                <div>{techCell('macd', r.macd_dif)}</div>
+              </div>
+              <div style={{ textAlign: 'center', minWidth: 42 }} title={`KDJ J值: ${r.kdj_j?.toFixed(0) ?? '—'}`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>KDJ</div>
+                <div>{techCell('kdj', r.kdj_j)}</div>
+              </div>
+              <div style={{ textAlign: 'center', minWidth: 42 }} title={`RSI24: ${r.rsi_24?.toFixed(0) ?? '—'}`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>RSI</div>
+                <div>{techCell('rsi', r.rsi_24)}</div>
+              </div>
+              <div style={{ textAlign: 'center', minWidth: 42 }} title={`BOLL pos: ${r.boll_pos?.toFixed(2) ?? '—'}`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>BOLL</div>
+                <div>{techCell('boll', r.boll_pos)}</div>
+              </div>
+              <div style={{ textAlign: 'center', minWidth: 42 }} title={`CCI: ${r.cci?.toFixed(0) ?? '—'}`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>CCI</div>
+                <div>{techCell('cci', r.cci)}</div>
+              </div>
+              {/* ★ v7.0.32: 筹码成本中位 */}
+              <div style={{ textAlign: 'center', minWidth: 50 }} title={`筹码成本中位: ¥${r.cost_50pct?.toFixed(2) ?? '—'} | 现价相对: ${r.price_vs_cost?.toFixed(1) ?? '—'}%`}>
+                <div style={{ fontSize: 9, color: '#6e7a8a' }}>成本</div>
+                <div>{techCell('chip', r.cost_50pct)}</div>
+              </div>
+              {/* ★ v7.0.32: 金过滤/风险标签 */}
+              {gf.label && (
+                <div style={{ textAlign: 'center', minWidth: 56 }} title={gf.details.join(' | ')}>
+                  <div style={{ fontSize: 9, color: '#6e7a8a' }}>信号</div>
+                  <div style={{
+                    fontSize: 10, fontWeight: 700,
+                    padding: '2px 6px', borderRadius: 4,
+                    background: gf.label.includes('金') ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+                    color: gf.label.includes('金') ? '#10b981' : '#ef4444',
+                    border: gf.label.includes('金') ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(239,68,68,0.3)',
+                  }}>{gf.label}</div>
+                </div>
+              )}
               <div style={{ textAlign: 'center', minWidth: 70 }}>
                 <div style={{ fontSize: 9, color: '#6e7a8a' }}>策略</div>
                 <div style={{ fontSize: 10, fontWeight: 600, color:
@@ -174,6 +306,73 @@ export default function CuratedRankingView({
                   ))}
                 </div>
 
+                {/* ★ v7.0.32: 5 维技术指标 + 筹码分布 行 */}
+                <div style={{ display: 'flex', gap: 14, padding: '10px 0', flexWrap: 'wrap', borderBottom: '1px solid #1e2535' }}>
+                  <div style={{ fontSize: 10, color: '#06b6d4', fontWeight: 700, alignSelf: 'center', minWidth: 56 }}>📊 v7.0.32</div>
+                  {/* MACD */}
+                  <div style={{ textAlign: 'center', minWidth: 70 }} title={`MACD DIF=${r.macd_dif?.toFixed(3) ?? '—'} | DEA=${r.macd_dea?.toFixed(3) ?? '—'} | BAR=${r.macd_bar?.toFixed(3) ?? '—'}`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>MACD</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('macd', r.macd_dif)}</div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>DEA {r.macd_dea?.toFixed(2) ?? '—'}</div>
+                  </div>
+                  {/* KDJ */}
+                  <div style={{ textAlign: 'center', minWidth: 80 }} title={`KDJ K=${r.kdj_k?.toFixed(1) ?? '—'} | D=${r.kdj_d?.toFixed(1) ?? '—'} | J=${r.kdj_j?.toFixed(1) ?? '—'}`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>KDJ</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('kdj', r.kdj_j)}</div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>K {r.kdj_k?.toFixed(0) ?? '—'} / D {r.kdj_d?.toFixed(0) ?? '—'}</div>
+                  </div>
+                  {/* RSI */}
+                  <div style={{ textAlign: 'center', minWidth: 60 }} title={`RSI 6=${r.rsi_6?.toFixed(0) ?? '—'} | 12=${r.rsi_12?.toFixed(0) ?? '—'} | 24=${r.rsi_24?.toFixed(0) ?? '—'}`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>RSI</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('rsi', r.rsi_24)}</div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>24h 值</div>
+                  </div>
+                  {/* BOLL */}
+                  <div style={{ textAlign: 'center', minWidth: 90 }} title={`BOLL 上=${r.boll_upper?.toFixed(2) ?? '—'} | 中=${r.boll_mid?.toFixed(2) ?? '—'} | 下=${r.boll_lower?.toFixed(2) ?? '—'} | pos=${r.boll_pos?.toFixed(2) ?? '—'}`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>BOLL</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('boll', r.boll_pos)}</div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>中轨 ¥{r.boll_mid?.toFixed(2) ?? '—'}</div>
+                  </div>
+                  {/* CCI */}
+                  <div style={{ textAlign: 'center', minWidth: 60 }} title={`CCI: ${r.cci?.toFixed(1) ?? '—'}`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>CCI</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('cci', r.cci)}</div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>±100 阈值</div>
+                  </div>
+                  {/* 筹码成本 */}
+                  <div style={{ textAlign: 'center', minWidth: 80 }} title={`筹码中位: ¥${r.cost_50pct?.toFixed(2) ?? '—'} | 主力成本: ¥${r.weight_avg?.toFixed(2) ?? '—'} | 现价相对: ${r.price_vs_cost?.toFixed(1) ?? '—'}%`}>
+                    <div style={{ fontSize: 9, color: '#06b6d4', fontWeight: 700 }}>💰 筹码</div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>{techCell('chip', r.cost_50pct)}</div>
+                    <div style={{ fontSize: 8, color: r.price_vs_cost > 20 ? '#ef4444' : r.price_vs_cost < -10 ? '#10b981' : '#6e7a8a' }}>
+                      {r.price_vs_cost != null ? (r.price_vs_cost > 0 ? `+${r.price_vs_cost.toFixed(1)}%` : `${r.price_vs_cost.toFixed(1)}%`) : '—'}
+                    </div>
+                  </div>
+                  {/* 获利盘 */}
+                  <div style={{ textAlign: 'center', minWidth: 60 }} title={`获利盘: ${r.winner_rate?.toFixed(1) ?? '—'}%`}>
+                    <div style={{ fontSize: 9, color: '#6e7a8a' }}>获利盘</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: r.winner_rate > 70 ? '#ef4444' : r.winner_rate < 30 ? '#10b981' : '#9ca3af' }}>
+                      {r.winner_rate != null ? `${r.winner_rate.toFixed(0)}%` : '—'}
+                    </div>
+                    <div style={{ fontSize: 8, color: '#4b5563' }}>
+                      {r.winner_rate > 70 ? '高位风险' : r.winner_rate < 30 ? '深套' : '正常'}
+                    </div>
+                  </div>
+                  {/* 金过滤判定 */}
+                  {gf.label && (
+                    <div style={{
+                      alignSelf: 'center', marginLeft: 'auto', padding: '6px 12px', borderRadius: 6,
+                      background: gf.label.includes('金') ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
+                      border: gf.label.includes('金') ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(239,68,68,0.3)',
+                    }} title={gf.details.join(' | ')}>
+                      <div style={{ fontSize: 9, color: '#6e7a8a' }}>v7.0.32 过滤</div>
+                      <div style={{
+                        fontSize: 13, fontWeight: 700,
+                        color: gf.label.includes('金') ? '#10b981' : '#ef4444',
+                      }}>{gf.label}</div>
+                    </div>
+                  )}
+                </div>
+
                 {(r.adjustment_reasons?.length > 0) && (
                   <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.03)', border: '1px solid rgba(139,92,246,0.08)' }}>
                     <div style={{ fontSize: 10, color: '#6e7a8a', marginBottom: 4 }}>🔍 评分调整明细</div>
@@ -182,7 +381,7 @@ export default function CuratedRankingView({
                         const isNeg = reason.includes('⚠') || reason.includes('-') || reason.includes('退潮') || reason.includes('分化');
                         const isPos = reason.includes('发酵') || reason.includes('金叉') || reason.includes('多头') || reason.includes('+');
                         return (
-                          <span key={j} style={{ fontSize: 10, color: isNeg ? '#ef4444' : isPos ? '#10b981' : '#8b949e' }}>
+                          <span key={j} style={{ fontSize: 10, color: isNeg ? '#10b981' : isPos ? '#ef4444' : '#8b949e' }}>
                             {reason}
                           </span>
                         );
@@ -323,21 +522,21 @@ export default function CuratedRankingView({
                         {seWr != null && seCnt >= 3 && (
                           <div style={{ textAlign: 'center', minWidth: 60 }}>
                             <div style={{ fontSize: 8, color: '#6e7a8a' }}>信号胜率</div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: seWr >= 0.55 ? '#10b981' : seWr >= 0.40 ? '#f59e0b' : '#ef4444' }}>{(seWr*100).toFixed(0)}%</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: seWr >= 0.55 ? '#ef4444' : seWr >= 0.40 ? '#f59e0b' : '#10b981' }}>{(seWr*100).toFixed(0)}%</div>
                             <div style={{ fontSize: 7, color: '#4b5563' }}>{seCnt}次</div>
                           </div>
                         )}
                         {curAr > 0 && (
                           <div style={{ textAlign: 'center', minWidth: 60 }}>
                             <div style={{ fontSize: 8, color: '#6e7a8a' }}>筹码吸收</div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: curAr >= 0.6 ? '#10b981' : curAr >= 0.4 ? '#f59e0b' : '#ef4444' }}>{(curAr*100).toFixed(0)}%</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: curAr >= 0.6 ? '#ef4444' : curAr >= 0.4 ? '#f59e0b' : '#10b981' }}>{(curAr*100).toFixed(0)}%</div>
                             <div style={{ fontSize: 7, color: '#4b5563' }}>{csTrend === 'accelerating' ? '↑加速' : csTrend === 'slowly_improving' ? '↗改善' : csTrend || '—'}</div>
                           </div>
                         )}
                         {pred5 != null && (
                           <div style={{ textAlign: 'center', minWidth: 60 }}>
                             <div style={{ fontSize: 8, color: '#6e7a8a' }}>形态预测</div>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: pred5 >= 0 ? '#10b981' : '#ef4444' }}>{pred5 >= 0 ? '↑' : '↓'}{Math.abs(pred5).toFixed(1)}%</div>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: pred5 >= 0 ? '#ef4444' : '#10b981' }}>{pred5 >= 0 ? '↑' : '↓'}{Math.abs(pred5).toFixed(1)}%</div>
                             <div style={{ fontSize: 7, color: '#4b5563' }}>T+5</div>
                           </div>
                         )}
