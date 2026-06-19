@@ -205,6 +205,57 @@ async def batch_score_stocks(req: BatchScoreRequest):
 
     all_text = "\n---\n".join(stocks_text)
 
+    # ★ v7.0.32: 附加 22 字段硬指标 (技术指标 + 筹码分布, 让 LLM 看到真实数字)
+    tech_lines = []
+    try:
+        async with async_session_factory() as s:
+            # 一次查所有 symbols 的 22 字段
+            placeholders = ", ".join([f":s{i}" for i in range(len(symbols[:20]))])
+            params = {f"s{i}": sym for i, sym in enumerate(symbols[:20])}
+            r = await s.execute(text(f"""
+                SELECT symbol, a.composite_score, a.macd_dif, a.macd_dea, a.macd_bar,
+                       a.kdj_k, a.kdj_d, a.kdj_j,
+                       a.rsi_6, a.rsi_12, a.rsi_24,
+                       a.boll_upper, a.boll_mid, a.boll_lower, a.boll_width, a.boll_pos,
+                       a.cci,
+                       a.cost_5pct, a.cost_50pct, a.cost_95pct, a.weight_avg, a.winner_rate,
+                       a.cost_spread, a.price_vs_cost
+                FROM analysis_scores a
+                WHERE a.symbol IN ({placeholders})
+                  AND a.scan_date = (SELECT MAX(scan_date) FROM analysis_scores WHERE symbol = a.symbol)
+            """), params)
+            for row in r.fetchall():
+                sym = row[0]
+                cs = row[1]
+                macd_dif, macd_dea, macd_bar = row[2], row[3], row[4]
+                kdj_k, kdj_d, kdj_j = row[5], row[6], row[7]
+                rsi6, rsi12, rsi24 = row[8], row[9], row[10]
+                boll_up, boll_mid, boll_low, boll_w, boll_pos = row[11], row[12], row[13], row[14], row[15]
+                cci = row[16]
+                cost5, cost50, cost95, wavg, wr = row[17], row[18], row[19], row[20], row[21]
+                spread, pvc = row[22], row[23]
+
+                def _f(v, p=2):
+                    if v is None: return "—"
+                    return f"{v:+.{p}f}" if p and v < 0 else f"{v:.{p}f}"
+
+                lines = [
+                    f"  综合分: {cs:.0f}",
+                    f"  MACD: DIF={_f(macd_dif)} DEA={_f(macd_dea)} BAR={_f(macd_bar)}",
+                    f"  KDJ: K={_f(kdj_k, 1)} D={_f(kdj_d, 1)} J={_f(kdj_j, 1)}",
+                    f"  RSI: 6={_f(rsi6, 0)} 12={_f(rsi12, 0)} 24={_f(rsi24, 0)}",
+                    f"  BOLL: 上={_f(boll_up)} 中={_f(boll_mid)} 下={_f(boll_low)} pos={_f(boll_pos, 2)}",
+                    f"  CCI: {_f(cci, 1)}",
+                    f"  筹码: 5%={_f(cost5)} 50%={_f(cost50)} 95%={_f(cost95)} 主力={_f(wavg)} 获利={_f(wr, 1)}% spread={_f(spread)} 现价vs成本={_f(pvc, 1)}%",
+                ]
+                tech_lines.append(f"{sym}:\n" + "\n".join(lines))
+    except Exception as e:
+        logger.warning(f"Batch score tech/chip 22 fields fetch failed: {e}")
+
+    tech_note = ""
+    if tech_lines:
+        tech_note = "\n\n[★ v7.0.32 硬指标(技术+筹码) — 评分必须基于此]\n" + "\n\n".join(tech_lines)
+
     # ★ 附加筹码吸收率数据 (硬指标, 横向对比时让LLM看到)
     chip_lines = []
     try:
@@ -252,13 +303,23 @@ async def batch_score_stocks(req: BatchScoreRequest):
 {macro_note}
 
 评分铁律（严苛——5分为中性，多数股票应在3-7分之间）:
-- 短期(1-4周): 只看技术面+资金面+催化剂，不管长期逻辑。有明显下跌信号必须打≤4分
-- 中期(1-3月): 只看基本面+行业趋势+估值。业绩下滑/高估值/行业退潮必须打≤4分
-- 筹码: 参考[筹码吸收率] — 吸收率>60%=上方抛压轻, <40%=套牢盘重
+- 短期(1-4周): 看技术面+资金面+催化剂。**v7.0.32 技术指标 5 维作为硬指标**: MACD空头/KDJ超买(>80)/RSI超买(>70)/BOLL上轨外(>0.9)/CCI超买(>100) 任一触发必须打≤4分
+- 中期(1-3月): 看基本面+行业趋势+估值。**筹码分布作为硬指标**: 现价相对主力成本 price_vs_cost>+20% 必须打≤4分(高估), winner_rate>85% 警戒(高位出货)
+- 筹码: 参考[筹码吸收率]+v7.0.32 筹码5维 — 吸收率>60%=上方抛压轻, <40%=套牢盘重, 50%<获利盘<70%为吸筹黄金区
+
+**v7.0.32 硬指标(必须严格基于此评分)**:
+- MACD 多空: DIF>DEA=多头(加分), DIF<DEA=空头(减分)
+- KDJ: J<20 超卖(短线加分), J>80 超买(短线减分)
+- RSI24: <30 超卖(加分), >70 超买(减分)
+- BOLL: boll_pos<0.1 下轨外(强反弹加分), >0.9 上轨外(强风险减分)
+- CCI: <-100 超卖(加分), >100 超买(减分)
+- 成本贴近: price_vs_cost<5% 加分(主力成本贴近), >20% 减分
+- 获利盘: <30% 加分(底部吸筹), >85% 减分(高位风险)
 
 **禁止**: 不得因股票代码熟悉就默认高分。不得写"建议关注/适当参与"等废话。直接给结论。
 
 {all_text}
+{tech_note}
 {chip_note}
 
 请只输出JSON，每只股票: short(0-10), mid(0-10), short_note(≤15字,盈亏视角操作建议), mid_note(≤15字,盈亏视角操作建议), support(短期支撑位), resistance(短期压力位)
