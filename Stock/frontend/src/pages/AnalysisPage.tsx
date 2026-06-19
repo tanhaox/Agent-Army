@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../lib/api';
 
@@ -32,11 +32,168 @@ const ARCH_COLORS: Record<string, string> = {
   '主板_cyclical_resource': '#8b5cf6',
   '创业板_large_bluechip': '#60a5fa', '创业板_small_speculative': '#f87171',
   '创业板_growth_tech': '#34d399', '创业板_value_defensive': '#fbbf24',
-  '创业板_cyclical_resource': '#a78bfa',
-  large_bluechip: '#3b82f6', small_speculative: '#ef4444',
-  growth_tech: '#10b981', value_defensive: '#f59e0b',
-  cyclical_resource: '#8b5cf6',
+  '创业板_cyclical_resource': '#f472b6',
+  large_bluechip: '#3b82f6', small_speculative: '#a855f7',
+  growth_tech: '#10b981', value_defensive: '#f59e0b', cyclical_resource: '#ef4444',
 };
+
+// ★ v7.0.33: 列定义 (数据驱动, 隐藏列加 hidden: true)
+//   重要: 隐藏只是前端不渲染, 后端数据仍计算并返回
+//   切换隐藏只需改 hidden: true/false, 不改 td/render 逻辑
+interface ColumnDef {
+  key: string;
+  label: string;
+  hidden?: boolean;          // true = 不渲染 (前端隐藏)
+  render: (r: any) => React.ReactNode;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'symbol', label: '代码',
+    render: (r) => <code style={{ color: '#06b6d4' }}>{r.symbol}</code> },
+  { key: 'name', label: '名称',
+    render: (r) => (
+      <span title={r.symbol}>
+        {r.name && r.name !== r.symbol && !r.name.match(/\.(SH|SZ|BJ)$/)
+          ? r.name
+          : <span style={{color:'#f59e0b',fontStyle:'italic'}}>{r.symbol} (无名称)</span>}
+        {r.ambush_score > 0 && <span style={{marginLeft:6,padding:'1px 5px',borderRadius:3,fontSize:9,background:'rgba(239,68,68,0.12)',color:'#ef4444'}}>潜伏</span>}
+      </span>
+    ) },
+  { key: 'composite', label: '综合分',
+    render: (r) => (
+      <span style={{
+        padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: 12,
+        background: r.composite_score >= 55 ? 'rgba(239,68,68,0.1)' : r.composite_score >= 45 ? 'rgba(245,158,11,0.1)' : 'rgba(107,114,128,0.1)',
+        color: r.composite_score >= 55 ? '#ef4444' : r.composite_score >= 45 ? '#f59e0b' : '#9ca3af',
+      }}>{r.composite_score}</span>
+    ) },
+  { key: 'tech', label: '技术面',
+    render: (r) => (
+      <span style={{ color: (r.tech_score || 0) >= 7 ? '#ef4444' : (r.tech_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>
+        {r.tech_score?.toFixed(1) || '-'}
+      </span>
+    ) },
+  { key: 'kline', label: 'K线博弈', hidden: true,  // ★ 用户要求隐藏
+    render: (r) => (
+      <span style={{ color: (r.kline_score || 0) >= 7 ? '#ef4444' : (r.kline_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>
+        {r.kline_score?.toFixed(1) || '-'}
+      </span>
+    ) },
+  { key: 'fund', label: '资金面',
+    render: (r) => (
+      <span style={{ color: (r.fund_score || 0) >= 7 ? '#ef4444' : (r.fund_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>
+        {r.fund_score?.toFixed(1) || '-'}
+      </span>
+    ) },
+  { key: 'fundamental', label: '基本面调整',
+    render: (r) => (
+      <span style={{ color: (r.fundamental_adjustment || 0) > 0 ? '#ef4444' : (r.fundamental_adjustment || 0) < 0 ? '#10b981' : '#6e7a8a', fontWeight: 600 }}>
+        {r.fundamental_adjustment != null ? (r.fundamental_adjustment > 0 ? '+' : '') + r.fundamental_adjustment : '-'}
+      </span>
+    ) },
+  { key: 'sector', label: '板块加成',
+    render: (r) => <span>{r.sector_bonus > 0 ? `+${r.sector_bonus}` : '0'}</span> },
+  { key: 'archetype', label: '原型',
+    render: (r) => r.archetype && r.archetype !== 'unknown' ? (
+      <span style={{
+        padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600,
+        background: `${ARCH_COLORS[r.archetype] || '#6e7a8a'}18`,
+        color: ARCH_COLORS[r.archetype] || '#6e7a8a', cursor: 'help',
+      }} title={(r.adjustment_reasons || []).join('\n')}>
+        {ARCH_LABELS[r.archetype] || r.archetype}
+      </span>
+    ) : <span style={{ color: '#4b5563' }}>—</span> },
+  { key: 'win_prob', label: 'T+2胜率', hidden: true,  // ★ 用户要求隐藏
+    render: (r) => r.win_probability != null ? (
+      <span style={{ fontWeight: 600, fontSize: 12,
+        color: r.win_probability >= 0.45 ? '#10b981' : r.win_probability >= 0.35 ? '#f59e0b' : '#ef4444' }}>
+        {(r.win_probability * 100).toFixed(0)}%
+        {r.downside_risk != null && r.downside_risk < -2 && (
+          <span style={{ marginLeft: 4, fontSize: 10, color: '#ef4444' }}>⚠</span>
+        )}
+      </span>
+    ) : <span style={{ color: '#4b5563' }}>—</span> },
+  { key: 'patterns', label: '形态',
+    render: (r) => r.patterns ? (
+      <span style={{ fontSize: 10, color: isBear(r.patterns) ? '#10b981' : '#ef4444', background: isBear(r.patterns) ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.08)', padding: '2px 6px', borderRadius: 4, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }} title={r.patterns}>
+        {fmtPattern(r.patterns).slice(0, 20)}
+      </span>
+    ) : <span style={{ color: '#4b5563' }}>—</span> },
+  { key: 'level', label: '级别',
+    render: (r) => (
+      <span style={{
+        padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+        background: r.level === 'L3' ? 'rgba(251,191,36,.15)' : r.level === 'L2' ? 'rgba(96,165,250,.15)' : 'rgba(156,163,175,.12)',
+        color: r.level === 'L3' ? '#f59e0b' : r.level === 'L2' ? '#60a5fa' : '#9ca3af',
+      }}>{r.level || '—'}</span>
+    ) },
+  { key: 'monthly', label: '30日',
+    render: (r) => (
+      <span style={{ color: (r.monthly_pushes||1) >= 5 ? '#ef4444' : (r.monthly_pushes||1) >= 3 ? '#f59e0b' : '#6e7a8a', fontWeight: (r.monthly_pushes||1) >= 3 ? 600 : 400, fontSize: 11 }}>
+        {r.monthly_pushes||1}次
+      </span>
+    ) },
+  { key: 'fairy', label: '大神仙空',
+    render: (r) => r.big_fairy ? (
+      <span style={{display:'inline-flex',alignItems:'center',gap:3}}>
+        <span style={{fontSize:13,fontWeight:700,
+          color:r.big_fairy.score>=3?'#ef4444':r.big_fairy.score>=2?'#f59e0b':r.big_fairy.score>=1?'#fbbf24':'#10b981'}}>
+          {r.big_fairy.score}
+        </span>
+        <span style={{fontSize:10,color:'#8b949e'}}>
+          {r.big_fairy.signal==='strong_sell'?'强空':r.big_fairy.signal==='sell'?'偏空':r.big_fairy.signal==='weak'?'弱':'正常'}
+        </span>
+      </span>
+    ) : <span style={{color:'#4b5563',fontSize:11}}>—</span> },
+  { key: 'macd_dif', label: 'MACD DIF',
+    render: (r) => <span style={{ color: r.macd_dif == null ? '#6e7a8a' : (r.macd_dif > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+      {r.macd_dif != null ? r.macd_dif.toFixed(2) : '-'}
+    </span> },
+  { key: 'macd_dea', label: 'MACD DEA',
+    render: (r) => <span style={{ color: r.macd_dea == null ? '#6e7a8a' : (r.macd_dea > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
+      {r.macd_dea != null ? r.macd_dea.toFixed(2) : '-'}
+    </span> },
+  { key: 'kdj_j', label: 'KDJ J',
+    render: (r) => <span style={{ color: r.kdj_j == null ? '#6e7a8a' : (r.kdj_j > 80 ? '#ef4444' : r.kdj_j < 20 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+      {r.kdj_j != null ? r.kdj_j.toFixed(0) : '-'}
+    </span> },
+  { key: 'rsi_24', label: 'RSI 24', hidden: true,  // ★ 用户要求隐藏
+    render: (r) => <span style={{ color: r.rsi_24 == null ? '#6e7a8a' : (r.rsi_24 > 70 ? '#ef4444' : r.rsi_24 < 30 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
+      {r.rsi_24 != null ? r.rsi_24.toFixed(0) : '-'}
+    </span> },
+  { key: 'boll', label: 'BOLL', hidden: true,  // ★ 用户要求隐藏
+    render: (r) => <span style={{ color: r.boll_pos == null ? '#6e7a8a' : (r.boll_pos > 0.9 ? '#ef4444' : r.boll_pos < 0.1 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+      {r.boll_pos != null ? r.boll_pos.toFixed(2) : '-'}
+    </span> },
+  { key: 'cci', label: 'CCI', hidden: true,  // ★ 用户要求隐藏
+    render: (r) => <span style={{ color: r.cci == null ? '#6e7a8a' : (r.cci > 200 || r.cci < -200 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
+      {r.cci != null ? r.cci.toFixed(0) : '-'}
+    </span> },
+  { key: 'cost', label: '成本中位',
+    render: (r) => <span style={{ color: r.cost_50pct == null ? '#6e7a8a' : (r.cost_50pct < 5 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
+      {r.cost_50pct != null ? r.cost_50pct.toFixed(1) : '-'}
+    </span> },
+  { key: 'spread', label: '筹码宽度',
+    render: (r) => <span style={{ color: r.cost_spread == null ? '#6e7a8a' : (r.cost_spread > 5 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
+      {r.cost_spread != null ? r.cost_spread.toFixed(1) : '-'}
+    </span> },
+  { key: 'gold', label: '金过滤',
+    render: (r) => {
+      const macdOk = r.macd_dif != null && r.macd_dif > 0;
+      const kdjOk = r.kdj_j != null && r.kdj_j < 80;
+      const chipOk = r.cost_50pct != null && r.cost_50pct > 20;
+      const spreadOk = r.cost_spread != null && r.cost_spread > 5;
+      const all = macdOk && kdjOk && chipOk && spreadOk;
+      const hasData = r.macd_dif != null && r.kdj_j != null && r.cost_50pct != null && r.cost_spread != null;
+      if (!hasData) return <span style={{ color: '#4b5563', fontSize: 10 }}>—</span>;
+      if (all) return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>✓ 金过滤</span>;
+      return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 600, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>⚠ 风险</span>;
+    } },
+];
+
+// ★ 过滤后的可见列 (动态渲染, 不影响后端数据)
+const VISIBLE_COLUMNS = COLUMNS.filter(c => !c.hidden);
+const VISIBLE_COL_COUNT = VISIBLE_COLUMNS.length;
 
 export default function AnalysisPage() {
   const [data, setData] = useState<any[]>([]);
@@ -297,15 +454,15 @@ export default function AnalysisPage() {
       <table style={{ width: '100%', borderCollapse: 'collapse', background: '#161b27', borderRadius: 12, overflow: 'hidden' }}>
         <thead><tr style={{ background: '#1a2030' }}>
           <th style={{ padding: '10px 8px', width: 36 }}></th>
-          {['代码', '名称', '综合分', '技术面', 'K线博弈', '资金面', '基本面调整', '板块加成', '原型', 'T+2胜率', '形态', '级别', '30日', '大神仙空', 'MACD DIF', 'MACD DEA', 'KDJ J', 'RSI 24', 'BOLL', 'CCI', '成本中位', '筹码宽度', '金过滤'].map(h => (
-            <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: '#6e7a8a', fontWeight: 500 }}>{h}</th>
+          {VISIBLE_COLUMNS.map(c => (
+            <th key={c.key} style={{ padding: '10px 14px', textAlign: 'left', fontSize: 11, color: '#6e7a8a', fontWeight: 500 }}>{c.label}</th>
           ))}
         </tr></thead>
         <tbody>
           {loading ? (
-            <tr><td colSpan={23} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>加载中...</td></tr>
+            <tr><td colSpan={VISIBLE_COL_COUNT + 1} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>加载中...</td></tr>
           ) : filtered.length === 0 ? (
-            <tr><td colSpan={23} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>暂无评分数据，请先运行 TG 扫描触发深度评分</td></tr>
+            <tr><td colSpan={VISIBLE_COL_COUNT + 1} style={{ textAlign: 'center', padding: 40, color: '#6e7a8a' }}>暂无评分数据，请先运行 TG 扫描触发深度评分</td></tr>
           ) : filtered.map((r: any, i: number) => {
             const isSel = selected.has(r.symbol);
             return (
@@ -317,118 +474,12 @@ export default function AnalysisPage() {
                     disabled={!isSel && selected.size >= 20}
                     style={{ width: 15, height: 15, cursor: 'pointer', accentColor: '#8b5cf6' }} />
                 </td>
-              <td style={{ padding: '9px 14px' }}><code style={{ color: '#06b6d4' }}>{r.symbol}</code></td>
-              <td style={{ padding: '9px 14px', fontWeight: 600 }} title={r.symbol}>
-                {r.name && r.name !== r.symbol && !r.name.match(/\.(SH|SZ|BJ)$/) ? r.name : <span style={{color:'#f59e0b',fontStyle:'italic'}}>{r.symbol} (无名称)</span>}
-                {r.ambush_score > 0 && <span style={{marginLeft:6,padding:'1px 5px',borderRadius:3,fontSize:9,background:'rgba(239,68,68,0.12)',color:'#ef4444'}}>潜伏</span>}
-              </td>
-              <td style={{ padding: '9px 14px' }}>
-                <span style={{
-                  padding: '2px 8px', borderRadius: 4, fontWeight: 700, fontSize: 12,
-                  background: r.composite_score >= 55 ? 'rgba(239,68,68,0.1)' : r.composite_score >= 45 ? 'rgba(245,158,11,0.1)' : 'rgba(107,114,128,0.1)',
-                  color: r.composite_score >= 55 ? '#ef4444' : r.composite_score >= 45 ? '#f59e0b' : '#9ca3af',
-                }}>{r.composite_score}</span>
-              </td>
-              <td style={{ padding: '9px 14px', color: (r.tech_score || 0) >= 7 ? '#ef4444' : (r.tech_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>{r.tech_score?.toFixed(1) || '-'}</td>
-              <td style={{ padding: '9px 14px', color: (r.kline_score || 0) >= 7 ? '#ef4444' : (r.kline_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>{r.kline_score?.toFixed(1) || '-'}</td>
-              <td style={{ padding: '9px 14px', color: (r.fund_score || 0) >= 7 ? '#ef4444' : (r.fund_score || 0) <= 3 ? '#10b981' : '#9ca3af', fontWeight: 600 }}>{r.fund_score?.toFixed(1) || '-'}</td>
-              <td style={{ padding: '9px 14px', color: (r.fundamental_adjustment || 0) > 0 ? '#ef4444' : (r.fundamental_adjustment || 0) < 0 ? '#10b981' : '#6e7a8a', fontWeight: 600 }}>
-                {r.fundamental_adjustment != null ? (r.fundamental_adjustment > 0 ? '+' : '') + r.fundamental_adjustment : '-'}
-              </td>
-              <td style={{ padding: '9px 14px' }}>{r.sector_bonus > 0 ? `+${r.sector_bonus}` : '0'}</td>
-              <td style={{ padding: '9px 14px' }}>
-                {r.archetype && r.archetype !== 'unknown' ? (
-                  <span style={{
-                    padding: '2px 8px', borderRadius: 4, fontSize: 10, fontWeight: 600,
-                    background: `${ARCH_COLORS[r.archetype] || '#6e7a8a'}18`,
-                    color: ARCH_COLORS[r.archetype] || '#6e7a8a',
-                    cursor: 'help',
-                  }} title={(r.adjustment_reasons || []).join('\n')}>
-                    {ARCH_LABELS[r.archetype] || r.archetype}
-                  </span>
-                ) : <span style={{ color: '#4b5563' }}>—</span>}
-              </td>
-              <td style={{ padding: '9px 14px' }}>
-                {r.win_probability != null ? (
-                  <span style={{ fontWeight: 600, fontSize: 12,
-                    color: r.win_probability >= 0.45 ? '#10b981' : r.win_probability >= 0.35 ? '#f59e0b' : '#ef4444' }}>
-                    {(r.win_probability * 100).toFixed(0)}%
-                  </span>
-                ) : <span style={{ color: '#4b5563' }}>—</span>}
-                {r.downside_risk != null && r.downside_risk < -2 && (
-                  <span style={{ marginLeft: 4, fontSize: 10, color: '#ef4444' }}>⚠</span>
-                )}
-              </td>
-              <td style={{ padding: '9px 14px' }}>
-                {r.patterns ? (
-                  <span style={{ fontSize: 10, color: isBear(r.patterns) ? '#10b981' : '#ef4444', background: isBear(r.patterns) ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.08)', padding: '2px 6px', borderRadius: 4, maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }} title={r.patterns}>
-                    {fmtPattern(r.patterns).slice(0, 20)}
-                  </span>
-                ) : <span style={{ color: '#4b5563' }}>—</span>}
-              </td>
-              <td style={{ padding: '9px 14px' }}>
-                <span style={{
-                  padding: '2px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-                  background: r.level === 'L3' ? 'rgba(251,191,36,.15)' : r.level === 'L2' ? 'rgba(96,165,250,.15)' : 'rgba(156,163,175,.12)',
-                  color: r.level === 'L3' ? '#f59e0b' : r.level === 'L2' ? '#60a5fa' : '#9ca3af',
-                }}>{r.level || '—'}</span>
-              </td>
-              <td style={{ padding:'9px 14px', textAlign:'center' }}>
-                <span style={{ color: (r.monthly_pushes||1) >= 5 ? '#ef4444' : (r.monthly_pushes||1) >= 3 ? '#f59e0b' : '#6e7a8a', fontWeight: (r.monthly_pushes||1) >= 3 ? 600 : 400, fontSize: 11 }}>
-                  {r.monthly_pushes||1}次
-                </span>
-              </td>
-              <td style={{ padding: '9px 14px' }}>
-                {r.big_fairy ? <span style={{display:'inline-flex',alignItems:'center',gap:3}}>
-                  <span style={{fontSize:13,fontWeight:700,
-                    color:r.big_fairy.score>=3?'#ef4444':r.big_fairy.score>=2?'#f59e0b':r.big_fairy.score>=1?'#fbbf24':'#10b981'}}>
-                    {r.big_fairy.score}
-                  </span>
-                  <span style={{fontSize:10,color:'#8b949e'}}>
-                    {r.big_fairy.signal==='strong_sell'?'强空':r.big_fairy.signal==='sell'?'偏空':r.big_fairy.signal==='weak'?'弱':'正常'}
-                  </span>
-                </span> : <span style={{color:'#4b5563',fontSize:11}}>—</span>}
-              </td>
-              {/* v7.0.32: 新增 8 列 — MACD/KDJ/BOLL/CCI/筹码/金过滤 */}
-              <td style={{ padding: '9px 10px', color: r.macd_dif == null ? '#6e7a8a' : (r.macd_dif > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
-                {r.macd_dif != null ? r.macd_dif.toFixed(2) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.macd_dea == null ? '#6e7a8a' : (r.macd_dea > 0 ? '#10b981' : '#ef4444'), fontWeight: 600, fontSize: 11 }}>
-                {r.macd_dea != null ? r.macd_dea.toFixed(2) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.kdj_j == null ? '#6e7a8a' : (r.kdj_j > 80 ? '#ef4444' : r.kdj_j < 20 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
-                {r.kdj_j != null ? r.kdj_j.toFixed(0) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.rsi_24 == null ? '#6e7a8a' : (r.rsi_24 > 70 ? '#ef4444' : r.rsi_24 < 30 ? '#10b981' : '#9ca3af'), fontWeight: 600, fontSize: 11 }}>
-                {r.rsi_24 != null ? r.rsi_24.toFixed(0) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.boll_pos == null ? '#6e7a8a' : (r.boll_pos > 0.9 ? '#ef4444' : r.boll_pos < 0.1 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
-                {r.boll_pos != null ? r.boll_pos.toFixed(2) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.cci == null ? '#6e7a8a' : (r.cci > 200 || r.cci < -200 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
-                {r.cci != null ? r.cci.toFixed(0) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.cost_50pct == null ? '#6e7a8a' : (r.cost_50pct < 5 ? '#ef4444' : '#9ca3af'), fontSize: 11 }}>
-                {r.cost_50pct != null ? r.cost_50pct.toFixed(1) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', color: r.cost_spread == null ? '#6e7a8a' : (r.cost_spread > 5 ? '#10b981' : '#9ca3af'), fontSize: 11 }}>
-                {r.cost_spread != null ? r.cost_spread.toFixed(1) : '-'}
-              </td>
-              <td style={{ padding: '9px 10px', textAlign: 'center' }}>
-                {(() => {
-                  // 金过滤: MACD多头 + KDJ不超买 + 成本中位 > 20 + 筹码宽度 > 5
-                  const macdOk = r.macd_dif != null && r.macd_dif > 0;
-                  const kdjOk = r.kdj_j != null && r.kdj_j < 80;
-                  const chipOk = r.cost_50pct != null && r.cost_50pct > 20;
-                  const spreadOk = r.cost_spread != null && r.cost_spread > 5;
-                  const all = macdOk && kdjOk && chipOk && spreadOk;
-                  const hasData = r.macd_dif != null && r.kdj_j != null && r.cost_50pct != null && r.cost_spread != null;
-                  if (!hasData) return <span style={{ color: '#4b5563', fontSize: 10 }}>—</span>;
-                  if (all) return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, background: 'rgba(16,185,129,0.15)', color: '#10b981' }}>✓ 金过滤</span>;
-                  return <span style={{ padding: '1px 6px', borderRadius: 3, fontSize: 10, fontWeight: 600, background: 'rgba(239,68,68,0.1)', color: '#ef4444' }}>⚠ 风险</span>;
-                })()}
-              </td>
-            </tr>
+                {VISIBLE_COLUMNS.map(c => (
+                  <td key={c.key} style={{ padding: c.key === 'name' || c.key === 'symbol' ? '9px 14px' : '9px 10px', fontSize: 12 }}>
+                    {c.render(r)}
+                  </td>
+                ))}
+              </tr>
             );
           })}
         </tbody>
