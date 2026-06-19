@@ -94,10 +94,11 @@ HORIZON_TO_STRATEGY = {2: "S1", 3: "S1", 5: "S2", 10: "S3"}
 
 
 async def load_training_data_v2(
-    lookback_days: int = 120,
+    lookback_days: int = 730,  # v7.0.33: 120 → 730 (120d 风格化训练必触发降级)
     horizon_days: int = 5,
     model_type: str = "win",
     archetype: str = "__global__",  # v7.0.12: 新增原型过滤参数
+    market_style: str = "all",  # v7.0.33: 新增市场风格过滤 (bull/bear/range/all)
 ) -> tuple:
     """v2: 从 recommendation_tracking 加载指定 horizon + model_type 训练数据.
 
@@ -110,32 +111,66 @@ async def load_training_data_v2(
     - archetype='small_speculative' 等: 只取该原型的样本
     - 内部自动检查样本量, < 50 时降级到混训
 
+    v7.0.33: market_style 过滤 (按市场风格分组训练)
+    - market_style='all': 不过滤, 用全部样本 (老行为)
+    - market_style='bull'/'bear'/'range': 只用该 phase 期间的样本
+    - phase 判定: 700001.TI 当天 LAG(10) close + ±2% (与 v1 一致)
+
     Returns: (X, y, symbols, feature_names)
     """
     if horizon_days not in ALL_HORIZONS:
         raise ValueError(f"horizon_days must be one of {ALL_HORIZONS}")
     if model_type not in ALL_MODEL_TYPES:
         raise ValueError(f"model_type must be one of {ALL_MODEL_TYPES}")
+    if market_style not in ("all", "bull", "bear", "range"):
+        raise ValueError(f"market_style must be one of all/bull/bear/range, got {market_style}")
 
     profit_col = f"was_profitable_{horizon_days}d"
     return_col = f"return_{horizon_days}d"
     verified_col = f"verified_{horizon_days}d"
     cutoff = date.today() - timedelta(days=lookback_days)
 
+    # v7.0.33: market_phase 过滤条件 (market_style != 'all' 时启用)
+    phase_filter = ""
+    if market_style != "all":
+        phase_filter = "AND mp.phase = :ms"
+    # market_phases CTE: 给每天打 phase 标签 (与 v1 一致, 用 700001.TI)
+    market_phases_cte = """
+    market_phases AS (
+        SELECT trade_date,
+               CASE
+                 WHEN LAG(close, 10) OVER (ORDER BY trade_date) IS NULL THEN 'range'
+                 WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date))
+                      / NULLIF(LAG(close, 10) OVER (ORDER BY trade_date), 0) * 100 > 2.0
+                 THEN 'bull'
+                 WHEN (close - LAG(close, 10) OVER (ORDER BY trade_date))
+                      / NULLIF(LAG(close, 10) OVER (ORDER BY trade_date), 0) * 100 < -2.0
+                 THEN 'bear'
+                 ELSE 'range'
+               END as phase
+        FROM daily_kline WHERE ts_code = '700001.TI'
+    )
+    """
+
     # v7.0.12 (A 方案): 原型过滤 + 样本兜底
     # 如果 archetype='__global__' 或该原型样本 < 50 → 降级到混训 (用所有原型)
     actual_archetype = archetype
     if archetype != "__global__":
+        # v7.0.33: 原型计数也加 phase 过滤 (与主查询保持一致)
+        proto_phase_filter = phase_filter
         async with async_session_factory() as _s:
             cnt = await _s.execute(text(f"""
+                WITH {market_phases_cte}
                 SELECT COUNT(*) FROM recommendation_tracking rt
                 JOIN analysis_scores a ON a.symbol=rt.symbol AND a.scan_date=rt.scan_date
+                JOIN market_phases mp ON mp.trade_date = rt.scan_date
                 WHERE rt.scan_date >= :cut
                   AND rt.{verified_col} = TRUE
                   AND rt.{profit_col} IS NOT NULL
                   AND a.dimension_scores IS NOT NULL
                   AND rt.archetype = :arch
-            """), {"cut": cutoff, "arch": archetype})
+                  {proto_phase_filter}
+            """), {"cut": cutoff, "arch": archetype, **({"ms": market_style} if market_style != "all" else {})})
             n_proto = cnt.scalar() or 0
             if n_proto < MIN_SAMPLES_PER_PROTOTYPE:
                 logger.info(f"[v2] {archetype} 样本 {n_proto} < {MIN_SAMPLES_PER_PROTOTYPE}, 降级到混训兜底")
@@ -151,6 +186,7 @@ async def load_training_data_v2(
     async with async_session_factory() as s:
         # v7.0.3: 改严格同日 JOIN (避免 LATERAL 跨日错配数据)
         # v7.0.6: loss 模型只取亏损票 (方案 B — win/loss 真正独立, 数据量不镜像)
+        # v7.0.33: LEFT JOIN market_phases 给每条样本打 phase 标签
         if model_type == "loss":
             # loss: 只看亏损票 → 学习"什么特征→跌"
             # 但要平衡正负样本, 取亏损票 1:N 的盈利票 (N=1)
@@ -160,28 +196,35 @@ async def load_training_data_v2(
             if actual_archetype != "__global__":
                 loss_arch_filter = "AND rt.archetype = :arch"
                 loss_params["arch"] = actual_archetype
+            if market_style != "all":
+                loss_params["ms"] = market_style
             loss_query = f"""
-                WITH loss_set AS (
+                WITH {market_phases_cte},
+                loss_set AS (
                     SELECT rt.symbol, rt.{profit_col}, rt.{return_col}, rt.{verified_col},
-                           a.dimension_scores, a.archetype, a.composite_score
+                           a.dimension_scores, a.archetype, a.composite_score, mp.phase
                     FROM recommendation_tracking rt
                     JOIN analysis_scores a ON a.symbol=rt.symbol AND a.scan_date=rt.scan_date
+                    JOIN market_phases mp ON mp.trade_date = rt.scan_date
                     WHERE rt.scan_date >= :cut
                       AND rt.{verified_col} = TRUE
                       AND rt.{profit_col} = FALSE
                       AND a.dimension_scores IS NOT NULL
                       {loss_arch_filter}
+                      {phase_filter}
                 ),
                 win_sample AS (
                     SELECT rt.symbol, rt.{profit_col}, rt.{return_col}, rt.{verified_col},
-                           a.dimension_scores, a.archetype, a.composite_score
+                           a.dimension_scores, a.archetype, a.composite_score, mp.phase
                     FROM recommendation_tracking rt
                     JOIN analysis_scores a ON a.symbol=rt.symbol AND a.scan_date=rt.scan_date
+                    JOIN market_phases mp ON mp.trade_date = rt.scan_date
                     WHERE rt.scan_date >= :cut
                       AND rt.{verified_col} = TRUE
                       AND rt.{profit_col} = TRUE
                       AND a.dimension_scores IS NOT NULL
                       {loss_arch_filter}
+                      {phase_filter}
                     ORDER BY RANDOM() LIMIT (SELECT COUNT(*) FROM loss_set)
                 )
                 SELECT * FROM loss_set
@@ -192,21 +235,29 @@ async def load_training_data_v2(
         else:
             # win 模型: 全部样本, 标签=was_profitable
             # v7.0.12: 加 archetype 过滤 (actual_archetype 是 __global__ 时不过滤)
+            # v7.0.33: 加 market_phases JOIN + phase 过滤
             archetype_filter = ""
+            win_params = {"cut": cutoff}
             if actual_archetype != "__global__":
                 archetype_filter = "AND rt.archetype = :arch"
+                win_params["arch"] = actual_archetype
+            if market_style != "all":
+                win_params["ms"] = market_style
             r = await s.execute(text(f"""
+                WITH {market_phases_cte}
                 SELECT rt.symbol, rt.{profit_col}, rt.{return_col}, rt.{verified_col},
-                       a.dimension_scores, a.archetype, a.composite_score
+                       a.dimension_scores, a.archetype, a.composite_score, mp.phase
                 FROM recommendation_tracking rt
                 JOIN analysis_scores a ON a.symbol=rt.symbol AND a.scan_date=rt.scan_date
+                JOIN market_phases mp ON mp.trade_date = rt.scan_date
                 WHERE rt.scan_date >= :cut
                   AND rt.{verified_col} = TRUE
                   AND rt.{profit_col} IS NOT NULL
                   AND a.dimension_scores IS NOT NULL
                   {archetype_filter}
+                  {phase_filter}
                 ORDER BY rt.scan_date DESC
-            """), {"cut": cutoff, "arch": actual_archetype} if actual_archetype != "__global__" else {"cut": cutoff})
+            """), win_params)
         rows = r.fetchall()
 
     if not rows:
@@ -214,7 +265,9 @@ async def load_training_data_v2(
 
     X_rows, y_rows, symbols = [], [], []
     for row in rows:
-        sym, profit, ret, verified, dims_raw, arch, sc = row
+        # v7.0.33: row 多了 phase 字段 (mp.phase)
+        sym, profit, ret, verified, dims_raw, arch, sc = row[:7]
+        phase = row[7] if len(row) > 7 else None
         dims = dims_raw if isinstance(dims_raw, dict) else (json.loads(dims_raw) if dims_raw else None)
         if not dims:
             continue
