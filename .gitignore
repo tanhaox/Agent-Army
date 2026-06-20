@@ -1,163 +1,67 @@
-# Backup Agent - 排除有问题的目录
+# ===== Stock 项目（独立仓库）=====
+# Stock 已迁移到 https://github.com/tanhaox/Stock (private)
+# 不在父仓库追踪
+Stock/
 
-# 超长路径的 node_modules（Windows 路径限制）
-github_downloads/*/node_modules/
-**/node_modules/@*/*/
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# 临时文件
-*.tmp
-*.temp
-~*
-
-# 日志文件（可选，如果不想备份日志）
-projects/tools/backup-agent/logs/*.log
-
-# 缓存
-.next/
-.cache/
-*.pyc
-__pypy__/
-
-# 操作系统文件
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-node_modules
-
-# Git备份目录（3.9GB，不需要备份）
-.git.backup/
-
-# ========== 子项目和仓库 ==========
-
-# dandanyi项目（已迁移到独立仓库）
-dandanyi/
-
-# miaoying项目（已停止维护）
-miaoying/
-
-# projects目录（各项目独立管理，避免巨大单体仓库）
-projects/
-
-# ========== 第三方下载和缓存 ==========
-
-# GitHub下载文件
-github_downloads/
-
-# 依赖和缓存
+# ===== Node / Frontend =====
 node_modules/
+dist/
 .next/
 .cache/
-*.pyc
-__pypy__/
+*.tsbuildinfo
 
-# ========== 临时和备份文件 ==========
+# ===== 敏感信息（最高优先级）=====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
 
-# 备份目录
-backup-*/
-*_backup_*/
-*.tar.gz
-*.zip
+# ===== 数据 / 数据库 =====
+*.db
+*.sqlite
+*.sqlite3
+data/raw/
+data/cache/
+*.parquet
+*.pkl
+*.h5
+*.hdf5
+models/*.pt
+models/*.onnx
+models/checkpoints/
 
-# 临时文件
-*.tmp
-*.temp
-~*
-*.log
-
-# ========== 临时测试脚本 ==========
-
-# Windows脚本
-check-*.ps1
-check-*.bat
-check-*.sh
-clear-*.ps1
-clear-*.bat
-clear-*.sh
-fix-*.ps1
-fix-*.bat
-fix-*.sh
-edge-*.ps1
-edge-*.bat
-reset-*.ps1
-reset-*.bat
-force_*.py
-debug_*.py
-diagnose_*.py
-monitor-*.bat
-turn-off-*.bat
-robocopy_*.ps1
-
-# Python临时脚本
-*_test*.py
-*_debug*.py
-*_check*.py
-start_*.py
-
-# 临时测试文件
-test-*.txt
-test-*.py
-test-*.js
-test-*.sh
-test-*.bat
-
-# dandanyi相关临时文件
-dandanyi_*.*
-test_agents.py
-
-# 特殊命名的临时文件（编码问题文件）
-C:AI-Agent-Localmiaoyingtemp_arrival_flights.json
-C:AI-Agent-Localmiaoyingtemp_bcia_page.html
-清理报告_20260210.md
-
-# 编码异常的文件名（Windows GBK编码问题）
-Cï¿½*.*
-
-# 中文命名的临时文件
-*_报告_*.md
-*缓存*.ps1
-*缓存*.bat
-
-# ========== 临时目录和文件 ==========
-
-# 临时目录
-temp/
-trash/
+# ===== 日志 =====
 logs/
+*.log
+*.log.*
 
-# 临时文件（数字或特殊字符开头的文件）
-[0-9]*
-=*.*
-nul
-
-# 启动脚本（本地使用，不提交）
-启动*.bat
-启动*.sh
-清除*.ps1
-清除*.bat
-清除*.sh
-
-# ========== Python测试配置 ==========
-
-# 如果不需要提交测试配置，取消下面的注释
-# pytest.ini
-# requirements-dev.txt
-# run_tests.*
-
-# ========== 操作系统文件 ==========
-
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ========== IDE配置 ==========
-
-.vscode/
-.idea/
-*.swp
-*.swo
+# ===== 项目备份/临时文件 =====
+*.backup-*
+*_backup_*/
+*_2026*/
+C:AI-Agent-Local*
