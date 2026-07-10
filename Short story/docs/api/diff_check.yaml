@@ -1,0 +1,94 @@
+# diff_check.yaml — diff_check 命令 API
+
+## 命令 ID
+
+`diff_check`
+
+## 命令描述
+
+**git diff 联动触发**——按 `git_diff_trigger.md` 实现。
+
+每次作者 commit 后自动运行（post-commit hook），命中核心术语时**默认触发立项会（V3.3 锁定）**。
+
+## 入参
+
+```yaml
+book_name:
+  type: str
+  required: true
+since:
+  type: str
+  required: false
+  description: 起始 commit / 章节号 / ISO 时间
+until:
+  type: str
+  default: HEAD
+skip:
+  type: bool
+  default: false
+  description: 跳过一次触发（作者明确知道）
+reset_kickoff:
+  type: bool
+  default: false
+  description: 重置上次 kickoff 锚点
+```
+
+## 出参
+
+```yaml
+severity:
+  type: enum
+  enum: [🔴_core, 🟡_update, 🟢_minor]
+changed_terms:
+  type: array
+  items: str
+ai_semantic_judgment:
+  decision: enum [1, 2, 3]  # 1=核心 2=更新 3=小修
+  reason: str
+action_triggered:
+  type: enum
+  enum: [kickoff_meeting, cumulative_audit, none]
+action_result:
+  type: object
+  description: kickoff_meeting / cumulative_audit 的输出
+```
+
+## 退出码
+
+| code | 含义 |
+|------|------|
+| 0 | 检测通过，无核心变更 |
+| 1 | 🟡 中度变更（已触发累积审核） |
+| 2 | 🔴 核心变更（已触发立项会） |
+| 3 | skip 标志生效（不触发） |
+| 4 | 配置错误（git 仓库未找到等） |
+
+## 路由
+
+- task_type: `diff_check`（内部触发器，非用户主动命令）
+- state: **reviewing**（commit 后自动跑）
+
+## 子调用
+
+- 🔴 → kickoff_meeting(increment mode)
+- 🟡 → cumulative_audit(最近 N 章)
+- 🟢 → 仅记日志
+
+## 触发
+
+- 自动：git post-commit hook 调用
+- 手动：作者主动运行（查看当前 diff 状态）
+
+## 关联
+
+- 子系统：`git_diff_trigger.md` / `kickoff_meeting.md`（被触发）/ `cumulative_audit.py`（被触发）
+- 决策：R1 / R2 / R3 / V3
+- git hook 位置：`.git/hooks/post-commit`
+
+## 测试用例
+
+1. **核心术语变更**：commit 修改了"沈铁衣" → 🔴 → 触发 kickoff_meeting
+2. **章节内容更新**：commit 修改第 50 章对白 → 🟡 → 触发 cumulative_audit
+3. **错别字修复**：commit 修改错别字 → 🟢 → 不触发
+4. **skip 标志**：--skip=true → 退出码 3
+5. **重置锚点**：--reset-kickoff=true → 下次增量从 HEAD 起算

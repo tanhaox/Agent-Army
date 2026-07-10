@@ -65,3 +65,13 @@ desktop.ini
 *_backup_*/
 *_2026*/
 C:AI-Agent-Local*
+# ===== Short story (project-local Python pkg) =====
+Short story/__pycache__/
+Short story/**/__pycache__/
+Short story/**/.pytest_cache/
+Short story/.venv/
+Short story/venv/
+Short story/ai_coauthor.egg-info/
+Short story/books/_template/.state/
+Short story/books/**/.state/
+Short story/books/*/chapters/*-facts.yaml.bak

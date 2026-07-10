@@ -1,0 +1,91 @@
+# consistency_check.yaml — consistency_check 命令 API
+
+## 命令 ID
+
+`consistency_check`
+
+## 命令描述
+
+**防胡写守护** —— 检查当前段落 / 章节是否违反世界观、人物设定、伏笔状态。
+
+按 `quality_guards_granularity.md §一`：4 道门禁中的 🔴 P0。
+
+## 入参
+
+```yaml
+book_name:
+  type: str
+  required: true
+target:
+  type: enum
+  enum: [realtime, chapter_recheck, foreshadow_check]
+  default: realtime
+  description: 实时（写作中）/ 复检（章节级）/ 伏笔专项
+paragraph_text:
+  type: str
+  required: false
+  description: target=realtime 时必填
+chapter_n:
+  type: int
+  required: false
+  description: target=chapter_recheck 必填
+```
+
+## 出参
+
+```yaml
+issues:
+  type: array
+  items:
+    severity: enum [🔴, 🟡, 🟢]
+    type: enum [world_rule_violation, character_ooc, foreshadow_inconsistency, voice_forbidden]
+    location: str
+    text_excerpt: str
+    contradiction_ref: str  # 引用的冲突设定
+    suggestion: str
+action:
+  type: enum
+  enum: [BLOCK, WARN, PASS]
+must_resolve: bool
+```
+
+## 退出码
+
+| code | 含义 |
+|------|------|
+| 0 | PASS（无问题） |
+| 1 | WARN（有 🟡 警告） |
+| 2 | BLOCK（🔴 红警拦截） |
+| 3 | 配置错误 |
+
+## 路由
+
+- task_type: `consistency_check_realtime` 或 `consistency_recheck`
+- state: writing 时**强制本地 Ollama** / reviewing 时本地优先 + 自动降级
+
+## 子系统依赖
+
+- `router.md §一`：状态判定
+- `content_attribution.md §四`：豁免矩阵
+- `voice_print.md §四`：声纹禁说联合
+- `quality_guards_granularity.md §一`：实现细节
+
+## 关联
+
+- 决策：P1（红警强制拦截）/ F6（内容出处豁免）
+- Web spec：`write.html` 的守护面板
+
+## 测试用例
+
+1. **作者写违反设定**：写主角使用隐身 → 命中 🔴 → BLOCK
+2. **AI 起草内容**：source=ai_drafted → 豁免 → PASS
+3. **章节复检**：target=chapter_recheck + chapter_n=30 → 整章扫描
+4. **声纹一致**：写到主角说"人家~" → 命中 voice_forbidden
+
+## 🔀 V6 边界锁定
+
+按 V6 横纵向研判：声纹禁说检测（voice_forbidden）**嵌入** consistency_check，**不**新增独立 voice_print_check 命令。
+
+- ✅ MVP：consistency_check 含声纹禁说检测
+- ✅ Phase 2+：voice_print_check 可作为扩展（增强对白合规性扫描）
+- ✅ 声纹必说覆盖（如连续 10 章主角几乎不开口 → HINT）属 `false_positive_loop` 范畴，不在 consistency_check
