@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>数字人口播流水线</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 1rem 2rem; background: #1e293b; border-bottom: 1px solid #334155; }
+    header h1 { margin: 0; font-size: 1.25rem; }
+    .container { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
+    .step { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; padding: 1.25rem; margin-bottom: 1rem; }
+    .step h2 { margin-top: 0; font-size: 1.1rem; color: #94a3b8; }
+    label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: #cbd5e1; }
+    input[type="text"], textarea { width: 100%; padding: 0.6rem; border-radius: 0.4rem; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 0.95rem; }
+    textarea { min-height: 160px; resize: vertical; }
+    .row { display: flex; gap: 1rem; margin-bottom: 0.75rem; }
+    .row > * { flex: 1; }
+    button { padding: 0.6rem 1.2rem; border: none; border-radius: 0.4rem; background: #2563eb; color: white; cursor: pointer; font-size: 0.95rem; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    button.secondary { background: #475569; }
+    .status { margin-top: 0.75rem; padding: 0.6rem; border-radius: 0.4rem; background: #0f172a; font-size: 0.9rem; min-height: 1.5rem; }
+    .status.error { background: #450a0a; color: #fca5a5; }
+    .status.success { background: #064e3b; color: #6ee7b7; }
+    .segment { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.6rem; background: #0f172a; border-radius: 0.4rem; margin-bottom: 0.5rem; }
+    .segment input[type="checkbox"] { margin-top: 0.25rem; }
+    .segment .text { flex: 1; font-size: 0.95rem; white-space: pre-wrap; }
+    .segment .meta { font-size: 0.75rem; color: #94a3b8; min-width: 4rem; text-align: right; }
+    .segment .order { font-size: 0.75rem; color: #38bdf8; min-width: 2rem; text-align: center; font-weight: 600; }
+    .segment .controls { display: flex; gap: 0.25rem; }
+    .segment button.small { padding: 0.2rem 0.4rem; font-size: 0.75rem; background: #334155; }
+    .segment button.small:disabled { background: #1e293b; color: #64748b; }
+    .segment.selected { border-left: 3px solid #2563eb; }
+    .segment.unselected { opacity: 0.6; }
+    .audio-list { display: grid; gap: 0.5rem; }
+    .audio-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem; background: #0f172a; border-radius: 0.4rem; }
+    audio { width: 100%; height: 36px; }
+    .project-dir { margin: 0.75rem 0; padding: 0.6rem; background: #0f172a; border-radius: 0.4rem; font-size: 0.85rem; color: #94a3b8; word-break: break-all; }
+    .project-dir a { color: #60a5fa; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header><h1>数字人口播流水线 <a href="/web/voices.html" target="_blank" style="font-size:0.8rem;color:#94a3b8;text-decoration:none;margin-left:0.75rem;">🎙️ 音色管理</a> <a href="/web/roles.html" target="_blank" style="font-size:0.8rem;color:#94a3b8;text-decoration:none;margin-left:0.75rem;">🎭 角色管理</a> <a href="/web/digital_human_video.html" target="_blank" style="font-size:0.8rem;color:#94a3b8;text-decoration:none;margin-left:0.75rem;">🎬 数字人视频</a></h1></header>
+  <div class="container">
+    <div class="step">
+      <h2>① 输入原始文章</h2>
+      <div class="row">
+        <input type="text" id="article-title" placeholder="标题（可选）">
+      </div>
+      <div class="row">
+        <input type="text" id="article-url" placeholder="来源 URL（可选）">
+      </div>
+      <textarea id="article-text" placeholder="粘贴财经新闻原文..."></textarea>
+      <button id="btn-create" onclick="createArticle()">创建稿件</button>
+      <div class="status" id="status-create"></div>
+    </div>
+
+    <div class="step">
+      <h2>② AI 洗稿</h2>
+      <button id="btn-rewrite" onclick="rewriteArticle()" disabled>开始洗稿</button>
+      <button class="secondary" id="btn-load" onclick="loadLatest()">加载最新稿件</button>
+      <div class="status" id="status-rewrite"></div>
+      <textarea id="script-text" placeholder="洗稿结果将显示在这里，可直接编辑..."></textarea>
+      <button id="btn-save-script" onclick="saveScript()" disabled>保存编辑</button>
+    </div>
+
+    <div class="step">
+      <h2>③ 分段 / 导演预留</h2>
+      <div style="margin-bottom: 0.75rem;">
+        <button id="btn-save-director" onclick="saveDirectorSelections()" disabled>保存导演选择</button>
+        <span id="director-count" style="font-size: 0.85rem; color: #94a3b8; margin-left: 0.5rem;"></span>
+      </div>
+      <div id="segments-list"></div>
+    </div>
+
+    <div class="step">
+      <h2>④ 生成音频</h2>
+      <div class="row" style="margin-bottom: 0.75rem;">
+        <label>音色选择：<select id="voice-select"></select></label>
+      </div>
+      <button id="btn-audio" onclick="generateAudio()" disabled>生成音频</button>
+      <div class="status" id="status-audio"></div>
+      <div class="audio-list" id="audio-list"></div>
+    </div>
+  </div>
+
+  <script src="/web/app.js"></script>
+</body>
+</html>

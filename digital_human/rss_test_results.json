@@ -1,0 +1,245 @@
+[
+  {
+    "name": "36kr",
+    "url": "https://www.36kr.com/feed",
+    "http_status": 200,
+    "entries": 30,
+    "first_title": "茅台涨了100元，白酒还欠3000亿",
+    "avg_summary_len": 5543.6,
+    "ok": true
+  },
+  {
+    "name": "cnbc",
+    "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "http_status": 200,
+    "entries": 30,
+    "first_title": "SpaceX sets earnings date, triggering first lock-up expiration for millions of s",
+    "avg_summary_len": 138.1,
+    "ok": true
+  },
+  {
+    "name": "arstechnica",
+    "url": "https://feeds.arstechnica.com/arstechnica/index",
+    "http_status": 200,
+    "entries": 20,
+    "first_title": "DA: Cop covered bodycam to snap nude prisoners on his iPhone—but other cams caug",
+    "avg_summary_len": 75.5,
+    "ok": true
+  },
+  {
+    "name": "engadget",
+    "url": "https://www.engadget.com/rss.xml",
+    "http_status": 200,
+    "entries": 20,
+    "first_title": "Your CD and Blu-Ray collection won't last forever",
+    "avg_summary_len": 106.8,
+    "ok": true
+  },
+  {
+    "name": "solidot",
+    "url": "https://www.solidot.org/index.rss",
+    "http_status": 200,
+    "entries": 20,
+    "first_title": "流行野生动物数据库发现 AI 生成的假图",
+    "avg_summary_len": 307.0,
+    "ok": true
+  },
+  {
+    "name": "techcrunch",
+    "url": "https://techcrunch.com/feed/",
+    "http_status": 200,
+    "entries": 20,
+    "first_title": "What to know about the landmark Warner Bros. Discovery sale",
+    "avg_summary_len": 122.3,
+    "ok": true
+  },
+  {
+    "name": "wsj_markets",
+    "url": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+    "http_status": 200,
+    "entries": 20,
+    "first_title": "Stocks Sink in Broad AI Rout Sparked by China's DeepSeek",
+    "avg_summary_len": 114.9,
+    "ok": true
+  },
+  {
+    "name": "npr",
+    "url": "https://feeds.npr.org/1001/rss.xml",
+    "http_status": 200,
+    "entries": 10,
+    "first_title": "The best games of 2026 so far, picked by NPR's staff",
+    "avg_summary_len": 171.3,
+    "ok": true
+  },
+  {
+    "name": "sspai",
+    "url": "https://sspai.com/feed",
+    "http_status": 200,
+    "entries": 10,
+    "first_title": "社区速递 150｜派友热议磁吸配件、拯救呼吸通气鼻贴与国产三折叠自行车",
+    "avg_summary_len": 154.4,
+    "ok": true
+  },
+  {
+    "name": "bbc_new",
+    "url": "https://feeds.bbci.co.uk/news/rss.xml",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPSConnectionPool(host='feeds.bbci.co.uk', port=443): Max retries exceeded wit",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "bbc_old",
+    "url": "http://www.bbc.co.uk/news/rss.xml",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPConnectionPool(host='www.bbc.co.uk', port=80): Max retries exceeded with url",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "bbc_world",
+    "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPSConnectionPool(host='feeds.bbci.co.uk', port=443): Max retries exceeded wit",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "bjnews",
+    "url": "http://www.bjnews.com.cn/rss.xml",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "cecn",
+    "url": "http://www.ce.cn/rss/",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "chinanews",
+    "url": "http://www.chinanews.com/rss/",
+    "http_status": 200,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "guardian_world",
+    "url": "https://www.theguardian.com/world/rss",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPSConnectionPool(host='www.theguardian.com', port=443): Max retries exceeded ",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "hackernews",
+    "url": "https://news.ycombinator.com/rss",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPSConnectionPool(host='news.ycombinator.com', port=443): Max retries exceeded",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "jiemian",
+    "url": "https://www.jiemian.com/rssLists/",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "netease_tech",
+    "url": "http://tech.163.com/rss/",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "people",
+    "url": "http://www.people.com.cn/rss/",
+    "http_status": 403,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "qq_old",
+    "url": "http://news.qq.com/rss/rss_news.xml",
+    "http_status": 200,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "reuters_business",
+    "url": "https://www.reutersagency.com/feed/?taxonomy=markets&post_type=reuters-best",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "reuters_old",
+    "url": "http://www.reuters.com/tools/rss",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPConnectionPool(host='www.reuters.com', port=80): Max retries exceeded with u",
+    "avg_summary_len": 0,
+    "ok": false
+  },
+  {
+    "name": "sina_old",
+    "url": "http://news.sina.com.cn/rss/",
+    "http_status": 403,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "sohu_news",
+    "url": "http://news.sohu.com/rss/",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "xinhua_old",
+    "url": "http://www.xinhuanet.com/english/rss/news.xml",
+    "http_status": 404,
+    "entries": 0,
+    "first_title": "",
+    "avg_summary_len": 0.0,
+    "ok": false
+  },
+  {
+    "name": "zhihu_daily",
+    "url": "https://feed.zhihu.com/zhihudaily",
+    "http_status": "ERR",
+    "entries": 0,
+    "first_title": "HTTPSConnectionPool(host='feed.zhihu.com', port=443): Max retries exceeded with ",
+    "avg_summary_len": 0,
+    "ok": false
+  }
+]
