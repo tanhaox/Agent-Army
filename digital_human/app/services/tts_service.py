@@ -75,6 +75,12 @@ class TTSService:
         # Build text preserving line breaks and control chars.
         text = "\n".join(seg.text for seg in segments)
 
+        # Collect the AudioFile rows created as synthesis progresses. Each
+        # completed segment yields exactly one row (via _manifest_callback),
+        # committed through progress_callback so DB and disk stay in sync even
+        # if the job later fails.
+        audio_files: list[AudioFile] = []
+
         def _manifest_callback(completed: int, total: int, text: str, manifest_seg: dict[str, Any] | None) -> None:
             if not progress_callback or not manifest_seg:
                 return
@@ -88,6 +94,7 @@ class TTSService:
                 duration=manifest_seg.get("duration"),
                 sample_rate=manifest_seg.get("sample_rate"),
             )
+            audio_files.append(audio_file)
             progress_callback(completed, total, text, audio_file)
 
         manifest = tts_client.synthesize_lines(
@@ -104,40 +111,42 @@ class TTSService:
             master_text=master_text,
             progress_callback=_manifest_callback,
             params=voice_params,
+            batch_max_chars=150,
         )
 
-        # Link manifest segments to DB segments and persist audio_files.
-        audio_files: list[AudioFile] = []
-        for idx, seg in enumerate(segments):
-            mseg = manifest["segments"][idx]
-            file_path = output_dir / mseg["file"]
-            if file_path.exists():
+        # ── Concatenate all segment WAVs into one paragraph-level file ──
+        combined_path = output_dir / "full_paragraph.wav"
+        existing_wavs = [af.file_path for af in audio_files if Path(af.file_path).exists()]
+        if existing_wavs and len(existing_wavs) >= 1:
+            try:
+                from scripts.tts_client import _concat_wavs_with_ffmpeg
+                _concat_wavs_with_ffmpeg(
+                    [Path(p) for p in existing_wavs], combined_path
+                )
                 try:
-                    info = sf.info(str(file_path))
-                    duration = info.duration
-                    sample_rate = info.samplerate
+                    info = sf.info(str(combined_path))
+                    combined_duration = info.duration
+                    combined_sample_rate = info.samplerate
                 except Exception:
-                    duration = mseg.get("duration")
-                    sample_rate = manifest.get("sample_rate")
-            else:
-                duration = mseg.get("duration")
-                sample_rate = manifest.get("sample_rate")
-
-            audio_file = AudioFile(
-                audio_job_id=job.id,
-                segment_id=seg.id,
-                filename=mseg["file"],
-                file_path=str(file_path),
-                duration=duration,
-                sample_rate=sample_rate,
-            )
-            audio_files.append(audio_file)
-
-            if progress_callback:
-                progress_callback(idx + 1, len(segments), seg.text, audio_file)
+                    combined_duration = sum(af.duration or 0 for af in audio_files)
+                    combined_sample_rate = audio_files[0].sample_rate if audio_files else 24000
+            except Exception:
+                combined_path = None
+                combined_duration = None
+                combined_sample_rate = None
+        else:
+            combined_path = None
+            combined_duration = None
+            combined_sample_rate = None
 
         return {
             "manifest": manifest,
             "audio_files": audio_files,
             "output_dir": str(output_dir),
+            "combined_file": {
+                "file": "full_paragraph.wav",
+                "file_path": str(combined_path) if combined_path else None,
+                "duration": combined_duration,
+                "sample_rate": combined_sample_rate,
+            } if combined_path else None,
         }

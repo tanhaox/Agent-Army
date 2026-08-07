@@ -24,7 +24,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-SRC = Path(r"C:/AI-Agent-Local/digital_human/workflows/character_three_view.json")
+SRC = Path(__file__).resolve().parents[2] / "workflows" / "character_three_view.json"
 
 # 这些节点改写后类型变成 None (即从 nodes 列表中删除)
 SET_GET_TYPES = {"easy setNode", "SetNode", "easy getNode", "GetNode"}

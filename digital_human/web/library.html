@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>视频库</title>
+  <link rel="stylesheet" href="/web/library.css">
+</head>
+<body>
+  <nav>
+    <div class="logo">Video<span>Lib</span></div>
+    <a href="/web/index.html">流水线</a>
+    <a href="/web/director.html">导演控制台</a>
+    <a href="/web/library.html" class="active">视频库</a>
+    <a href="/web/templates.html">模板管理</a>
+    <a href="/web/visual_render.html">视觉渲染</a>
+    <a href="/web/voices.html">音色管理</a>
+    <a href="/web/roles.html">角色管理</a>
+    <a href="/web/personas.html">人物</a>
+    <div class="spacer"></div>
+    <a href="/docs" target="_blank">API Docs</a>
+  </nav>
+
+  <div class="container">
+    <div class="page-header">
+      <h1>视频库</h1>
+      <p>素材库（B-roll 片段）+ 成品库（合成视频）统一管理</p>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="assets" onclick="switchTab('assets')">📦 素材库</button>
+      <button class="tab" data-tab="outputs" onclick="switchTab('outputs')">🎬 成品库</button>
+    </div>
+
+    <!-- Search & Filters -->
+    <div class="filter-bar" id="asset-filters">
+      <input type="text" id="search-input" placeholder="搜索编号 / 描述 / query / 摄影师 / 标签" oninput="debounceSearch()">
+      <select id="filter-orientation" onchange="loadCurrentTab()">
+        <option value="">全部画幅</option>
+        <option value="portrait">竖屏 9:16</option>
+        <option value="landscape">横屏 16:9</option>
+      </select>
+      <select id="filter-source_type" onchange="loadCurrentTab()">
+        <option value="">全部来源</option>
+        <option value="footage">实拍</option>
+        <option value="creative">创意/CG/AI</option>
+      </select>
+      <select id="filter-location" onchange="loadCurrentTab()">
+        <option value="">全部画面</option>
+        <option value="domestic">国内</option>
+        <option value="foreign">国外</option>
+      </select>
+      <select id="filter-people" onchange="loadCurrentTab()">
+        <option value="">全部人物</option>
+        <option value="people">有人</option>
+        <option value="none">无人</option>
+      </select>
+      <select id="filter-preference" onchange="loadCurrentTab()">
+        <option value="">全部偏好</option>
+        <option value="like">喜欢</option>
+        <option value="neutral">中性</option>
+        <option value="dislike">厌恶</option>
+      </select>
+      <select id="filter-scenes" onchange="loadCurrentTab()" multiple title="按住 Ctrl 多选场景">
+        <option value="">场景</option>
+      </select>
+      <select id="filter-shot_types" onchange="loadCurrentTab()" multiple title="按住 Ctrl 多选镜头">
+        <option value="">镜头</option>
+      </select>
+      <span class="result-count" id="result-count"></span>
+      <button class="tagging-btn" id="scan-import-btn" onclick="scanImport()" title="扫描 materials 目录，自动导入未入库的视频文件">📥 扫描导入</button>
+      <button class="tagging-btn" id="tagging-start-btn" onclick="startTagging()" title="使用本地 AI 模型分析视频画面，自动生成多维标签">🤖 AI 打标</button>
+      <span class="tagging-count" id="tagging-count" title="AI 已打标 / 总数"></span>
+    </div>
+
+    <!-- Batch Bar -->
+    <div class="batch-bar" id="batch-bar">
+      <label><input type="checkbox" id="select-all" onchange="toggleSelectAll()"> 全选本页</label>
+      <span id="batch-count">已选 0</span>
+      <button onclick="batchSetPreference('like')">😍 喜欢</button>
+      <button onclick="batchSetPreference('neutral')">😐 中性</button>
+      <button onclick="batchSetPreference('dislike')">🚫 厌恶</button>
+      <button onclick="batchAddScene()">+场景</button>
+      <button onclick="batchAddShotType()">+镜头</button>
+      <button onclick="batchSetPeople('people')">有人</button>
+      <button onclick="batchSetPeople('none')">无人</button>
+      <button class="del" onclick="batchDelete()">删除</button>
+    </div>
+
+    <!-- Assets Grid -->
+    <div class="video-grid" id="grid-assets"></div>
+    <!-- Outputs Grid -->
+    <div class="video-grid hidden" id="grid-outputs"></div>
+
+    <!-- AI Tagging Progress Bar -->
+    <div class="tagging-progress hidden" id="tagging-progress">
+      <div class="tagging-progress-header">
+        <span class="tagging-status-text" id="tagging-status-text">AI 打标进行中...</span>
+        <span class="tagging-progress-count" id="tagging-progress-count">0/0</span>
+        <button class="tagging-cancel-btn" onclick="cancelTagging()">✕ 取消</button>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
+      <div class="tagging-current" id="tagging-current"></div>
+    </div>
+
+    <!-- Empty State -->
+    <div class="empty hidden" id="empty-state">
+      <div class="icon">📭</div>
+      <p>暂无内容</p>
+    </div>
+  </div>
+
+  <!-- Edit Modal -->
+  <div class="modal hidden" id="edit-modal">
+    <div class="modal-content">
+      <h3>编辑素材信息</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>中文描述</label>
+          <textarea id="edit-desc-zh" rows="3" placeholder="输入中文描述"></textarea>
+        </div>
+      </div>
+      <div class="form-row cols-3">
+        <div class="form-group">
+          <label>来源</label>
+          <select id="edit-source_type"><option value="footage">实拍</option><option value="creative">创意/CG/AI</option></select>
+        </div>
+        <div class="form-group">
+          <label>画面</label>
+          <select id="edit-location"><option value="domestic">国内</option><option value="foreign">国外</option></select>
+        </div>
+        <div class="form-group">
+          <label>人物</label>
+          <select id="edit-people"><option value="people">有人</option><option value="none">无人</option></select>
+        </div>
+      </div>
+      <div class="form-row cols-2">
+        <div class="form-group">
+          <label>场景（逗号分隔）</label>
+          <input type="text" id="edit-scenes" placeholder="城市, 自然, 商业">
+        </div>
+        <div class="form-group">
+          <label>镜头类型（逗号分隔）</label>
+          <input type="text" id="edit-shot_types" placeholder="航拍, 空镜, 建筑">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>标签（逗号分隔，老字段兼容）</label>
+          <input type="text" id="edit-tags" placeholder="business, office, meeting">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="saveEdit()">保存</button>
+        <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Batch Add Modal -->
+  <div class="modal hidden" id="batch-modal">
+    <div class="modal-content">
+      <h3 id="batch-modal-title">批量设置</h3>
+      <div class="form-group" id="batch-modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="batch-modal-ok">确定</button>
+        <button class="btn btn-secondary" onclick="closeBatchModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/web/library.js"></script>
+</body>
+</html>

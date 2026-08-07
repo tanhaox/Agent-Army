@@ -1,6 +1,6 @@
 @echo off
 
-cd /d C:\AI-Agent-Local\数字人计划
+cd /d "%~dp0"
 
 echo 启动新闻爬虫...
 python run_crawler.py

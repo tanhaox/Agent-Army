@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Voice
+from ..services.gpu_service_manager import get_gpu_service_manager
 from ..schemas import (
     VoiceCreate,
     VoiceOut,
@@ -141,21 +142,22 @@ def test_voice(voice_id: str, body: VoiceTestRequest, db: Session = Depends(get_
     from scripts import tts_client
 
     try:
-        tts_client.synthesize(
-            text=body.text,
-            output_path=tmp,
-            backend=backend,  # type: ignore[arg-type]
-            voice_id=voice.name,
-            reference_audio=master_audio if master_audio and master_audio.exists() else None,
-            reference_text=master_text,
-            base_url_fish=base_url_fish,
-            base_url_f5=base_url_f5,
-            base_url_indextts=base_url_indextts,
-            master_audio=master_audio,
-            master_text=master_text,
-            master_style=master_style,
-            params=merged_params or None,
-        )
+        with get_gpu_service_manager().session(backend):
+            tts_client.synthesize(
+                text=body.text,
+                output_path=tmp,
+                backend=backend,  # type: ignore[arg-type]
+                voice_id=voice.name,
+                reference_audio=master_audio if master_audio and master_audio.exists() else None,
+                reference_text=master_text,
+                base_url_fish=base_url_fish,
+                base_url_f5=base_url_f5,
+                base_url_indextts=base_url_indextts,
+                master_audio=master_audio,
+                master_text=master_text,
+                master_style=master_style,
+                params=merged_params or None,
+            )
         return FileResponse(
             path=tmp,
             media_type="audio/wav",
@@ -227,33 +229,37 @@ async def carnival_voice_start(voice_id: str, body: VoiceCarnivalRequest, db: Se
 
         tmp_dir = Path(tempfile.mkdtemp(suffix="_carnival"))
         try:
-            for i in range(body.count):
-                version_params = dict(merged_params) if merged_params else {}
-                version_params["seed"] = i + 1
+            def _svc_notify(message: str) -> None:
+                _publish(job_id, {"type": "carnival_service", "message": message})
 
-                out_path = tmp_dir / f"version_{i+1:02d}.wav"
-                tts_client.synthesize(
-                    text=body.text,
-                    output_path=out_path,
-                    backend=backend,
-                    voice_id=voice.name,
-                    reference_audio=master_audio if master_audio and master_audio.exists() else None,
-                    reference_text=master_text,
-                    base_url_fish=base_url_fish,
-                    base_url_f5=base_url_f5,
-                    base_url_indextts=base_url_indextts,
-                    master_audio=master_audio,
-                    master_text=master_text,
-                    master_style=master_style,
-                    params=version_params,
-                )
+            with get_gpu_service_manager().session(backend, status_callback=_svc_notify):
+                for i in range(body.count):
+                    version_params = dict(merged_params) if merged_params else {}
+                    version_params["seed"] = i + 1
 
-                _publish(job_id, {
-                    "type": "carnival_progress",
-                    "current": i + 1,
-                    "total": body.count,
-                    "seed": i + 1,
-                })
+                    out_path = tmp_dir / f"version_{i+1:02d}.wav"
+                    tts_client.synthesize(
+                        text=body.text,
+                        output_path=out_path,
+                        backend=backend,
+                        voice_id=voice.name,
+                        reference_audio=master_audio if master_audio and master_audio.exists() else None,
+                        reference_text=master_text,
+                        base_url_fish=base_url_fish,
+                        base_url_f5=base_url_f5,
+                        base_url_indextts=base_url_indextts,
+                        master_audio=master_audio,
+                        master_text=master_text,
+                        master_style=master_style,
+                        params=version_params,
+                    )
+
+                    _publish(job_id, {
+                        "type": "carnival_progress",
+                        "current": i + 1,
+                        "total": body.count,
+                        "seed": i + 1,
+                    })
 
             # Package all WAVs into a ZIP
             zip_buffer = io.BytesIO()
@@ -349,21 +355,22 @@ def test_and_anchor(voice_id: str, body: VoiceTestRequest, db: Session = Depends
     output_path = ref_dir / "anchor.wav"
 
     try:
-        tts_client.synthesize(
-            text=body.text,
-            output_path=output_path,
-            backend=backend,
-            voice_id=voice.name,
-            reference_audio=None,
-            reference_text="",
-            base_url_fish=base_url_fish,
-            base_url_f5=base_url_f5,
-            base_url_indextts=base_url_indextts,
-            master_audio=master_audio,
-            master_text=master_text,
-            master_style="calm",
-            params=merged_params or None,
-        )
+        with get_gpu_service_manager().session(backend):
+            tts_client.synthesize(
+                text=body.text,
+                output_path=output_path,
+                backend=backend,
+                voice_id=voice.name,
+                reference_audio=None,
+                reference_text="",
+                base_url_fish=base_url_fish,
+                base_url_f5=base_url_f5,
+                base_url_indextts=base_url_indextts,
+                master_audio=master_audio,
+                master_text=master_text,
+                master_style="calm",
+                params=merged_params or None,
+            )
         voice.reference_audio_path = str(output_path)
         voice.reference_text = body.text
         db.commit()

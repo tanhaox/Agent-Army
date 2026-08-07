@@ -1,86 +1,216 @@
-# 数字人短视频项目（v10）
+# digital_human — 开发者导览
 
-**版本**: v10 · 2026-07-22  
-**核心原则**: 先验证后投入 · 工作流即资产 · 数据说话 · 硬截止不商量  
-**规划源文件**: [执行计划清单.md](执行计划清单.md)（可编辑的规划 SSOT）  
-**可视化视图**: [执行计划清单.html](执行计划清单.html)（由规划呈现，不单独承载事实）  
-**当前现实状态**: [项目状态总览.md](项目状态总览.md)
+**目标读者**: 第一次接触这个项目的开发者(或自己隔 2 周回来看)。读 10 分钟能上手开发。
+**不替代**: [项目状态总览.md](项目状态总览.md)(当前阶段/技术栈)、[项目进度看板.md](项目进度看板.md)(待办/优先级)、[CHANGELOG.md](CHANGELOG.md)(时间线/版本)。
 
 ---
 
-## 一句话目标
+## 1. 这是什么
 
-用**一套可复用的 ComfyUI 数字人工作流**，在 12 个月内把中文、英文、西班牙文的短视频账号跑通；若第 12 个月月收入未达预设阈值，立即砍掉外语线，退回中文-only 兼职模式。
-
----
-
-## 项目入口
-
-| 文档 | 作用 | 必读顺序 |
-|------|------|----------|
-| [项目状态总览.md](项目状态总览.md) | **当前真实进度 + 技术栈 + 整合决策**（2026-07-25 起） | **第 1** |
-| [执行计划清单.md](执行计划清单.md) | v10 唯一权威执行计划：八阶段路线图、平台矩阵、KPI、门禁、铁律（**规划目标**，与现实差异见"项目状态总览"） | 第 2 |
-| [CHANGELOG.md](CHANGELOG.md) | 里程碑 + 重大决策时间线（时间倒序） | 第 3 |
-| [执行计划清单.html](执行计划清单.html) | 可视化版本，含 12 个月甘特图 | 第 4 |
-| [M0-GPU-checklist.md](M0-GPU-checklist.md) | M0 第一周本地 ComfyUI + TTS 环境检查清单 | 第 5 |
-| [自动化数字人新闻播报 — 本地部署方案.md](自动化数字人新闻播报%20—%20本地部署方案.md) | ComfyUI 数字人短视频本地部署方案 | 第 6 |
-| [docs/deepseek_v4_model_guide.md](docs/deepseek_v4_model_guide.md) | DeepSeek V4 Pro/Flash 双模型使用指南 | 第 7 |
-| [计划收益测算.md](计划收益测算.md) | 12 个月收入测算（与 v10 对齐） | 第 8 |
-| [YT各语种频道盈利性调研报告.md](YT各语种频道盈利性调研报告.md) | YouTube 作为素材复用池与长尾变现的调研 | 第 9 |
-| [什么是优秀的短视频.md](什么是优秀的短视频.md) | 短视频内容质量标准（母版） | 第 10 |
-| [什么是优秀的短视频-中文.md](什么是优秀的短视频-中文.md) / [英文](什么是优秀的短视频-英文.md) / [西语](什么是优秀的短视频-西语.md) / [阿语](什么是优秀的短视频-阿语.md) | 各语种执行标准 | 按需 |
-
-> 注：`朋友豁免协议-模板.md` 不在 v10 引用范围内，按用户要求本次不做同步修改。
+FastAPI 后端 + SQLite + ComfyUI LTX2.3 + HyperFrames 的**数字人短视频生产流水线**。一条视频 = 4 层产物: 文章 → DeepSeek 洗稿 → TTS 配音 → ComfyUI LTX23 数字人视频 → HyperFrames 视觉片段。前 3 层是核心管线,第 4 层(可视化新闻数据)是并行的独立管线。Web UI(`web/*.html`)给运营/主播用,所有功能都有可观测 API。
 
 ---
 
-## 当前目录结构
+## 2. 技术栈
+
+- **Python** 3.11+ (`.venv/` 内置,`./.venv/Scripts/python` 调用)
+- **Web 框架**: FastAPI + uvicorn (启动见 §4)
+- **数据库**: SQLite + SQLAlchemy 2.x ORM,自动建表(`app/database.py:init_db`),文件 `data/pipeline.db`
+- **LLM**: DeepSeek V4 (`config/app.yaml:deepseek`:`flash` / `pro`)
+- **TTS 引擎**: Fish Speech `127.0.0.1:7860` / F5-TTS `7861` / IndexTTS2 `7862`
+- **视频渲染**: ComfyUI `127.0.0.1:8188` (LTX2.3 数字人, 4090 GPU)
+- **视觉渲染**: HyperFrames 0.7.72 (`npx hyperframes`, CPU, 不占 4090)
+- **关键依赖**: 见 [`requirements.txt`](requirements.txt)(fastapi / sqlalchemy / pydantic / pyyaml / requests / soundfile / numpy / msgpack / jsonschema)
+
+---
+
+## 3. 30 秒上手
+
+```bash
+# 1. 启动 54321 Web API (主入口)
+./.venv/Scripts/python run_web.py
+# → http://127.0.0.1:54321/web/index.html
+
+# 2. 各 TTS 引擎 / ComfyUI 需先单独启动 (端口见上)
+# 3. 验证
+curl http://127.0.0.1:54321/openapi.json | head
+curl http://127.0.0.1:8188/system_stats          # ComfyUI
+curl http://127.0.0.1:7860/                     # Fish Speech
+```
+
+**关键文件**: `app/main.py` (FastAPI app + lifespan + 路由挂载) · `app/config.py` (Config 加载 + env 替换) · `config/app.yaml` (YAML 配置) · `run_web.py` (入口)。
+
+---
+
+## 4. 启动入口
+
+| 入口 | 文件 | 说明 |
+|---|---|---|
+| **API 服务** | [`run_web.py`](run_web.py) | 启动 uvicorn,加载 `config/app.yaml`,监听 `127.0.0.1:54321`。**推荐** |
+| 旧爬虫版 | `launch_system_fixed.bat` / `start_server.py` | `SimpleHTTPRequestHandler` 静态文件 + `/api/news` 单接口,非主入口 |
+| 测试 | `smoke_test.py` / `test_hot_news.py` | 冒烟测试 |
+
+> **注**: `.bat` 启动文件是 M0 时期的爬虫入口,**主入口已切到 `run_web.py`**。
+
+---
+
+## 5. 项目结构
 
 ```
 digital_human/
-├── 执行计划清单.md              # v10 权威执行计划
-├── 执行计划清单.html            # v10 高保真可视化版本
-├── README.md                    # 本文件（项目入口）
-├── M0-GPU-checklist.md          # M0 本地环境检查清单
-├── 自动化数字人新闻播报 — 本地部署方案.md  # ComfyUI 本地部署方案
-├── 数字人计划调研更新版.md      # 技术选型调研（待对齐 v10）
-├── 计划收益测算.md              # 12 个月收入测算（v6，待对齐 v10）
-├── YT各语种频道盈利性调研报告.md # YouTube 复用池与长尾调研（v8，待对齐 v10）
-├── 什么是优秀的短视频.md        # 内容质量标准母版（待对齐 v10）
-├── 什么是优秀的短视频-中文.md   # 中文执行标准（待对齐 v10）
-├── 什么是优秀的短视频-英文.md   # 英文执行标准（待对齐 v10）
-├── 什么是优秀的短视频-西语.md   # 西语执行标准（待对齐 v10）
-├── 什么是优秀的短视频-阿语.md   # 阿语执行标准草案（M3 后评估，当前不执行）
-├── 朋友豁免协议-模板.md         # 不在 v10 引用范围内
-└── sop/                         # 标准作业程序（部分待对齐 v10）
+├── app/                          # FastAPI 主程序 (核心)
+│   ├── main.py                   #   FastAPI app + lifespan + 14 路由挂载
+│   ├── config.py                 #   YAML 加载 + env 替换 + 全局 get_config()
+│   ├── database.py               #   SQLAlchemy engine + get_db + get_session_maker
+│   ├── models.py                 #   19 张表的 ORM 定义
+│   ├── schemas.py                #   Pydantic 入参/出参 (含 validation_warnings)
+│   ├── routers/                  #   14 个路由 (见 §6 浏览器入口)
+│   └── services/                 #   11+ 个服务模块 (见 §7 模块依赖图)
+├── config/app.yaml               # 配置 (端口/DeepSeek/TTS URL/HF 路径)
+├── data/pipeline.db              # SQLite 自动建表产物
+├── web/                          # 前端 SPA (见 §6)
+├── workflows/                    # ComfyUI workflow JSON (见 §8)
+├── tests/artifacts/              # TTS 测试 wav (idx_fresh_test_v[1-4].wav)
+├── assets/                       # 静态素材 (头像/分镜)
+├── crawler/                      # 旧爬虫代码 (M0 遗留)
+├── scripts/tts_client.py         # TTS 客户端 (voices router 引用)
+├── logs/                         # 运行日志
+├── outputs/                      # 临时输出
+├── run_web.py                    # 主入口
+└── requirements.txt              # Python 依赖
 ```
 
 ---
 
-## 关键决策（v10）
+## 6. 浏览器入口清单
 
-- **M0 不跑量、不变现**，只验证 ComfyUI 工作流能否稳定、快速地端到端出片。
-- **数字人管线**: ComfyUI 统一负责图片生成、视频生成、风格化、后期合成；不再以 MuseTalk / SadTalker / LivePortrait 作为默认主链。
-- **TTS 方案**: Fish Speech（中文主力）/ F5-TTS（轻量备选）/ ElevenLabs（英文/高质感备选）。
-- **平台优先级**: 抖音 / 视频号 / 小红书 / B站 / 头条 / 西瓜 为主战场；YouTube / YPP 作为长尾与素材复用池。
-- **多语言顺序**: 中文 → EN + ES 同步推进；AR 在 M3 复盘后、且工作流能自动切换语言前，不再启动。
-- **资金维度**: 删除所有启动资金、借款、成本上限内容；**仅保留“月收入”作为 M12 硬截止指标**。
-- **朋友/借款/豁免条款**: 全部从 v10 清单中移除。
+| URL | 后端路由 | 作用 |
+|---|---|---|
+| [`/web/index.html`](web/index.html) | (主 SPA) | 文章 → 洗稿 → 配音 3 步管线 |
+| [`/web/director.html`](web/director.html) | `/api/director/*` | 导演控制台 (规划→执行→合成→下载) |
+| [`/web/library.html`](web/library.html) | `/api/library/*` | 视频库 (素材库 + 成品库) |
+| [`/web/templates.html`](web/templates.html) | `/api/articles/prompt-templates` | 提示词模板管理 |
+| [`/web/personas.html`](web/personas.html) | `/api/personas/*` | 人物管理 (模板+音色+形象 三维绑定) |
+| [`/web/voices.html`](web/voices.html) | `/api/voices` | 音色管理 (CRUD + 测试 + 试听) |
+| [`/web/roles.html`](web/roles.html) | `/api/roles` + `/api/comfyui` | 角色管理 + ComfyUI 三视图生成 |
+| [`/web/digital_human_video.html`](web/digital_human_video.html) | `/api/dhv/*` | DHV 数字人视频生成 (LTX23 管线) |
+| [`/web/visual_render.html`](web/visual_render.html) | `/api/visual-render/*` | HF 视觉渲染 (新闻数据图) |
+| [`/openapi.json`](http://127.0.0.1:54321/openapi.json) | - | 自动生成 API 文档 (Swagger) |
+| 导航栏入口 | (在 `web/index.html:45`) | 顶部 4 个 `<a target="_blank">` 链接到 4 个子页面 |
+
+**后端路由清单** (14 个 router 模块, 全在 `app/routers/`):
+- `articles.py` — 文章 CRUD + DeepSeek 洗稿 + 提示词模板管理
+- `scripts.py` — 脚本 + 分段 CRUD
+- `audio.py` — TTS 配音任务 (含聚合)
+- `voices.py` — 音色管理 + TTS 引擎测试
+- `roles.py` — 角色管理 + ComfyUI 视图生成
+- `comfyui.py` — ComfyUI workflow 同步 + 直提交
+- `digital_human_video.py` — DHV 主链路 (8 端点)
+- `visual_render.py` — HF 视觉渲染 (8 端点)
+- `director.py` — 视觉导演 2.0 (规划/执行/合成/下载)
+- `library.py` — 视频库 (素材 CRUD+搜索+标签+赞 / 成品 CRUD)
+- `personas.py` — 人物关联 (模板+音色+形象)
+- `tts_services.py` — TTS 服务管理
+- `hosts.py` / `jobs.py` — 主持人管理 + 任务状态 SSE 流
 
 ---
 
-## 如何开始
+## 7. 模块依赖图
 
-1. 先读 [项目状态总览.md](项目状态总览.md)，确认当前真实阶段和开发权重。
-2. 需要路线图时读 [执行计划清单.md](执行计划清单.md)；HTML 仅用于查看甘特图。
-3. 按状态总览中的当前权重逐项推进；旧 M0 “1 分钟 3 条 30 秒”门禁已过期，不再作为当前验收条件。
-4. 所有功能通过可观测 UI 验证；先做小规模冒烟，跑通后再扩量。
+**核心依赖链** (谁 import 谁):
+
+```
+main.py
+ ├─ config.{Config,load_config,set_config}
+ ├─ database.{init_db,get_session_maker}
+ ├─ models.{Host,Voice}
+ ├─ services.workflow_sync.sync_workflows_on_startup
+ └─ routers.*  ←── 14 个全部挂载
+
+routers/digital_human_video.py (DHV 主链路)
+ ├─ config.get_config
+ ├─ services.audio_aggregator.aggregate_segments     # 多 wav 拼接 + 重采样
+ ├─ services.lit_video_builder.build_ltx23_video_workflow  # Hermes 修复版 JSON + 改 4 字段
+ ├─ services.video_validator.validate_mp4           # 7 项硬校验 (流/帧/时长/对齐)
+ └─ models.{AudioFile,DigitalHumanVideo,Role}
+
+routers/visual_render.py (HF 视觉渲染)
+ ├─ config.get_config
+ ├─ services.template_library.{list,get,resolve,validate}_input
+ ├─ services.template_filler.fill_template          # 占位符替换 + 复制模板
+ ├─ services.visual_render_service.execute_visual_render_job  # 5 步编排 (preparing → rendering → validating)
+ └─ models.VisualRenderJob
+
+routers/articles.py (文章 + 洗稿)
+ ├─ config.get_config
+ └─ services.llm_service.LLMService   # DeepSeek 调用
+
+routers/audio.py (TTS 配音)
+ └─ config.get_config
+```
+
+**全部模块** 用 `config.get_config`(模块级 singleton);`main.py` 只导出 `Config / load_config / set_config`,没有 `get_config`。路由模块只能从 `..config` 取,不能从 `..main` 取。
 
 ---
 
-## 版本与维护
+## 8. 数据库表 + 写入方
 
-- **v10** · 2026-07-22 · 规划基线；当前现实差异由 `项目状态总览.md` 维护。
-- 规划路线与范围以 `执行计划清单.md` 为准；已完成事实、当前技术栈和用户最新拍板以 `项目状态总览.md` 为准。
-- `执行计划清单.html` 是规划的可视化视图，不作为独立 SSOT。
-- 重大策略变更时同步更新状态总览；形成里程碑时追加 CHANGELOG；只有规划本身改变时才修改 v10。
+**位置**: `data/pipeline.db` (SQLite,自动建表于首次启动)
+
+| 表 | 写入方 (服务/router) | 用途 |
+|---|---|---|
+| `hosts` | `routers/hosts.py` | 主持人元数据 (persona/开场白/默认音色) |
+| `voices` | `routers/voices.py` | 音色 CRUD (master_audio + backend URLs) |
+| `articles` | `routers/articles.py` | 文章 + raw_text + status |
+| `scripts` | `routers/articles.py` (rewrite 后) | 洗稿脚本 |
+| `segments` | `routers/scripts.py` | 脚本分段 (line_index + control_chars) |
+| `crawl_tasks` | (旧爬虫) | 抓取任务 (M0 遗留) |
+| `audio_jobs` | `routers/audio.py` | TTS 任务 |
+| `audio_files` | `routers/audio.py` | TTS 产物 wav |
+| `roles` | `routers/roles.py` | 数字人角色 (含 views 多视角) |
+| `workflow_syncs` | `services/workflow_sync.py` (启动时) | ComfyUI workflow SHA256 同步状态 |
+| `digital_human_videos` | `routers/digital_human_video.py` | DHV 任务 (status: pending→aggregating→running→completed/failed) |
+| `visual_render_jobs` | `routers/visual_render.py` | HF 渲染任务 (queued→preparing→rendering→validating→completed) |
+| `director_jobs` | `routers/director.py` | 导演任务 (planning→executing→reviewing→completed/failed) |
+| `director_slots` | `routers/director.py` | 导演 slot (queued→running→completed/failed/replaced) |
+| `material_assets` | `services/pexels_service.py` | Pexels 素材本地缓存 (旧表, 逐步迁移到 video_assets) |
+| `download_logs` | `services/pexels_service.py` | Pexels 下载配额审计 |
+| `personas` | `routers/personas.py` | 人物关联 (模板+音色+形象 三维绑定) |
+| `video_assets` | `routers/library.py` + `services/pexels_service.py` | 素材库 (Pexels 下载自动入库) |
+| `video_outputs` | `routers/director.py` (compose 后) | 成品库 (合成自动登记) |
+
+---
+
+## 9. 关键 ComfyUI Workflows
+
+源目录: [`workflows/`](workflows/),通过 `workflow_sync.sync_workflows_on_startup` 自动同步到 `E:/AI/ComfyUI_windows_portable/ComfyUI/user/default/workflows/`。
+
+| workflow | 文件 | 用途 |
+|---|---|---|
+| `character_three_view` | `workflows/character_three_view.json` | 角色多视图定型 (正脸/侧脸/全身,Krea2 后端) — `roles.py` 调 `submit_and_wait` |
+| `digital_human_video_ltx23` | `workflows/digital_human_video_ltx23.json` | 占位/参考 JSON。**真实 workflow 由 [`app/services/lit_video_builder.py`](app/services/lit_video_builder.py) 动态构造**: 读取 Hermes 已验证 `G:/下载/LTX23-单多图数字人语音驱动_已修复最小实验.json`,仅改 4 字段 (节点 36/301/423/369) |
+| `krea2_*` | `workflows/krea2_*.json` | Krea2 后端多模板 (cyber/gufeng/body/face) — 角色图像生成实验用 |
+
+**HF 视觉渲染独立**: 不接 ComfyUI,不占 4090。HyperFrames CLI 在 `E:/AI/digital_human/hf_prep/test_demo/` 项目目录跑。
+
+---
+
+## 10. 扩展指南
+
+> 本节只列扩展位和方向,不写实现。具体改动落点见 [项目进度看板.md](项目进度看板.md)。
+
+**新加 TTS 后端**: `app/services/tts_service.py` 加新 backend;`config/app.yaml:defaults` 加 `base_url_*`;`voices.backend` 字段加枚举。
+
+**新加 ComfyUI workflow**: `workflows/<name>.json` + `workflows/manifest.yaml` 加条目 + `app/services/workflow_sync.py` 自动同步。
+
+**新加 DHV workflow 节点字段**: 改 `app/services/lit_video_builder.py::build_ltx23_video_workflow` 的节点 ID 映射 (`36/301/423/369` 是当前 Hermes 已验证版)。
+
+**新加 HF 模板**: `app/services/template_library.TEMPLATES` 加条目,其它不动 (router/service 自动适配)。
+
+**新加前端页**: `web/<page>.html` + `app/routers/<page>.py` + `app/main.py:include_router` + `web/index.html:45` 加导航链接。
+
+**新加数据库表**: `app/models.py` 加 ORM 类,启动时 `Base.metadata.create_all` 自动建表。
+
+---
+
+**报告完**。任何"这是干什么 / 进度如何 / 待办是什么" → 看另外 3 个 MD。本文件只回答"代码怎么搭、怎么跑、怎么改"。

@@ -11,8 +11,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..database import get_db, get_session_maker
-from ..models import AudioFile, AudioJob, Script, Segment, Voice
+from ..models import AudioFile, AudioJob, Host, Script, Segment, Voice
 from ..schemas import AudioFileOut, AudioJobOut
+from ..services.gpu_service_manager import get_gpu_service_manager
 from ..services.tts_service import TTSService
 from .jobs import _publish
 
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 
 
 def get_tts() -> TTSService:
-    from ..main import get_config
+    from ..config import get_config
 
     cfg = get_config()
     return TTSService(cfg.defaults)
@@ -42,6 +43,12 @@ def generate_audio(
     voice = None
     if voice_id:
         voice = db.query(Voice).filter(Voice.id == voice_id).first()
+    # 未显式选音色 → 优先用 host.default_voice_id (2026-08-07: 老陈默认=大学教授 indextts),
+    # 而非 host 下第一条 voice (旧逻辑会取到已弃用的 fish laochen_default)。
+    if not voice and script.host_id:
+        host = db.query(Host).filter(Host.id == script.host_id).first()
+        if host and host.default_voice_id:
+            voice = db.query(Voice).filter(Voice.id == host.default_voice_id).first()
     if not voice and script.host_id:
         voice = db.query(Voice).filter(Voice.host_id == script.host_id).first()
 
@@ -134,8 +141,19 @@ def _do_tts(job_id: str):
                 }
             _publish(job_id, event)
 
-        result = tts.generate(job, segments, voice, progress_callback=_progress)
-        db.add_all(result["audio_files"])
+        # ── GPU 服务托管: 排队 + 按需拉起 TTS 后端 + 空闲自动关停腾显存 ──
+        from ..config import get_config
+
+        backend = (voice.backend if voice and voice.backend else get_config().defaults.backend)
+
+        def _svc_notify(message: str) -> None:
+            _publish(job_id, {"type": "tts_service", "message": message})
+
+        manager = get_gpu_service_manager()
+        with manager.session(backend, status_callback=_svc_notify):
+            result = tts.generate(job, segments, voice, progress_callback=_progress)
+        # audio_files rows are already committed one-by-one inside _progress,
+        # so no add_all here — a second add would double-insert (P0-1 related).
 
         for af in result["audio_files"]:
             if af.segment_id and af.duration:
@@ -143,24 +161,62 @@ def _do_tts(job_id: str):
                 if seg:
                     seg.estimated_duration = af.duration
 
+        # ── Save combined paragraph audio as AudioFile ──
+        combined_info = result.get("combined_file")
+        combined_audio_file = None
+        if combined_info and combined_info.get("file_path"):
+            combined_audio_file = AudioFile(
+                audio_job_id=job.id,
+                segment_id=None,
+                filename=combined_info["file"],
+                file_path=combined_info["file_path"],
+                duration=combined_info.get("duration"),
+                sample_rate=combined_info.get("sample_rate"),
+            )
+            db.add(combined_audio_file)
+
         job.status = "completed"
         job.completed_segments = len(segments)
         db.commit()
 
         output_dir = Path(job.output_dir)
-        _publish(job_id, {"type": "tts_done", "job_id": job.id, "output_dir": str(output_dir)})
+        done_event: dict = {"type": "tts_done", "job_id": job.id, "output_dir": str(output_dir)}
+        if combined_audio_file:
+            done_event["combined_audio"] = {
+                "id": combined_audio_file.id,
+                "filename": combined_audio_file.filename,
+                "duration": combined_audio_file.duration,
+            }
+        _publish(job_id, done_event)
     except Exception as exc:
         try:
             job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
             if job:
                 job.status = "failed"
-                job.error_message = str(exc)
+                # P0-1 方案 1: 失败不删盘 → 已生成 wav 保留, 可重试续传
+                job.error_message = f"{exc}（已生成的音频已保留，重新生成将从断点继续）"
                 db.commit()
         except Exception:
             pass
         _publish(job_id, {"type": "tts_error", "error": str(exc)})
     finally:
         db.close()
+
+
+@router.get("/jobs", response_model=list[AudioJobOut])
+def list_audio_jobs(
+    script_id: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    """查询音频任务，支持按 script_id / status 过滤."""
+    query = db.query(AudioJob)
+    if script_id:
+        query = query.filter(AudioJob.script_id == script_id)
+    if status:
+        query = query.filter(AudioJob.status == status)
+    return query.order_by(AudioJob.created_at.desc()).limit(limit).all()
 
 
 @router.get("/jobs/{job_id}", response_model=AudioJobOut)

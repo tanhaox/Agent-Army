@@ -1,3 +1,7 @@
+# 环境变量（含 API key，禁止入库）
+.env
+.env.*
+
 # 工作流历史备份（多版本迭代保留，仅本地）
 workflows/*.bak_*
 
@@ -7,6 +11,7 @@ config/app.yaml
 # 数据库文件
 data/pipeline.db
 data/*.bak.*
+data/pipeline.db.pre_voice_cleanup_*.bak
 
 # 原始数据 / 临时调试
 data/raw/
@@ -22,6 +27,7 @@ _*.txt
 _*.json
 news_dashboard*.html
 news_data.json
+tests/artifacts/
 
 # Python
 .venv/

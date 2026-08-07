@@ -5,7 +5,7 @@ echo 数字人计划 - 新闻爬虫系统
 echo =================================================
 echo.
 
-cd /d C:\AI-Agent-Local\数字人计划
+cd /d "%~dp0"
 
 echo 步骤 1: 启动新闻爬虫...
 python run_crawler.py
@@ -25,7 +25,7 @@ echo.
 echo 服务器正在运行中...
 echo 关闭此窗口可停止服务器
 
-cd /d C:\AI-Agent-Local\数字人计划
+cd /d "%~dp0"
 
 :: 启动服务器（保持运行）
 python start_server.py

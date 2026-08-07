@@ -1,19 +1,51 @@
-"""LTX 2.3 音频→视频 workflow builder — 54321 Web 系统 SSOT 版.
+"""LTX 2.3 音频→视频 workflow builder — 复用预置双版 ComfyUI workflow JSON.
 
-为什么 Python 构造而非 JSON dump:
-  - 用户禁忌: 不要把临时实验 payload 当作最终 SSOT
-  - 节点 ID 手写易错, 函数化构造避免 fragile
-  - 帧数公式 round(duration*fps)+1 + 对齐 8n+1 在 build 时校验
+为什么复用 JSON 而非 Python 从 0 构造:
+  - ComfyUI 端 workflow 是 SSOT (Hermes 已手动验证: 105s 渲染 9.96s/239 帧/24fps)
+  - Python 构造节点 schema 极易跟 ComfyUI 实际 custom node 不匹配 (2026-07-26 P0-3 教训)
+  - 节点 ID / class_type / inputs 全是 ComfyUI 实际产物,不允许假设
 
 约定:
-  - 返回 ComfyUI API dict-format workflow: {node_id (str): {class_type, inputs}}
-  - inputs 中引用其他节点的输出用 ["<node_id>", output_index] 的列表
-  - 所有节点 ID 用 int 转 str 的字符串 key
+  - 读取项目内 digital_human/data/workflows/ltx23_video_{orientation}.json
+  - 改 5 个字段: node 36 帧数 / node 39 fps / node 301 图片 / node 423 音频 / node 369 前缀
+  - 返回 dict-format workflow {node_id(str): {class_type, inputs}}
+  - 帧数公式: round(duration*fps)+1, 对齐 8n+1
+  - 分辨率由 ImageScale node 440 在 JSON 模板中预置,builder 不再改写
 """
 from __future__ import annotations
 
-import random
+import json
+from pathlib import Path
 from typing import Any
+
+_WORKFLOW_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "workflows"
+
+
+def _resolve_workflow_path(orientation: str) -> Path:
+    """解析 workflow JSON 路径 — 项目内 data/workflows/ 目录."""
+    if orientation not in ("portrait", "landscape"):
+        raise ValueError(f"orientation 必须为 'portrait' 或 'landscape', 收到: {orientation!r}")
+    path = _WORKFLOW_DIR / f"ltx23_video_{orientation}.json"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"LTX23 workflow 模板不存在: {path}\n"
+            f"请确保 digital_human/data/workflows/ 下存在两份 JSON 模板"
+        )
+    return path
+
+
+def load_base_workflow(orientation: str = "portrait") -> dict[str, dict[str, Any]]:
+    """读取预置 workflow dict (顶层 key 是字符串节点 ID)."""
+    path = _resolve_workflow_path(orientation)
+    with open(path, "r", encoding="utf-8") as f:
+        wf = json.load(f)
+    if not isinstance(wf, dict):
+        raise ValueError(f"workflow 顶层必须是 dict,实际 {type(wf).__name__}")
+    # 校验关键节点都存在
+    for nid in ("36", "39", "301", "423", "369", "440"):
+        if nid not in wf:
+            raise KeyError(f"workflow 缺 node {nid},实际节点 {sorted(wf.keys())[:10]}...")
+    return wf
 
 
 def build_ltx23_video_workflow(
@@ -21,178 +53,67 @@ def build_ltx23_video_workflow(
     audio_filename: str,
     storyboard: list[dict[str, Any]],
     duration_sec: float,
-    fps: int,
-    width: int,
-    height: int,
-    seed: int | None = None,
-    ckpt_name: str = "ltx-2.3-22b-distilled-q8_0.gguf",
-    audio_vae_name: str = "ltx-2.3-audio-vae.safetensors",
-    dual_clip_name1: str = "t5xxl_fp8mixed.safetensors",
-    dual_clip_name2: str = "t5xxl_fp8mixed.safetensors",
-    dual_clip_type: str = "ltxv",
+    orientation: str = "portrait",
+    fps: int = 30,
+    seed: int | None = None,   # noqa: ARG001 — workflow 内已固化 sampler seed,builder 不改
+    ckpt_name: str = "ltx-2.3-22b-distilled-q8_0.gguf",  # noqa: ARG001
+    audio_vae_name: str = "ltx-2.3-audio-vae.safetensors",  # noqa: ARG001
+    dual_clip_name1: str = "t5xxl_fp8mixed.safetensors",  # noqa: ARG001
+    dual_clip_name2: str = "t5xxl_fp8mixed.safetensors",  # noqa: ARG001
+    dual_clip_type: str = "ltxv",  # noqa: ARG001
     filename_prefix: str = "dhv_",
-    steps: int = 20,
-    cfg: float = 1.5,
-    sampler_name: str = "euler",
-    scheduler: str = "simple",
-    positive_prompt: str | None = None,
-    negative_prompt: str | None = None,
+    steps: int = 20,  # noqa: ARG001
+    cfg: float = 1.5,  # noqa: ARG001
+    sampler_name: str = "euler",  # noqa: ARG001
+    scheduler: str = "simple",  # noqa: ARG001
+    positive_prompt: str | None = None,  # noqa: ARG001
+    negative_prompt: str | None = None,  # noqa: ARG001
 ) -> dict[str, dict[str, Any]]:
-    """返回 dict-format workflow {node_id: {class_type, inputs}}."""
+    """复用预置 workflow JSON 模板, 改 5 个参数后返回.
+
+    Args:
+        audio_filename: ComfyUI input/ 下已就位的 wav 文件名 (例如 'test_audio.wav')
+        storyboard:     [{'filename': '正视图_00002_.png'}, ...] — 当前只取第 1 张
+        duration_sec:   目标时长(秒)
+        orientation:    'portrait'(9:16) | 'landscape'(16:9) — 选择对应 JSON 模板
+        fps:            帧率(默认 30, 写入 node 39)
+        filename_prefix: 输出文件名前缀 (默认 'dhv_')
+
+    Returns:
+        dict-format workflow, 顶层 key 是字符串节点 ID
+    """
     frame_count = _frame_count(duration_sec, fps)
-    if seed is None:
-        seed = random.randint(0, 2_147_483_647)
 
-    nodes: dict[str, dict[str, Any]] = {}
+    wf = load_base_workflow(orientation)
 
-    # ── 1. checkpoint + dual CLIP + audio VAE ──
-    nodes["100"] = {
-        "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": ckpt_name},
-    }
-    nodes["110"] = {
-        "class_type": "DualCLIPLoader",
-        "inputs": {
-            "clip_name1": dual_clip_name1,
-            "clip_name2": dual_clip_name2,
-            "type": dual_clip_type,
-            "device": "default",
-        },
-    }
-    nodes["120"] = {
-        "class_type": "VAELoader",
-        "inputs": {"vae_name": audio_vae_name},
-    }
+    # 参数 1: node 36 INTConstant value = frame_count
+    wf["36"]["inputs"]["value"] = int(frame_count)
 
-    # ── 2. audio trim to duration ──
-    nodes["200"] = {
-        "class_type": "LoadAudio",
-        "inputs": {"audio": audio_filename},
-    }
-    nodes["210"] = {
-        "class_type": "TrimAudioDuration",
-        "inputs": {
-            "audio": ["200", 0],
-            "trim_to": "seconds",
-            "duration": duration_sec,
-        },
-    }
+    # 参数 2: node 39 INTConstant value = fps (写回 workflow 模板; 模板默认 30)
+    wf["39"]["inputs"]["value"] = int(fps)
 
-    # ── 3. latent (空视频潜变量 + 音频潜变量) ──
-    nodes["300"] = {
-        "class_type": "EmptyLTXVLatentVideo",
-        "inputs": {
-            "width": width,
-            "height": height,
-            "length": frame_count,
-            "batch_size": 1,
-        },
-    }
-    nodes["310"] = {
-        "class_type": "LTXVAudioVAEEncode",
-        "inputs": {
-            "audio": ["210", 0],
-            "vae": ["120", 0],
-        },
-    }
+    # 参数 3: node 301 LoadImage image = 第一张分镜图
+    if not storyboard:
+        raise ValueError("storyboard 不能为空,至少需要 1 张图")
+    first_sb = storyboard[0]
+    image_filename = first_sb.get("filename")
+    if not image_filename:
+        raise ValueError(f"storyboard[0] 缺 filename: {first_sb}")
+    wf["301"]["inputs"]["image"] = image_filename
 
-    # ── 4. image guide chain (多分镜图 → LTXVAddGuide) ──
-    prev_latent: list[str | int] = ["300", 0]
-    for i, sb in enumerate(storyboard):
-        load_id = f"{400 + i * 2}"
-        guide_id = f"{400 + i * 2 + 1}"
-        nodes[load_id] = {
-            "class_type": "LoadImage",
-            "inputs": {"image": sb["filename"]},
-        }
-        frame_idx = sb.get(
-            "frame_idx",
-            i * max(1, frame_count // max(1, len(storyboard))),
-        )
-        strength = sb.get("strength", 0.85)
-        nodes[guide_id] = {
-            "class_type": "LTXVAddGuide",
-            "inputs": {
-                "latent": prev_latent,
-                "image": [load_id, 0],
-                "frame_idx": int(frame_idx),
-                "strength": float(strength),
-            },
-        }
-        prev_latent = [guide_id, 0]
+    # 参数 4: node 423 LoadAudio audio
+    wf["423"]["inputs"]["audio"] = audio_filename
 
-    # ── 5. concat video+audio latent ──
-    nodes["500"] = {
-        "class_type": "LTXVConcatAVLatent",
-        "inputs": {
-            "video_latent": prev_latent,
-            "audio_latent": ["310", 0],
-        },
-    }
+    # 参数 5: node 369 SaveVideo filename_prefix
+    wf["369"]["inputs"]["filename_prefix"] = str(filename_prefix)
 
-    # ── 6. sampler ──
-    pos = positive_prompt or (
-        "talking head, cinematic, smooth motion, consistent character, "
-        "looking at camera, high quality, sharp focus"
-    )
-    neg = negative_prompt or (
-        "blurry, distorted, jittery, mouth artifacts, extra fingers, "
-        "low quality, deformed face, asymmetric eyes"
-    )
-    nodes["600"] = {
-        "class_type": "CLIPTextEncode",
-        "inputs": {"text": pos, "clip": ["110", 0]},
-    }
-    nodes["610"] = {
-        "class_type": "CLIPTextEncode",
-        "inputs": {"text": neg, "clip": ["110", 0]},
-    }
-    nodes["620"] = {
-        "class_type": "SamplerCustom",
-        "inputs": {
-            "model": ["100", 0],
-            "positive": ["600", 0],
-            "negative": ["610", 0],
-            "latent": ["500", 0],
-            "seed": int(seed),
-            "steps": int(steps),
-            "cfg": float(cfg),
-            "sampler_name": sampler_name,
-            "scheduler": scheduler,
-        },
-    }
-
-    # ── 7. separate + decode audio ──
-    nodes["700"] = {
-        "class_type": "LTXVSeparateAVLatent",
-        "inputs": {"latent": ["620", 0]},
-    }
-    nodes["710"] = {
-        "class_type": "LTXVAudioVAEDecode",
-        "inputs": {"samples": ["700", 1], "vae": ["120", 0]},
-    }
-
-    # ── 8. VHS_VideoCombine → mp4 ──
-    nodes["800"] = {
-        "class_type": "VHS_VideoCombine",
-        "inputs": {
-            "frames": ["700", 0],
-            "audio": ["710", 0],
-            "frame_rate": int(fps),
-            "format": "video/h264-mp4",
-            "save_output": True,
-            "filename_prefix": filename_prefix,
-        },
-    }
-
-    return nodes
+    return wf
 
 
 def _frame_count(duration_sec: float, fps: int) -> int:
     """round(duration * fps) + 1, 对齐 8n+1.
 
-    例: 10s @ 24fps → round(240)+1 = 241 = 8*30+1 ✓
-        9.96s @ 24fps → round(239.04)+1 = 240, 对齐 → 241 (8*30+1)
+    例: 10s @ 30fps → round(300)+1 = 301, 对齐 → 305 (8*38+1)
     """
     n = round(duration_sec * fps) + 1
     while (n - 1) % 8 != 0:

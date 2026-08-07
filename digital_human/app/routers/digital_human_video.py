@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import shutil
+import os
 import time
 import uuid
 from pathlib import Path
@@ -46,6 +46,7 @@ from ..schemas import (
 from ..services.audio_aggregator import aggregate_segments
 from ..services.lit_video_builder import build_ltx23_video_workflow
 from ..services.video_validator import validate_mp4
+from ..services.file_utils import safe_trash
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,7 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
                 aggregated_duration_sec=None, duration_actual=None,
                 fps_actual=None, has_audio_stream=False, frame_count=None,
                 validation_issues=agg["issues"],
+                validation_warnings=[],
                 elapsed_sec=time.time() - t0,
                 error=v.error_message,
             )
@@ -264,11 +266,12 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
         if not storyboard_for_wf:
             raise RuntimeError("no storyboard images available")
 
+        orientation = "landscape" if v.width > v.height else "portrait"
         workflow = build_ltx23_video_workflow(
             audio_filename=audio_dst.name,
             storyboard=storyboard_for_wf,
             duration_sec=v.target_duration_sec,
-            fps=v.fps, width=v.width, height=v.height,
+            fps=v.fps, orientation=orientation,
             seed=v.seed,
             filename_prefix=f"dhv_{video_id}_",
         )
@@ -333,7 +336,11 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
         if not mp4_src or not mp4_src.exists():
             raise RuntimeError(f"ComfyUI outputs 中无 mp4: {history_entry.get('outputs')}")
         mp4_dst = out_root / f"{video_id}.mp4"
-        shutil.copy2(str(mp4_src), str(mp4_dst))
+        try:
+            os.replace(str(mp4_src), str(mp4_dst))
+        except OSError:
+            shutil.copy2(str(mp4_src), str(mp4_dst))
+            mp4_src.unlink(missing_ok=True)
         v.output_video_path = str(mp4_dst)
 
         # ── Step F: ffprobe 校验 ──
@@ -341,13 +348,16 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
             mp4_dst,
             expected_duration=v.target_duration_sec,
             expected_fps=v.fps,
-            min_duration_sec=5.0,
+            min_duration=5.0,
         )
         issues = list(val["issues"])
+        warnings = list(val.get("warnings") or [])
         v.duration_actual = (val["meta"] or {}).get("duration_actual")
         v.fps_actual = (val["meta"] or {}).get("fps_actual")
         v.has_audio_stream = bool((val["meta"] or {}).get("has_audio_stream"))
         v.frame_count = (val["meta"] or {}).get("frame_count")
+        if warnings:
+            v.comfy_log = {**(v.comfy_log or {}), "validation_warnings": warnings}
 
         # 关键硬约束: 视频有 audio stream 才算真正成功
         if val["ok"]:
@@ -371,6 +381,7 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
             has_audio_stream=v.has_audio_stream,
             frame_count=v.frame_count,
             validation_issues=issues,
+            validation_warnings=warnings,
             elapsed_sec=time.time() - t0,
             error=v.error_message if v.status != "completed" else None,
         )
@@ -391,6 +402,7 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
             has_audio_stream=v.has_audio_stream,
             frame_count=v.frame_count,
             validation_issues=issues,
+            validation_warnings=[],
             elapsed_sec=time.time() - t0,
             error=v.error_message,
         )
@@ -420,10 +432,10 @@ def delete_video(video_id: str, db: Session = Depends(get_db)):
     v = db.query(DigitalHumanVideo).filter(DigitalHumanVideo.id == video_id).first()
     if not v:
         raise HTTPException(status_code=404, detail="DigitalHumanVideo not found")
-    # 删除产物目录
+    # 删除产物目录 — 优先走回收站 (CLAUDE.md 铁律)
     out_dir = _dhv_root() / video_id
     if out_dir.exists():
-        shutil.rmtree(out_dir, ignore_errors=True)
+        safe_trash(out_dir)
     db.delete(v)
     db.commit()
 

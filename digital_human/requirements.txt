@@ -8,3 +8,6 @@ soundfile
 numpy
 msgpack
 python-multipart
+jsonschema
+Pillow
+httpx

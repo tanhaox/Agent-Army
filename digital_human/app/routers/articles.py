@@ -2,20 +2,139 @@
 from __future__ import annotations
 
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from ..database import get_db, get_session_maker
 from ..models import Article, Host, Script
-from ..schemas import ArticleCreate, ArticleOut, ArticleUpdate, RewriteRequest
+from ..schemas import (
+    ArticleCreate,
+    ArticleOut,
+    ArticleUpdate,
+    FetchUrlRequest,
+    FetchUrlResponse,
+    RewriteRequest,
+)
 from ..services.llm_service import LLMService
 from ..services.script_parser import parse_script
+from ..services.url_fetcher import fetch_url
 from .jobs import _publish
 
 router = APIRouter(prefix="/api/articles", tags=["articles"])
+
+
+# ---------------------------------------------------------------------------
+# List available rewrite prompt templates
+# ---------------------------------------------------------------------------
+@router.get("/prompt-templates")
+def list_prompt_templates():
+    """返回 config/ 下可用的洗稿提示词模板列表."""
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    templates = []
+    if config_dir.exists():
+        for f in sorted(config_dir.glob("*.txt")):
+            # 排除非洗稿模板（如视觉导演）
+            if f.stem.startswith("visual_director"):
+                continue
+            templates.append({
+                "id": f.stem,
+                "name": f.stem,
+                "size": f.stat().st_size,
+            })
+    return templates
+
+
+# ---------------------------------------------------------------------------
+# Upload a new prompt template
+# ---------------------------------------------------------------------------
+@router.post("/prompt-templates/upload")
+async def upload_prompt_template(
+    name: str = Form(..., min_length=1, max_length=64),
+    file: UploadFile = File(...),
+):
+    """上传新的洗稿提示词模板 .txt 文件到 config/ 目录."""
+    # Sanitize name: only allow alphanumeric, underscore, hyphen
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name.strip())
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="模板名称无效")
+
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    target = config_dir / f"{safe_name}.txt"
+
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"模板 '{safe_name}' 已存在，请先删除旧版")
+
+    content = await file.read()
+    # Ensure it's text
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="文件必须是 UTF-8 文本")
+
+    target.write_text(text, encoding="utf-8")
+    return {"id": safe_name, "name": safe_name, "size": target.stat().st_size}
+
+
+# ---------------------------------------------------------------------------
+# Rename a prompt template
+# ---------------------------------------------------------------------------
+@router.put("/prompt-templates/{template_id}")
+def rename_prompt_template(template_id: str, new_name: str):
+    """重命名洗稿提示词模板."""
+    safe_id = re.sub(r"[^a-zA-Z0-9_\-]", "", template_id)
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="模板 ID 无效")
+
+    safe_new = re.sub(r"[^a-zA-Z0-9_\-]", "_", new_name.strip())
+    if not safe_new:
+        raise HTTPException(status_code=400, detail="新名称无效")
+
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    old_path = config_dir / f"{safe_id}.txt"
+    new_path = config_dir / f"{safe_new}.txt"
+
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"模板 '{safe_id}' 不存在")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"模板 '{safe_new}' 已存在")
+
+    old_path.rename(new_path)
+    return {"ok": True, "old": safe_id, "new": safe_new}
+
+
+# ---------------------------------------------------------------------------
+# Delete a prompt template
+# ---------------------------------------------------------------------------
+@router.delete("/prompt-templates/{template_id}")
+def delete_prompt_template(template_id: str):
+    """删除指定的洗稿提示词模板."""
+    safe_id = re.sub(r"[^a-zA-Z0-9_\-]", "", template_id)
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="模板 ID 无效")
+
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    target = config_dir / f"{safe_id}.txt"
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"模板 '{safe_id}' 不存在")
+
+    # Don't allow deleting built-in templates accidentally
+    if safe_id == "laochen_default":
+        raise HTTPException(status_code=403, detail="不允许删除内置模板")
+
+    target.unlink()
+    return {"ok": True, "deleted": safe_id}
+
+
+@router.post("/fetch-url", response_model=FetchUrlResponse)
+def fetch_url_endpoint(payload: FetchUrlRequest):
+    result = fetch_url(payload.url)
+    return result
 
 
 def _project_dir_name(script_id: str, now: datetime | None = None) -> str:
@@ -36,7 +155,7 @@ def _create_project_dirs(script_id: str, project_root: Path) -> Path:
 
 
 def get_llm() -> LLMService:
-    from ..main import get_config
+    from ..config import get_config
 
     cfg = get_config()
     return LLMService(cfg.deepseek)
@@ -97,9 +216,11 @@ def rewrite_article(
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    job_id = article_id
+    job_id = str(uuid.uuid4())
     model_alias = request.model
     prompt_template = request.prompt_template or "laochen_default"
+    video_format = request.video_format or "portrait"
+    perspective = request.perspective
 
     def _do_rewrite():
         Session = get_session_maker()
@@ -122,12 +243,18 @@ def rewrite_article(
                 chunks.append(chunk)
                 _publish(job_id, {"type": "rewrite_chunk", "chunk": chunk})
 
+            # 保存补充观点到 article
+            if perspective and perspective.strip():
+                article.perspective_1 = perspective.strip()
+                db2.commit()
+
             script_text = llm.rewrite_article(
                 article.raw_text,
                 prompt_template=prompt_template,
                 model=model_alias,
                 stream=True,
                 chunk_callback=_cb,
+                perspective=perspective,
             )
 
             script = Script(
@@ -136,6 +263,7 @@ def rewrite_article(
                 version=1,
                 prompt_template=prompt_template,
                 script_text=script_text,
+                video_format=video_format,
                 status="drafting",
             )
             db2.add(script)

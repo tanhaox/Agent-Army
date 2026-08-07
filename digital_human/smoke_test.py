@@ -1,6 +1,9 @@
 # 系统冒烟测试
 import os
 import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 # 测试项目文件是否存在
 required_files = [
@@ -17,14 +20,13 @@ required_files = [
 print("=== 数字人计划新闻爬虫系统冒烟测试 ===")
 
 # 检查目录结构
-project_dir = 'C:\\AI-Agent-Local\\数字人计划'
-print(f"检查项目目录: {project_dir}")
+print(f"检查项目目录: {PROJECT_ROOT}")
 
 # 检查必要文件
 all_files_exist = True
 for file_path in required_files:
-    full_path = os.path.join(project_dir, file_path)
-    if os.path.exists(full_path):
+    full_path = PROJECT_ROOT / file_path
+    if full_path.exists():
         print(f"[OK] {file_path} - 存在")
     else:
         print(f"[FAIL] {file_path} - 不存在")
@@ -35,7 +37,7 @@ print()
 # 测试Python模块导入
 try:
     # 添加项目路径
-    sys.path.append(project_dir)
+    sys.path.append(str(PROJECT_ROOT))
 
     # 测试导入
     from crawler.news_scraper import NewsScraper

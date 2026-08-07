@@ -1,6 +1,416 @@
 # 数字人项目 CHANGELOG
 
-> 时间倒序记录"已完成里程碑 + 重大决策变更"。技术栈细节不在此，请看 [`项目状态总览.md`](项目状态总览.md)。
+> 时间倒序记录“已完成里程碑 + 重大决策变更”。技术栈细节不在此，请看 [`项目状态总览.md`](项目状态总览.md)。
+
+---
+
+## 2026-08-03｜导演生产路径优化 v3 — 零拷贝 + 48kHz 统一 + 合成后自清理（8 阶段）
+
+### 背景
+导演生产管线存在三重浪费：① ComfyUI 输出 576×1024@24fps 需后归一化缩放至 1080×1920@30fps、② poll 阶段 copy2 搬运文件、③ concat 前 `_prepare_inputs()` 二次 re-encode 所有 slot。用户要求从 ComfyUI workflow 和 TTS 切片两个源头解决问题。
+
+### 8 阶段改动
+1. **ComfyUI 双 workflow 模板**：新建 `ltx23_video_portrait.json`（9:16, 1080×1920@30fps）和 `ltx23_video_landscape.json`（16:9, 1920×1080@30fps），插入 ImageScale node 440 在模型输出后放大到目标分辨率，无需后归一化
+2. **poll_comfyui 零搬运**：`slot_workflows.py` 直接返回 ComfyUI 输出路径，不再 copy2 搬运到 director 目录
+3. **音频链路统一 48kHz**：`extract_audio_slice_wav` -ar 44100→48000；3 个非 host workflow（broll_pexels/broll_local/black_placeholder）从 `-an` 改为 `anullsrc=r=48000:cl=stereo` 静音轨；`mixed_host_broll` 加 `-ar 48000`
+4. **删除 `_prepare_inputs()`**：composition_service.py 删除 ~80 行归一化函数，改为存在性校验 + 直接 `-c copy` concat（所有 slot 输出已同一分辨率/帧率/编码/48kHz 音频）
+5. **目录统一 + HF 归一化**：`slot_root()` 从 `director_output_root` 改为 `composition_output_root/job_id/slots/`；HF 产物自动加 48kHz 静音轨 wrapper
+6. **copy2 → os.replace**：5 处改为原子 replace（跨盘 fallback copy2+unlink）— composition_service.py ×4、comfyui.py `_persist_outputs`、digital_human_video.py Step E
+7. **合成后自清理 + stale job 磁盘删除**：compose 成功后 `shutil.rmtree(slots/)`；`main.py` `_auto_cleanup_stale_jobs()` 删 DB 行时同步删磁盘目录
+8. **config deprecation**：`app.yaml` 中 `director_output_root` 和 `hf_visual_root` 保留但标注 `# @deprecated`
+
+### 涉及模块
+`slot_workflows.py` / `composition_service.py` / `lit_video_builder.py` / `visual_render_service.py` / `comfyui.py` / `digital_human_video.py` / `main.py` / `data/workflows/ltx23_video_*.json`（新建）/ `config/app.yaml`
+
+### 验证
+- 所有模块 `python -m py_compile` 通过
+- 待重启后端后 E2E 验证（`reload=False` 不会自动加载）
+- 计划文件：`C:\Users\tanhaox\.claude\plans\glowing-spinning-crayon.md`
+
+---
+
+## 2026-08-01｜全项目审计修复收尾（P0×2 + P1×3 + P2×7）+ docs 全面更新同步
+
+### 改动
+- **P0-1 失败 TTS 任务 DB/磁盘脱节（方案 1：失败不删盘 + 可续传）**：`scripts/tts_client.py` 失败时不再 unlink 已生成 wav/manifest，重试跳过 `output_dir` 下已存在的 `{idx:03d}.wav` 只补缺失段；`audio.py` 失败路径保留 completed_segments、错误信息含续传提示；`tts_service.py`/`audio.py` 修复重复 AudioFile 行
+- **P0-2 video_outputs 脏路径清洗**：删 `5882f87b` 脏行（file_path 前缀错为 `E:\机器人计划\`）+ 4 个 zombie visual job 行（rendering 卡住 / failed 空），4 个残留 job 父目录整体回收站
+- **P1-1 app.js 空引用修复**：新增 `setSaveDirectorEnabled` helper 替换 5 处 `btn-save-director` 直连
+- **P1-2 app.js `renderProjectDir` 崩溃修复**：锚点改 `script-text` 父元素 + 缺失守卫，`.step:nth-of-type(2)` null 不再阻断脚本加载
+- **P1-3 library.js 崩溃修复**：`(a.tags || []).join(', ')` tags 判空
+- **P2 系列收尾**：P2-1 library HEAD 路由、P2-2 失败任务全量清理（audio_jobs 删 9、dh_videos 删 6、visual_render_jobs 删 50）、P2-3 SSE onerror 重连上限、P2-4 JSON.parse try/catch、P2-5 `.test_videos/` 回收站、P2-7 fetch r.ok 检查（P2-6 后台线程 job 丢失竞态仅记录，见报告）
+- **library.py 删除走回收站**：`_recycle_file` helper（PowerShell `Microsoft.VisualBasic.FileSystem::DeleteFile`，与 scripts.py 同源），delete_asset/delete_output 支持移入回收站
+- **docs 全面更新同步**：`backlog.md`（ID-002 状态 done、排期 #6 删除线、关联需求区补审计修复条目）、`CHANGELOG.md`、`项目状态总览.md`（最新动作区 + ID-002 已完成 + 决策表追加）、ID-002 计划文档重命名 `已完成-20260727-ID002-视觉导演Agent2.md` 并标记全阶段完成
+
+### 验证
+- ✅ P0-1：对 85 段全在盘脚本 POST 重新生成 → `completed 85/85`，fish 后端全程未拉起（全走跳过路径），新 job audio_files=86 行无重复；`tests/test_tts_service_generate.py` 3 项全过
+- ✅ P0-2/P2-2/P2-5 清理：DB 删 66 行 + 磁盘 5 处回收站（4 个 zombie job 目录 + .test_videos/），回收站核验可恢复
+- ✅ P1-1/P1-2：浏览器实测 selectAll/toggleSegment 静默成功 0 错误、112 段渲染正常、fetchScript 完整执行
+- ✅ P1-3：tags:null 坏数据不再崩溃，网格正常渲染 2 卡
+- ✅ library.py 回收站：临时 asset DELETE → HTTP 200、DB 行 0 残留、磁盘文件消失、`tmp_recycle_test.bin` 确认在回收站
+
+### 决策
+- ✅ P0-1 采用方案 1（失败不删盘 + 可续传），最贴合"重试"心智；长期方向改"磁盘实况为准"（DB 状态仅提示）
+- ✅ P0-2/P2-2 数据清理经用户确认（清掉脏数据行 / 全量清理）
+- ✅ 删除磁盘文件一律走 Windows 回收站（`file_utils.safe_trash` 因 send2trash 未装会永久删除，不可复用）
+
+---
+
+## 2026-08-02｜项目盘符迁移 C: → F: + 硬编码路径清理
+
+### 背景
+项目整体从 `C:\AI-Agent-Local\digital_human` 迁移到 `F:\AI-Agent-Local\digital_human`。迁移后若保留旧 C 盘绝对路径，会导致数据库/脚本/启动入口找不到目标，调用出错。
+
+### 改动
+- **核心配置**: [config/app.yaml](config/app.yaml) `data_dir` 从 `C:/AI-Agent-Local/digital_human/data` 改为 `"data"`，由 `app/config.py` 自动解析为项目根目录下 `data/`
+- **启动脚本**: 所有 `.bat`/`.sh` 开头统一改为 `cd /d "%~dp0"` / `cd "$(dirname "$0")"`，以脚本所在目录为项目根，不再依赖 C 盘绝对路径
+  - `launch_system.bat`、`launch_system_fixed.bat`、`launch_system_final.bat`、`launch_news_system.bat`、`simple_launch.bat`、`run_4090_gpu.bat`、`start_dashboard_simple.bat`
+  - `_run_fix.bat`、`_apply_vocab_fix.bat`、`_run_tokenizer_fix.bat`
+  - `_apply_vocab_fix.sh`
+- **Python 脚本**: 将硬编码 `C:\AI-Agent-Local\digital_human` 改为动态 `Path(__file__).resolve().parent/parents[1]`
+  - `scripts/audit_llm_slot_drift.py`、`scripts/verify_timeline.py`、`scripts/rewrite_setnode.py`
+  - `_concat_audio.py`、`_list_scripts.py`、`_apply_vocab_fix.py`、`_trigger_fix.py`
+  - `smoke_test.py`
+
+### 验证
+- ✅ 配置加载：`data_dir = F:\AI-Agent-Local\digital_human\data`
+- ✅ 数据库 URL：`sqlite:///F:\AI-Agent-Local\digital_human\data\pipeline.db`
+- ✅ `python -m uvicorn app.main:app --host 127.0.0.1 --port 54323` 正常启动
+- ✅ `GET /web/index.html` 200
+- ✅ `GET /openapi.json` 200
+- ✅ `GET /api/articles/prompt-templates` 200 并返回数据
+
+### 决策 / 排查优先级
+- 项目此前已**全链路跑通**；后续若出现「找不到文件/数据库/目录」类错误，优先排查**盘符/绝对路径是否又发生漂移**
+- 所有启动入口已改为脚本自定位，再次迁移目录时只需复制文件夹，无需再改 `.bat`/`.sh`
+- 外部资源目录（`E:/数字人计划/*`、`E:/AI/ComfyUI_windows_portable/*`）不属于本次盘符变更范围；若这些资源也迁移，需同步更新 `config/app.yaml` 中对应配置项
+
+### 孤儿文件清理
+- 清除项目根 `git ls-files --others --exclude-standard` 中历史开发残留的无引用文件 33 个，全部经 Windows 回收站安全移除
+- 包括：根目录临时脚本/配置/测试页 28 个、`data/pipeline.db.bak-*` 数据库备份 4 个、`tests/__init__.py` 1 个
+- 清理命令：`Microsoft.VisualBasic.FileIO.FileSystem::DeleteFile(path, 'OnlyErrorDialogs', 'SendToRecycleBin')`，可回收站恢复
+
+---
+
+### 改动
+- **合成视频异步化 + SSE 进度透传**：`director.py` compose 端点从同步阻塞改为后台线程执行，立即返回；`composition_service.py` 添加 `evt` 回调，每步 emit SSE 事件（`compose_start` → `compose_step` ×N → `compose_done`）；前端 `composeJob()` 点击后自动展开日志面板 + 连接 SSE，实时显示标准化/拼接/字幕/响度/校验每步进度
+- **执行日志面板 DOM 修复**：`showExecLog()` 和 `clearExecLog()` 从 `innerHTML = ''` 改为 `pre.textContent = ''`，避免销毁 `<pre id="exec-log-pre">` DOM 元素导致 SSE 事件全部静默丢弃
+- **合成去重质量优先级**：`compose_director_job` 去重逻辑从按 `updated_at` 最新者取胜改为按 workflow 质量 tier 优先级（host=0 > broll/hf=1 > black_subtitle=9），同 tier 再按 updated_at；解决 black_subtitle 重试时间戳更新覆盖所有 host slot 的 bug
+- **按钮 spinner 转圈恢复**：`appendExecEvent` 的 `exec_done` / `exec_cancelled` 事件恢复执行按钮；`compose_done` / `compose_error` 恢复合成按钮；SSE `onerror` 兜底 `_resetSpinnerBtns()`；`selectJob` 选择 executing 状态任务时自动连接 SSE
+
+### 验证
+- ✅ compose 端点异步化：POST 立即返回 `{"status": "composing"}`，SSE 实时推送 6 步进度
+- ✅ 按钮转圈恢复：exec_done / exec_cancelled / compose_done / compose_error / SSE 断连 5 条路径均恢复按钮
+- ✅ selectJob 自动 SSE：刷新页面选中 executing 任务时自动连接 SSE 接收进度
+- ✅ 合成去重修复：26 host + 35 broll + 5 hf_chart + 13 hf_title + 6 black_subtitle（之前是 0 host + 32 black_subtitle）
+
+### 决策
+- ✅ 合成从同步 POST 改为异步线程 + SSE 透传，与执行 Slots 同一套进度反馈模式
+- ✅ 合成去重按 workflow 质量 tier 优先（不是 updated_at），host 内容永远不被 black_subtitle 覆盖
+- ✅ SSE 断连时 `_resetSpinnerBtns()` 兜底恢复所有按钮，防止永远转圈
+
+---
+
+## 2026-07-31｜导演台 Slot 重试去重 + 执行日志抽屉 + black_subtitle 字体路径修复
+
+### 改动
+- **Slot 重试/去重修复**：fallback 链 `replace_failed_slot` 为同一 slot_index 创建多个 DB 行（原始标记 replaced + 新行），前端 timeline 原样展示所有行导致重复
+  - 前端 `director.js` `renderJobDetail` 按 `slot_index` 去重，同一索引只保留最新活跃条目（replaced 被新条目覆盖）
+  - 后端 `director.py` `retry_slot` 端点拒绝 `replaced` 状态（仅 `failed` 可重试），避免重试已替换的 slot
+  - 新增 `POST /jobs/{id}/purge-replaced` 端点 + 前端「🧹 清理已替换」按钮，批量删除所有 `replaced` 状态的 slot 记录
+- **执行日志固定底部抽屉**：`#exec-log` 面板从 grid 右列内部移到 `<body>` 末尾
+  - CSS 改为 `position: fixed; bottom: 0; z-index: 200; height: 260px` + 毛玻璃背景 + 蓝色顶边发光 + `transform` 滑入动画
+  - JS 定时器管理重构：引入 `_sseCollapseTimer` 独立变量，`disconnectSSE` 不再自动排收起定时器，仅 `plan_error`/`plan_done`/`exec_done` 等 terminal 事件后由 `_scheduleCollapse()` 3s 自动收起
+  - `body.log-open` class 适配 toast 位置（`bottom: 280px`）
+- **black_subtitle ffmpeg fontfile 路径修复**：`slot_workflows.py` 中 `execute_black_subtitle_slot` 的字体路径从 `r"C\\:/Windows/Fonts/msyh.ttc"`（raw 字符串产生双反斜杠 `C\\:`）改为 `"C\\:/Windows/Fonts/msyh.ttc"`（单反斜杠 `C\:`），ffmpeg 在单引号内 `\:` 正确转义驱动器号冒号
+
+### 验证
+- ✅ hf_chart 单 slot 执行 29.1s 成功（333KB MP4 输出）
+- ✅ hf_title 单 slot 执行 20.9s 成功（415KB MP4 输出）
+- ✅ black_subtitle ffmpeg 命令 Python subprocess 直测通过（单反斜杠）
+- ✅ 最新任务 41 个 failed slot 全部为 black_subtitle（fontfile bug），HF 渲染管线无 bug
+
+### 决策
+- ✅ 前端按 slot_index 去重显示（不修改后端 fallback 链逻辑），后端仅新增 purge 端点供手动清理
+- ✅ 执行日志从 grid 内部提升为 body 级固定抽屉，不受页面布局影响
+- ✅ `replaced` 为终态，禁止重试（只能重试 `failed` 状态的 slot）
+
+---
+
+## 2026-07-31｜视频库：素材库 + 成品库 全链路落地
+
+### 改动
+- **DB 模型**：`app/models.py` 新增 `VideoAsset`（素材库 16 字段：source/pexels_id/file_path/orientation/width/height/duration_sec/description_en/description_zh/photographer/source_url/category/tags/liked/used_count）+ `VideoOutput`（成品库 8 字段：job_id/title/file_path/orientation/duration_sec/video_format/description）
+- **素材库 API**：`app/routers/library.py` — `GET /assets`（关键词搜索+画幅/大类/赞筛选）+ `GET /assets/{id}` + `GET /assets/{id}/file`（视频流）+ `PUT /assets/{id}`（编辑描述/大类/标签）+ `POST /assets/{id}/like`（切换赞）+ `DELETE /assets/{id}` + `GET /categories` + `GET /tags`
+- **成品库 API**：同上 — `GET /outputs`（搜索+筛选）+ `GET /outputs/{id}/file` + `DELETE /outputs/{id}`
+- **Pexels 自动入库**：`pexels_service.py` 新增 `_register_video_asset()`，在 `_process_candidates` 下载成功后调用，按 pexels_id 去重写入 VideoAsset，带画幅/时长/摄影师/标签
+- **Compose 自动登记**：`director.py` compose 端点在合成成功后自动创建 VideoOutput 行（标题取脚本前 30 字，关联 job_id + 画幅 + 时长）
+- **前端页面**：`web/library.html` + `library.js` + `library.css` — 双 Tab（📦 素材库 / 🎬 成品库）+ 搜索防抖 + 画幅/大类筛选 + 仅赞过滤 + 视频预览 + 编辑弹窗（中文描述/大类/标签）+ 赞切换 + 删除 + 深色主题
+- **全站导航**：9 个页面（index/director/library/templates/visual_render/voices/roles/personas/digital_human_video）统一加「视频库」链接
+
+### 验证
+- ✅ 素材库 API 端点可访问（list/search/like/edit/delete/categories/tags）
+- ✅ 成品库 API 端点可访问（list/file/delete）
+- ✅ Pexels 下载 → VideoAsset 自动入库（pexels_id 去重）
+- ✅ Compose 成功 → VideoOutput 自动登记
+- ✅ 9 页导航均包含「视频库」链接
+
+### 决策
+- ✅ 素材库与成品库共用同一 router（`/api/library`），前端用 Tab 切换，不拆两个页面
+- ✅ Pexels 下载自动入库不增加额外接口，在现有 resolve 流程中透明写入
+- ✅ Compose 自动登记失败不阻塞主流程（try/except + warning log）
+
+---
+
+## 2026-07-30｜导演台执行引擎健壮性大修 + 前端交互完善
+
+### 改动
+- **大文件上传修复**：`app/main.py` 将 `BaseHTTPMiddleware`（会缓冲请求体导致大文件上传失败）替换为纯 ASGI 中间件，仅修改响应头不触碰请求体
+- **HF 渲染死锁修复**：`app/services/hf_client.py` 将 `subprocess.run(timeout=)` 改为 `Popen` + `communicate(timeout=)` + Windows `taskkill /F /T` 杀整棵进程树（npx→node→chromium），解决管道继承导致 communicate 死锁
+- **GPU 服务失败优雅降级**：`slot_executor.py` 中 GPU session 启动失败不再炸掉整个任务，标记该阶段 slot 为 failed 后继续后续 Phase；`_handle_fallbacks` 中 ComfyUI session 同样加 try/except
+- **ComfyUI 便携版 numpy 修复**：numpy 2.3.5 → 2.2.6，解决 scipy.ndimage 循环导入崩溃
+- **Host–Persona–Role 关联链修复**：`slot_workflows.py` 中 `execute_host_slot` 通过 `Host.persona_key` 前缀匹配 `Persona.prompt_template` → `Persona.role.view_groups` 获取机位图，解决 Host 对象无 view_groups 属性的 AttributeError
+- **replaced 状态不再被重复执行**：`execute_all_slots` 收集 pending 时只取 `queued` 状态，`replaced` 为终态不再参与执行
+- **僵尸 executing 状态检测**：`retry-workflow` 端点检测 job_id 不在 `_executing_jobs` 集合时自动修正为 reviewing
+- **Slot 重试不再创建重复 slot**：`retry_slot` 端点改为在原 slot 上重置为 queued 并重新执行，不走 fallback 链
+- **black_subtitle ffmpeg 转义修复**：去除情绪标签 `[calm]`、`||` 分隔符，完整转义 `\ ' : [ ] | %`
+- **Slot 详情面板一闪而过修复**：用 `_selectedSlotIdx` 记住展开状态，轮询时保持展开而非强制关闭
+- **Workflow 类型中文化**：`WF_LABELS` 映射表（host→数字人、broll_pexels→下载素材、hf_chart→HF图表 等）
+- **停止/取消按钮**：后端 `POST /jobs/{id}/cancel` + 前端 `■ 停止` 按钮（仅执行中显示）；后台线程在每个 phase 边界检查取消标志
+- **重试按钮策略**：执行中隐藏重试和批量重试按钮，非执行时仅 failed 状态可点
+- **按 workflow 批量重试**：后端 `POST /jobs/{id}/retry-workflow?workflow=host` 重置所有该类型 failed slot 为 queued；前端「重试同类」按钮
+- **执行日志收起后无法重新打开**：在操作按钮组加始终可见的「📡 日志」切换按钮
+
+### 验证
+- ✅ `retry-workflow(host)` → 200，成功重置 failed slot
+- ✅ `cancel` → 409（正确拒绝非 executing 状态）
+- ✅ ComfyUI 拉起后 host slot 正确取到 view_groups 机位图并提交 prompt
+- ✅ black_subtitle 含特殊字符文本不再崩溃
+- ✅ 重复 slot 清理脚本删除 273 条历史记录
+
+### 决策
+- ✅ 手动重试 = 原 slot 重置重跑，不走 fallback 链（fallback 是自动降级逻辑）
+- ✅ 执行中禁止重试操作，避免 GPU 抢占冲突
+- ✅ `replaced` 为终态，不再参与执行循环
+
+---
+
+## 2026-07-29｜导演台执行引擎重构 + 人物关联 + 全站导航统一
+
+### 改动
+- **PEXELS_API_KEY 加载修复**：`app/config.py` 新增 `_load_dotenv()` 轻量 .env 加载器（无第三方依赖，`os.environ.setdefault` 不覆盖已有变量），解决 .env 有 key 但进程从未读取的问题
+- **ComfyUI 纳入 GPU 托管**：`gpu_service_manager.py` `_BUILTIN_SPECS` 新增 `comfyui` 条目（`E:/AI/ComfyUI_windows_portable`，`CUDA_VISIBLE_DEVICES=0`），`execute_all_slots` 用 `session("comfyui")` 包裹 host/mixed 批次，导演台 retry 同理 → ComfyUI 按需拉起、空闲自动关停
+- **执行模型重构为 Phase 调度**（`slot_executor.py` 核心重写）：
+  - 原逻辑按时间序逐个执行 → 新逻辑按 workflow 类型分 4 阶段批量执行：Phase 1 ComfyUI(host/mixed) → Phase 2 Pexels → Phase 3 HF → Phase 4 本地
+  - 收益：30 段音频中若仅 4-5 段需 ComfyUI，只拉起一次 session 跑完，而非 30 次
+  - Fallback 集中兜底：`_handle_fallbacks` 非 GPU 步骤立即重试，GPU 步骤攒一批一个 session
+- **相邻约束 + 参考来源段处理**：
+  - `director_service.py` 新增 `_enforce_adjacency_rules`：host 不能挨 host、HF 不能挨 HF（交换策略）
+  - `script_parser.py` 新增 references 段检测（`_REFERENCE_HEADER_RE` + `_NUMBERED_URL_RE`），标记 `selected_for_host=False`
+  - 参考来源自动追加 `hf_title` slot（`no_voiceover=True`，轻音乐带过）
+  - `visual_director_v2.txt` prompt 规则同步更新
+- **人物关联（Persona）功能**：
+  - `app/models.py` 新增 `Persona` 表（`prompt_template` unique + `voice_id` FK + `role_id` FK）
+  - `app/routers/personas.py`：CRUD + `GET /api/personas/by-template/{name}` 流水线联动查询
+  - `web/personas.html`：人物管理页面（暗色主题 CRUD UI）
+  - `web/app.js`：流水线选模板后自动查询 Persona → 锁定音色/形象下拉框（disabled + 锁定提示条）
+- **全站导航 UI 统一**：8 个页面（index/director/templates/visual_render/voices/roles/personas/digital_human_video）顶部导航与 director.html 看齐 — sticky 毛玻璃 56px 导航条 + 7 链接 + active 高亮 + API Docs
+
+### 验证
+- ✅ Pexels API 返回 200（key 生效）
+- ✅ `POST /api/personas` 创建成功，voice/role 关联正确返回
+- ✅ `GET /api/personas/by-template/laochen_v3` 精确命中
+- ✅ 8 个页面导航结构一致（7 链接 + 正确 active）
+- ✅ 所有页面 HTTP 200 可访问
+
+### 决策
+- ✅ 执行模型从"逐段顺序"改为"按 workflow 类型分 Phase 批量"，ComfyUI 单次 session 跑完所有 host/mixed slot
+- ✅ 提示词模板 + 音色 + 形象三维绑定为"一套人物"（Persona），流水线选模板后音色/形象自动锁定不可更改
+- ✅ 全站导航以 director.html 为基准统一（sticky 毛玻璃 + 蓝紫渐变 logo + 7 链接）
+
+### 已知问题（未修，仅记录）
+- ⚠️ 导演台任务跑到“执行 Slots”阶段后服务死掉（Phase 调度重构后首次实跑命中）；另 director.html 在调不存在的 `GET /api/scripts` 接口（404）。详见 `docs/backlog.md` **ID-009**（P0）。
+
+---
+
+## 2026-07-29｜音频质量三连修（残音 / 极短句 / alignment 500）+ 流水线→导演台衔接
+
+### 改动
+- **`scripts/tts_client.py` 修残音与切分错位**（问题①）
+  - `_tts_text` 新增两条清理：批量拼接产生的 `句。||下一句`→`句。，下一句` 中句号后逗号会让 TTS 念出可听残音，现予剔除；行首多余逗号同步去除
+  - `_split_wav_by_silence` 切分算法重写：原“取前 N-1 个静音点”会把句内逗号停顿误当句界（实证：11 字句配 22.23s、大段文字仅 0.37s）。新算法按清洗后字数比例算预期边界，在容差 `max(0.9s, 0.35×平均句长)` 内吸附最近静音区间中点，超容差则直接用预期点
+- **`app/services/script_parser.py` 修极短句**（问题②）：新增 `_effective_len`（去标签/停顿符/标点后字数）+ `_merge_short_sentences`，有效字数 <10 的句子（约 <2s）合并进相邻句，消除“您好”“哎呦”类碎音频
+- **服务器解释器切换 `.venv`**（问题③）：导演台 `alignment failed: type_error.302` 根因是 54321 服务器跑在系统 Python（ctranslate2 4.6.0 nlohmann json bug），代码相同下 .venv（ctranslate2 4.8.1）完全正常。已用 `.venv\Scripts\python.exe` 重启
+- **流水线→导演台衔接**：`app.js` 音频完成（tts_done）后弹出 8s 倒计时横幅自动跳转 `director.html?script_id=..&audio_id=..&auto=1`（可取消/立即进入）；`director.html` 解析 URL 参数自动预填并建任务，`history.replaceState` 防刷新重复建
+- **`gpu_service_manager.py` 强制释放兜底**：`_force_free_port` 在杀进程树后端口仍 LISTENING 时按端口反查 PID 逐个 `taskkill /T /F`（最多 3 轮）——venv launcher 派生的工作进程不在 Popen 句柄树内，此兜底实测真实触发
+- **桌面启动 bat 升级**：`findstr` 加 `LISTENING` 过滤（防误杀浏览器连接方）、新增 7860/7861/7862 TTS 孤儿进程清理、解释器改用 `.venv`
+
+### 验证
+- ✅ `tmp/test_fixes.py`：短句合并 + 标点清理全 PASS
+- ✅ alignment 复现脚本：同一音频系统 Python 复现 type_error.302，.venv 下 ok=True 返回 29 条 timings
+- ✅ 重启后进程模块检查：54321 监听进程加载 92 个 `.venv` 模块、0 个系统 site-packages 模块（venv launcher 派生的 `Python311\python.exe` 子进程属正常机制）
+- ✅ GPU 服务闭环实测：IndexTTS2 拉起→释放→Fish 拉起→释放→强杀兜底成功
+- ✅ 流水线→导演台衔接浏览器实测 4 项全过
+
+### 决策
+- ✅ 服务器一律用 `.venv` 解释器启动（bat 与手动均是）；系统 Python 的 ctranslate2 4.6.0 有序列化 bug 不再使用
+- ✅ 分句最短限制定为有效 10 字（中文口播 4-5 字/秒 ≈ 2s 底线）
+
+---
+
+## 2026-07-29｜TTS GPU 服务托管（按需启动 / 排队 / 空闲自动关停）
+
+### 改动
+- **新建 `app/services/gpu_service_manager.py`**：单卡 4090 的 TTS 服务生命周期管理器
+  - 生成语音/试听/抽卡时自动健康检查，服务不在线则用对应 venv 自动拉起（fish 7860 / f5 7861 / indextts 7862，启动命令内置，可在 `app.yaml tts_services` 覆盖）
+  - 全局 GPU 锁串行排队；拉起新服务前先停掉托管的其他 TTS 服务腾显存
+  - 看门狗线程：空闲超过 `idle_timeout_sec`（默认 180s，0=立即）自动 taskkill 进程树释放显存，给 ComfyUI/LTX 让路
+  - 外部手动启动的服务只用不杀；应用退出时杀掉所有托管进程不留孤儿
+- **接入点**：`audio.py _do_tts`（生成语音）、`voices.py` 试听/抽卡/锚点三入口
+- **新 API**：`GET /api/tts-services/status`（健康/托管/排队状态）、`POST /api/tts-services/stop-all`（手动腾显存）
+- **前端**：生成音频 SSE 新增 `tts_service` 事件，展示“正在启动 IndexTTS2 服务…”等状态
+- **附带修复**：音色下拉框页面初始化即加载（原先只在洗稿完成后加载，造成“无法使用”）+ 默认音色占位项
+
+### 验证
+- ✅ E2E 实测：7862 离线 → 试听请求 → 自动拉起 IndexTTS2（模型加载 ~2min）→ HTTP 200 出 wav（cuda）→ 空闲 180s 后看门狗自动杀进程，端口释放
+
+### 决策
+- ✅ TTS 服务不常驻：单 4090 必须在 TTS 与 ComfyUI/LTX 之间腾换显存
+- ✅ `auto_manage: false` 可一键回退到手动启动服务的旧行为
+
+---
+
+## 2026-07-28｜前端 UI 全面升级 + 提示词模板管理
+
+### 改动
+- **前端设计系统升级**：统一深色主题 + 玻璃拟态 + 径向渐变光晕 + 蓝紫渐变文字
+  - 所有页面共享同一套 CSS 变量系统（`--bg-primary` / `--bg-card` / `--accent` / `--violet` 等）
+  - 统一导航栏（6 页互链：流水线 / 导演控制台 / 模板管理 / 视觉渲染 / 音色管理 / 角色管理）
+- **新建 `web/director.html` 导演控制台**（ID-002 前端）
+  - 4 步流程指示器（创建→执行→合成→下载）+ IntersectionObserver 滚动自动高亮
+  - 左右两栏布局（任务列表 340px + 详情面板）
+  - Slot 时间轴可视化（横向彩色条，颜色区分 queued/running/completed/failed）
+  - 4 格统计面板（总/完成/执行中/失败）+ 自动轮询（3s）+ Toast 通知
+- **重写 `web/index.html` 流水线页面**
+  - 3 步流程（输入文章 → AI 洗稿 → 生成音频），移除冗余的"分段/导演选择"步骤
+  - AI 洗稿步骤新增"数字人/提示词模板"下拉选择器（动态加载 `config/*.txt`）
+  - 保留所有 app.js 所需 element ID，完全兼容
+- **新建 `web/templates.html` 提示词模板管理页面**
+  - 上传新模板：输入名称 + 拖拽/点击上传 .txt → 保存到 `config/` 目录
+  - 模板列表展示（大小、内置标识）
+  - 改名功能：弹窗输入新名称 → `PUT /api/articles/prompt-templates/{id}`
+  - 删除功能：非内置模板可删除（`laochen_default` 受保护）
+- **后端新增 4 个 API 端点**（`app/routers/articles.py`）
+  - `GET /api/articles/prompt-templates` — 列出可用模板
+  - `POST /api/articles/prompt-templates/upload` — 上传新模板
+  - `PUT /api/articles/prompt-templates/{id}` — 重命名模板
+  - `DELETE /api/articles/prompt-templates/{id}` — 删除模板
+
+### 决策
+- ✅ 段落选择功能保留在流水线"生成音频"步骤内（`selected_for_host` 决定 TTS 范围）
+- ✅ 移除"保存导演选择"按钮和拖拽排序功能（由导演控制台负责）
+- ✅ 扩展方式：新增数字人只需在 `config/` 下放 `{name}.txt`，前端自动识别
+
+---
+
+## 2026-07-27｜视觉导演 Agent 2.0 后端 E2E 跑通（ID-002 续）
+
+### 改动
+- **`config/visual_director_v2.txt`**：prompt 改为输出 slot 工序单(`slot_index` / `start_sec` / `end_sec` / `workflow` / `params`),不再走旧 line_id + material_source 包裹结构
+- **`app/services/director_service.py::_parse_llm_plan`**：自动检测新/旧 schema,新 schema 直接解析 slot 字段,旧 schema 走 `_parse_legacy_row` 兼容分支
+- **`_enforce_host_rules`**：first/last slot 强制 host;无中间 host 时强制中间 pivot 为 host
+- **`replace_failed_slot`**：默认 fallback chain = broll_pexels → broll_local → host → hf_chart/hf_title → black_subtitle
+
+### 验证(离线 4 项断言全通过)
+- ✅ 新 prompt 7-slot JSON → 7 slot 落库,first/last host,mixed_host_broll 保留
+- ✅ 3-slot 全 broll 边界 → first/last/middle 全部被强制为 host
+- ✅ 7 个 workflow 在 `_WORKFLOW_HANDLERS` 全部注册(host / broll_local / broll_pexels / hf_chart / hf_title / mixed_host_broll / black_subtitle)
+- ✅ `replace_failed_slot(broll_pexels → broll_local)` 推进 fallback chain,新 slot status=queued
+
+### 决策
+- ✅ schema 双兼容:新 prompt 是默认路径,旧 prompt(若有残留脚本)走 legacy 分支不再报错
+- ✅ backend E2E 离线验证完成;前端 UI 待补
+- ⏸  端到端通过真实 uvicorn + ComfyUI 联调,需要 GPU 服务在线;本次仅做算法路径验证
+
+---
+
+## 2026-07-27｜视觉导演 Agent 2.0 需求确认 + 开发计划启动（ID-002）
+
+### 改动
+- **ID-002：视觉导演 Agent 2.0 方案确认并启动开发**
+  - 导演角色重新定位：从"每句分配画面"升级为"音频时间轴上的大 Agent"，输出按 slot 组织的工序单
+  - 新增 `docs/improvements/进行中-20260727-ID002-视觉导演Agent2.md` 作为阶段 checkpoints
+  - 新增数据模型规划：`director_jobs` / `director_slots`
+  - 新增服务层规划：`alignment_service.py`(Whisper 对齐) / `director_service.py`(大导演) / `slot_executor.py`(slot 执行+替换) / `composition_service.py`(合成)
+  - 新增路由规划：`app/routers/director.py`
+
+### 决策
+- ✅ 废弃原 ID-007 "选句子 + 拖拽排序" UI 作为导演强依赖，保留字段兼容旧数据
+- ✅ 导演触发时机后移到**整段 TTS 音频生成后**，用 Whisper forced alignment 获取真实时间轴
+- ✅ IndexTTS2(端口 7862) 作为 A 管线财经主线主力 TTS
+- ✅ slot workflow 类型：`host` / `broll_pexels` / `broll_local` / `hf_chart` / `hf_title` / `mixed_host_broll`
+- ✅ 主持人出场策略：最后一句 CTA 必须 host；中间 0-1 次 host
+- ✅ 失败替换优先级：broll_pexels → broll_local → host → hf_chart/hf_title → 黑场+字幕保底
+- ✅ 开发顺序：先 ID-002 后端接口跑通；ID-003 Pexels resolve 用 mock/最小清单延后实现
+- ✅ 前后端顺序：先后端 E2E 再补前端 UI
+
+---
+
+## 2026-07-27｜Web UI 导演选择体验优化（ID-007）+ URL 抓取/模型开关（ID-001/008）
+
+### 改动
+- **ID-007：分段导演选择 UI 优化**
+  - `web/index.html` 步③ 增加"全选/取消全选"按钮、拖拽提示、已选句数/预估总时长
+  - `web/app.js` 重写 `renderSegments()`：
+    - 显示 `segment_type` 中文标签（开场/钩子/正文/行动/结尾）与 `estimated_duration`
+    - 已选段左侧显示 ☰ 拖拽手柄，支持 HTML5 drag-and-drop 调整 `host_order`
+    - 未选段按 `line_index` 排序，不参与拖拽
+    - 保存时先调用 `POST /api/scripts/{id}/segments/reorder` 批量更新顺序，再 `PUT /api/segments/{id}` 更新选择状态
+- **ID-001：URL 自动抓取标题和正文**
+  - 新增 `app/services/url_fetcher.py`：分层解析（Toutiao 站点规则 → JSON-LD articleBody → meta/paragraph 回退）+ 真实浏览器 UA/Referer + 15s 超时
+  - `app/routers/articles.py` 新增 `POST /api/articles/fetch-url`
+  - `web/index.html` 增加 "🌐 抓取 URL" 按钮；`web/app.js` 新增 `fetchUrl()` 自动填入标题和正文
+- **ID-008：洗稿模型选择开关**
+  - `web/index.html` 步② 在"开始洗稿"旁增加 `<select id="rewrite-model">`（flash / pro）
+  - `web/app.js` 的 `rewriteArticle()` 将选中 `model` 透传至 `/api/articles/{id}/rewrite`
+
+### 决策
+- ✅ 导演选择保存顺序改为先 `reorder` 再批量 `selected_for_host`，减少 PUT 次数
+- ✅ 拖拽仅作用于已选段，避免未选段混入排序
+- ✅ URL 抓取失败不阻塞用户手动粘贴，前端明确提示
+
+---
+
+## 2026-07-26｜HF 视觉渲染模块接入 54321 Web
+
+### 改动
+- **新能力：HF (HyperFrames) 视觉渲染**(纯静态模板 + GSAP 时间轴 → MP4 + 关键帧 + manifest) — **独立管线**,不接 ComfyUI、不占 GPU、不与数字人视频状态机耦合
+  - 单一模板 `news-data-v1` v1.0.0(composition_id=`news_main`,来源 `E:/AI/digital_human/hf_prep/test_demo/`,5-30s)
+  - 后端：`app/routers/visual_render.py` 8 端点(`templates` / `jobs` CRUD / `generate` 同步 / `download` mp4 / `frames/{first,middle,final}` / `delete`)
+  - 服务层(4 文件,4 层职责):
+    - `app/services/hf_client.py` — `npx hyperframes render . -o visual_segment.mp4` 的 subprocess 封装,300s 硬超时 + stdout/stderr 落 `render.log`
+    - `app/services/template_library.py` — `TEMPLATES` 字典 + `list/get/resolve/validate_input`,附 jsonschema `title/subtitle/metrics[1-4]/chart/caption/source/duration_sec/assets`
+    - `app/services/template_filler.py` — 复制模板源到 `<hf_visual_root>/<job_id>/` + `input.json` 落盘 + `{{KEY}}` 白名单占位符替换(26 个安全 key)
+    - `app/services/visual_render_service.py` — 6 步编排(preparing → rendering → validating → completed/failed),ffprobe 校验 h264/1080×1920/fps/duration,ffmpeg 抽 first/middle/final 三帧,`render_manifest.json` 落盘
+  - 数据模型：`app/models.py` 新增 `VisualRenderJob` 表(19 字段,独立 `visual_render_jobs` 表),状态机 `queued → preparing → rendering → validating → completed/failed/cancelled`
+  - 配置：`config/app.yaml` Defaults 加 4 个 key(`hyperframes_bin=npx` / `hf_render_timeout_sec=300` / `hf_visual_root=E:/数字人计划/hf_visual` / `hf_template_root=E:/AI/digital_human/hf_prep`)
+  - Pydantic：`app/schemas.py` 加 `VisualRenderJobCreate/Out` / `TemplateInfo` / `GenerateVisualResponse`
+  - 前端：`web/visual_render.html` 4 步 SPA(选模板 → 动态表单填入参 → 提交 + 2s 轮询 → 历史 + 视频预览 + 3 帧缩略图 + 下载);`web/index.html` 顶部导航新增 "🎨 视觉渲染"
+- **持久化**：产物落 `E:/数字人计划/hf_visual/<job_id>/{input.json, index.html, avatar.b64, render.log, render_manifest.json, rendered/visual_segment.mp4, rendered/frames/{first,middle,final}.png}`
+- **模板抽象约定**：模板 `index.html` 须满足 — 唯一 `data-composition-id` + `data-duration` + `.clip` 类 + GSAP 时间轴 paused + 无 `Date.now()/performance.now()/未种子化 Math.random()` + 无 `file:///` 图片 + 无 mouse/scroll/hover 依赖
+
+### 决策
+- ✅ HF **不**接 ComfyUI / **不**占 4090 引用计数(CPU/Chrome 渲染,独立进程)
+- ✅ HF **不**与 `DigitalHumanVideo` 状态机耦合 — 独立表独立服务独立 status 字段
+- ✅ **不**批量创建 30~60 个模板;只 1 个 `news-data-v1`,只为未来扩展(comparison-chart-v1 / title-card-v1 / quote-card-v1 / timeline-v1)**预留接口位**而不实现
+- ✅ **不**让模板内部调用 DeepSeek / Fish Speech / ComfyUI(模板是纯静态 + GSAP)
+- ✅ **不**每次请求从零生成 HTML — 模板是项目侧固定文件,只做占位符替换
+- ✅ **不**把 `template_id`/`composition_id`/`renderer_version` 硬编码进生产逻辑,均走 schema
+- ✅ 子进程硬超时 300s,超时 → `status=failed` + `error_code="TIMEOUT"`
+- ✅ 占位符替换走 26-key 白名单,防 LLM 注入
+- ✅ 渲染成功判定必须 ffprobe(h264 + 1080×1920 + 30fps + duration 与 `data-duration` 一致 ±2s 软警告),**不**仅凭 HTTP 200
+- ✅ 删除走 send2trash(CLAUDE.md 铁律),shutil.rmtree 仅作兜底
+- ⏳ 同步执行 + 2s 轮询(MVP);异步队列 + SSE + 取消端点留 backlog
+- ⏳ DeepSeek 自动选模板 / `config/visual_director_v2.txt` 的 `render_config` schema 接入留 ID-002 后续
 
 ---
 

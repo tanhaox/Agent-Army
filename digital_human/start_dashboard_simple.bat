@@ -1,5 +1,5 @@
 @echo off
-cd /d C:\AI-Agent-Local
+cd /d "%~dp0"
 
 echo 正在启动新闻爬虫...
 python run_crawler.py

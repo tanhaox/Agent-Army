@@ -34,12 +34,17 @@ def ffprobe_metadata(media_path: Path) -> dict[str, Any]:
     if not shutil.which("ffprobe"):
         return {"available": False, "reason": "ffprobe not on PATH"}
     try:
+        # On Windows, ffprobe's child process may write a final stderr chunk in
+        # GBK-decodable bytes that the parent reader-thread fails on, leaving
+        # ``r.stdout`` as ``None``. Forcing UTF-8 with replacement sidesteps
+        # the gbk codec error inside the reader thread.
         r = subprocess.run(
             [
                 "ffprobe", "-v", "error", "-print_format", "json",
                 "-show_streams", "-show_format", str(media_path),
             ],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=30,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.warning("ffprobe failed for %s: %s", media_path, exc)
@@ -47,6 +52,9 @@ def ffprobe_metadata(media_path: Path) -> dict[str, Any]:
 
     if r.returncode != 0:
         return {"available": True, "error": r.stderr[:300]}
+
+    if not r.stdout:
+        return {"available": True, "error": "ffprobe returned empty stdout"}
 
     try:
         return {"available": True, **json.loads(r.stdout)}
@@ -66,22 +74,30 @@ def validate_mp4(
 
     返回:
       ok: bool
-      issues: list[str]
+      issues: list[str]     — 致命错误 (阻断 completed)
+      warnings: list[str]   — 非致命提示 (不阻断,供 manifest 留痕)
       meta: dict (含 has_audio_stream, duration_actual, fps_actual, frame_count)
+
+    ⚠️ 2026-07-26 P0-3 调整: Hermes 已验证修复版 workflow 输出 239 帧 = 8*29+7,
+    这是 LTX23 latent 实际行为;8n+1 检查降为 warning,不再阻断 ok.
+    保留硬约束三件套: 视频流 / 音频流 / fps 匹配 / 时长区间.
     """
     issues: list[str] = []
+    warnings: list[str] = []
     meta = ffprobe_metadata(mp4_path)
 
     if not meta.get("available"):
         return {
             "ok": False,
             "issues": [meta.get("reason", "ffprobe unavailable")],
+            "warnings": warnings,
             "meta": meta,
         }
     if meta.get("error"):
         return {
             "ok": False,
             "issues": ["ffprobe error: " + str(meta["error"])],
+            "warnings": warnings,
             "meta": meta,
         }
 
@@ -116,9 +132,12 @@ def validate_mp4(
                         f"frame count mismatch: expected ~{expected_nb}, "
                         f"got {frame_count}"
                     )
+                # 2026-07-26 P0-3: Hermes 修复版输出 239 帧 = 8*29+7,
+                # 是 LTX23 latent 实际行为,降为 warning 不阻断 ok.
                 if frame_count >= 2 and (frame_count - 1) % 8 != 0:
-                    issues.append(
-                        f"frame count {frame_count} NOT aligned to 8n+1"
+                    warnings.append(
+                        f"frame count {frame_count} NOT aligned to 8n+1 "
+                        f"(LTX23 latent 行为,Hermes 已验证可接受)"
                     )
             except (ValueError, TypeError):
                 pass
@@ -141,6 +160,7 @@ def validate_mp4(
     return {
         "ok": not issues,
         "issues": issues,
+        "warnings": warnings,
         "meta": {
             "has_audio_stream": has_audio_stream,
             "duration_actual": duration_actual,

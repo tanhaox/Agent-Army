@@ -41,7 +41,7 @@ async def job_events(request: Request, job_id: str):
                 try:
                     data = await asyncio.wait_for(queue.get(), timeout=30.0)
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                    if data.get("type") in ("rewrite_done", "rewrite_error", "tts_done", "tts_error", "carnival_done", "carnival_error"):
+                    if data.get("type") in ("rewrite_done", "rewrite_error", "tts_done", "tts_error", "carnival_done", "carnival_error", "correct_done", "correct_error"):
                         break
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"

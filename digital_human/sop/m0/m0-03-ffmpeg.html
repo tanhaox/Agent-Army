@@ -167,7 +167,7 @@ h2{font-size:17px;margin-bottom:10px;color:var(--accent);border-bottom:1px solid
       <strong>目的</strong>:验证 FFmpeg 能正常拼接视频<br>
       <strong>准备</strong>: 复制 SadTalker 输出的 <code>full.mp4</code> 到 <code>test1.mp4</code> 和 <code>test2.mp4</code><br>
       <strong>命令</strong>:
-      <div class="cmd">cd C:\AI-Agent-Local\数字人计划\m0-test
+      <div class="cmd">cd F:\AI-Agent-Local\数字人计划\m0-test
 copy SadTalker\results\<日期>\full.mp4 test1.mp4
 copy SadTalker\results\<日期>\full.mp4 test2.mp4
 ffmpeg -f concat -safe 0 -i filelist.txt -c copy test_concat.mp4</div>
@@ -210,8 +210,8 @@ file 'test2.mp4'</div>
     </label>
     <div class="task-body">
       <strong>命令</strong>:
-      <div class="cmd">cd C:\AI-Agent-Local\数字人计划\SadTalker
-python inference.py --driven_audio C:\AI-Agent-Local\数字人计划\m0-test\news_30s.mp3 --source_image C:\AI-Agent-Local\数字人计划\m0-test\avatar.jpg --result_dir C:\AI-Agent-Local\数字人计划\m0-test\results --enhancer gfpgan</div>
+      <div class="cmd">cd F:\AI-Agent-Local\数字人计划\SadTalker
+python inference.py --driven_audio F:\AI-Agent-Local\数字人计划\m0-test\news_30s.mp3 --source_image F:\AI-Agent-Local\数字人计划\m0-test\avatar.jpg --result_dir F:\AI-Agent-Local\数字人计划\m0-test\results --enhancer gfpgan</div>
       <strong>期望</strong>:
       <ul style="padding-left:20px;font-size:12px">
         <li>耗时 60-120 秒(3060 / 4060)</li>
@@ -233,7 +233,7 @@ python inference.py --driven_audio C:\AI-Agent-Local\数字人计划\m0-test\new
     </label>
     <div class="task-body">
       <strong>命令</strong>(关键步骤):
-      <div class="cmd">cd C:\AI-Agent-Local\数字人计划\m0-test
+      <div class="cmd">cd F:\AI-Agent-Local\数字人计划\m0-test
 ffmpeg -i results\<时间戳>\full.mp4 -i news_30s.mp3 -c:v copy -c:a aac -shortest demo_final.mp4</div>
       <strong>参数说明</strong>:
       <ul style="padding-left:20px;font-size:12px">

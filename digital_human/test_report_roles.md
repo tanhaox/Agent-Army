@@ -269,7 +269,7 @@ if status == "completed":
 
 1. **重启 54321 服务,显式走 `run_web.py` 入口**
    ```bash
-   cd C:\AI-Agent-Local\digital_human
+   cd F:\AI-Agent-Local\digital_human
    python run_web.py          # 该文件已存在,显式读 cfg.app.port(应该 =54321)
    ```
    启动后 `curl http://127.0.0.1:54321/openapi.json | jq '.paths | keys'` 验证:

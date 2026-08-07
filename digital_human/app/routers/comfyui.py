@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import time
 import uuid
@@ -315,7 +316,11 @@ def _persist_outputs(
         view_name = view_order[i]
         ext = src.suffix or ".png"
         dest = out_dir / f"{view_name}{ext}"
-        shutil.copy2(str(src), str(dest))
+        try:
+            os.replace(str(src), str(dest))
+        except OSError:
+            shutil.copy2(str(src), str(dest))
+            src.unlink(missing_ok=True)
         views[view_name] = str(dest)
     return views
 
@@ -325,15 +330,27 @@ def _persist_outputs(
 # ---------------------------------------------------------------------------
 @router.get("/health")
 def comfyui_health():
-    """探测 ComfyUI 服务是否在线 (GET /)."""
+    """探测 ComfyUI 服务是否在线 (GET /) 并返回本机 ffmpeg 状态."""
     cfg = get_config()
     base = cfg.defaults.base_url_comfyui
     try:
         with httpx.Client(timeout=5.0) as client:
             r = client.get(base.rstrip("/") + "/")
-        return {"online": True, "base_url": base, "status_code": r.status_code}
+        online = True
+        status_code = r.status_code
+        error = None
     except httpx.RequestError as exc:
-        return {"online": False, "base_url": base, "error": str(exc)}
+        online = False
+        status_code = None
+        error = str(exc)
+    return {
+        "online": online,
+        "base_url": base,
+        "status_code": status_code,
+        "error": error,
+        "ffmpeg": shutil.which("ffmpeg"),
+        "ffprobe": shutil.which("ffprobe"),
+    }
 
 
 @router.get("/workflows", response_model=list[ComfyUIWorkflowInfo])

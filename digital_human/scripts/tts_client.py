@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import logging
 import re
 import shutil
 import subprocess
@@ -53,6 +54,9 @@ DEFAULT_INDEXTTS_URL = "http://127.0.0.1:7862"
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+
+
 def _ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -193,12 +197,22 @@ def _merge_lines_for_batch(lines: list[str], max_chars: int = 300) -> list[list[
     current: list[int] = []
     current_chars = 0
     for idx, line in enumerate(lines):
-        if current_chars + len(line) > max_chars and current:
+        # Keep batches small enough that intra-sentence pauses don't accumulate
+        # to a detectable silence split, but big enough for smooth prosody.
+        effective_len = len(line)
+        if effective_len > max_chars:
+            if current:
+                batches.append(current)
+                current = []
+                current_chars = 0
+            batches.append([idx])
+            continue
+        if current_chars + effective_len > max_chars and current:
             batches.append(current)
             current = []
             current_chars = 0
         current.append(idx)
-        current_chars += len(line)
+        current_chars += effective_len
     if current:
         batches.append(current)
     return batches
@@ -231,9 +245,11 @@ def _split_wav_by_silence(
         List of Paths: [[output_dir/003_0.wav, output_dir/003_1.wav, ...].
     """
     import re as _re
-    import math as _math
 
-    # ── Step 1: detect silence ──
+    # ── Step 1: detect silence intervals (start/end pairs) ──
+    # Cutting at the MIDDLE of a silence puts the trailing half-pause in the
+    # previous segment and the leading half in the next — no clipped phonemes.
+    silences: list[tuple[float, float]] = []
     try:
         cmd = [
             "ffmpeg", "-i", str(wav_path),
@@ -241,14 +257,18 @@ def _split_wav_by_silence(
             "-f", "null", "-",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        # Parse silence_end timestamps
-        splits = []
+        cur_start: float | None = None
         for line in result.stderr.split("\n"):
-            m = _re.search(r"silence_end:\s*([\d.]+)", line)
-            if m:
-                splits.append(float(m.group(1)))
+            ms = _re.search(r"silence_start:\s*(-?[\d.]+)", line)
+            if ms:
+                cur_start = float(ms.group(1))
+                continue
+            me = _re.search(r"silence_end:\s*([\d.]+)", line)
+            if me and cur_start is not None:
+                silences.append((max(0.0, cur_start), float(me.group(1))))
+                cur_start = None
     except Exception:
-        splits = []
+        silences = []
 
     # ── Step 2: get total duration ──
     try:
@@ -258,22 +278,46 @@ def _split_wav_by_silence(
         total_dur = 0.0
 
     # ── Step 3: decide split points ──
-    # Filter splits that are reasonable boundaries (not too close to edges)
+    # Expected boundaries come from per-line char proportion (cleaned text, so
+    # emotion tags/pause markers don't skew the estimate); each boundary then
+    # snaps to the nearest detected silence midpoint within a tolerance.
+    # This keeps intra-sentence pauses (commas) from being mistaken for
+    # sentence boundaries — the root cause of clipped/overlapping words.
     min_split = 0.3
-    valid_splits = [s for s in splits if min_split < s < total_dur - min_split]
+    # Ignore very short silences: they often come from commas / short pauses
+    # inside a sentence, not the explicit "||" separator between lines.
+    candidates = [
+        (s + e) / 2.0
+        for s, e in silences
+        if (e - s) >= 0.25 and min_split < (s + e) / 2.0 < total_dur - min_split
+    ]
 
-    # We need expected_count-1 split points for expected_count segments
-    if len(valid_splits) >= expected_count - 1:
-        # Use the best N-1 splits (take from middle of each gap)
-        use_splits = valid_splits[: expected_count - 1]
-    else:
-        # Fallback: proportional by char count
-        total_chars = sum(len(t) for t in line_texts) or 1
-        use_splits = []
-        cum = 0.0
-        for t in line_texts[:-1]:
-            cum += len(t) / total_chars * total_dur
-            use_splits.append(cum)
+    clean_texts = [_tts_text(t) or t for t in line_texts]
+    total_chars = sum(len(t) for t in clean_texts) or 1
+    expected: list[float] = []
+    cum = 0.0
+    for t in clean_texts[:-1]:
+        cum += len(t) / total_chars * total_dur
+        expected.append(cum)
+
+    avg_seg = total_dur / max(1, expected_count)
+    # Tighten tolerance so snap stays close to the proportional boundary and
+    # does not drift into an intra-sentence pause.
+    tolerance = max(0.45, 0.22 * avg_seg)
+
+    use_splits: list[float] = []
+    prev = 0.0
+    for exp in expected:
+        best: float | None = None
+        for c in candidates:
+            if c <= prev + 0.1:
+                continue
+            if best is None or abs(c - exp) < abs(best - exp):
+                best = c
+        pick = best if best is not None and abs(best - exp) <= tolerance else exp
+        pick = min(max(pick, prev + 0.05), total_dur)
+        use_splits.append(pick)
+        prev = pick
 
     # ── Step 4: cut segments with FFmpeg aselect ──
     split_points = [0.0] + use_splits + [total_dur]
@@ -341,6 +385,11 @@ def _tts_text(text: str) -> str:
     text = text.replace("||", "，")
     text = re.sub(r"[,，]{2,}", "，", text)
     text = re.sub(r"[,，]\s*([。！？])", r"\1", text)
+    # Batch-join artifact: "句。||下一句" -> "句。，下一句" — drop the comma after
+    # terminal punctuation, otherwise TTS renders an audible artifact (残音).
+    text = re.sub(r"([。！？；])\s*[,，]+", r"\1", text)
+    # Leading comma (line started with '||') has nothing to pause after.
+    text = re.sub(r"^[,，]+", "", text)
     return text.strip()
 
 
@@ -745,6 +794,44 @@ def synthesize_lines(
         for batch_idx, line_indices in enumerate(batch_groups):
             batch_lines = [lines[i] for i in line_indices]
 
+            # ── Step 2 (resume): skip a whole batch when every line WAV already
+            # exists and is non-empty. This lets a failed job resume from the
+            # point of failure instead of re-synthesizing completed lines.
+            # Only skip whole batches (not individual lines): split_by_silence
+            # maps batch audio → lines by position, so a batch must be rebuilt
+            # entirely to keep line alignment correct.
+            existing_paths = [output_dir / f"{i:03d}.wav" for i in line_indices]
+            if all(p.is_file() and p.stat().st_size > 0 for p in existing_paths):
+                skipped_segments = sum(
+                    1 for _ in (lines[i] for i in line_indices)
+                )
+                for offset, line_idx in enumerate(line_indices):
+                    final_path = existing_paths[offset]
+                    try:
+                        info = sf.info(str(final_path))
+                        duration = round(info.duration, 3)
+                        sample_rate = info.samplerate
+                    except Exception:
+                        duration = 0.0
+                        sample_rate = 0
+                    seg_entry = {
+                        "index": line_idx,
+                        "text": lines[line_idx],
+                        "inference_text": _tts_text(lines[line_idx]),
+                        "file": final_path.name,
+                        "duration": duration,
+                    }
+                    manifest_segments.append(seg_entry)
+                    segment_paths.append(final_path)
+                    completed += 1
+                    if progress_callback:
+                        progress_callback(completed, len(lines), lines[line_idx], {**seg_entry})
+                logger.info(
+                    "synthesize_lines: skipped batch %d (%d line%s already on disk)",
+                    batch_idx, skipped_segments, "" if skipped_segments == 1 else "s",
+                )
+                continue
+
             # ── Step 2: join lines for TTS ──
             # Use a sentence separator that Fish Speech naturally pauses at.
             # The "||" marker gets replaced with "，" in _tts_text(), which
@@ -831,9 +918,20 @@ def synthesize_lines(
         )
         return manifest
     except Exception:
-        for seg_path in segment_paths:
-            seg_path.unlink(missing_ok=True)
-        (output_dir / "manifest.json").unlink(missing_ok=True)
+        # ── Failure handling (P0-1 方案 1: 失败不删盘 + 可续传) ──
+        # Keep already-synthesized line WAVs and the partial manifest on disk so
+        # a retry can resume from the last completed batch instead of starting
+        # over. Only the in-progress batch WAV is cleaned up.
+        logger.warning(
+            "synthesize_lines failed after %d/%d segments; keeping %d wav file(s) "
+            "and partial manifest for resumable retry",
+            completed, len(lines), len(segment_paths),
+        )
+        for batch_path in output_dir.glob("_batch_*.wav"):
+            try:
+                batch_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise
 
 
@@ -955,7 +1053,27 @@ def main() -> int:
         help="Text to synthesize. If prefixed with '@', read from UTF-8 file path.",
     )
     parser.add_argument("--output", "-o", help="Output WAV path")
-    parser.add_argument("--backend", choices=["fish", "f5", "auto"], default="auto")
+    parser.add_argument(
+        "--backend",
+        choices=["fish", "f5", "indextts", "auto"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--master-audio",
+        type=Path,
+        help="IndexTTS2 master tape path (required when --backend indextts)",
+    )
+    parser.add_argument(
+        "--master-text",
+        default="",
+        help="IndexTTS2 master tape reference text (required when --backend indextts)",
+    )
+    parser.add_argument(
+        "--master-style",
+        choices=["calm", "excited", "relaxed"],
+        default="calm",
+        help="IndexTTS2 emotion preset",
+    )
     parser.add_argument("--voice-id", default="default")
     parser.add_argument("--ref-audio", type=Path, help="Reference audio for voice cloning")
     parser.add_argument("--ref-text", default="", help="Reference text for voice cloning")
@@ -987,6 +1105,10 @@ def main() -> int:
                 reference_text=args.ref_text,
                 base_url_fish=args.base_url_fish,
                 base_url_f5=args.base_url_f5,
+                base_url_indextts=getattr(args, "base_url_indextts", "http://127.0.0.1:7862"),
+                master_audio=getattr(args, "master_audio", None),
+                master_text=getattr(args, "master_text", ""),
+                master_style=getattr(args, "master_style", "calm"),
             )
             print(Path(args.output_dir) / "manifest.json")
             return 0
@@ -1000,6 +1122,10 @@ def main() -> int:
             reference_text=args.ref_text,
             base_url_fish=args.base_url_fish,
             base_url_f5=args.base_url_f5,
+            base_url_indextts=getattr(args, "base_url_indextts", "http://127.0.0.1:7862"),
+            master_audio=getattr(args, "master_audio", None),
+            master_text=getattr(args, "master_text", ""),
+            master_style=getattr(args, "master_style", "calm"),
             segment=args.segment,
             segment_max_chars=args.segment_max_chars,
         )

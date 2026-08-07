@@ -1,10 +1,11 @@
+# -*- coding: utf-8 -*-
 """Pydantic schemas for API requests/responses."""
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class ArticleCreate(BaseModel):
@@ -16,6 +17,27 @@ class ArticleCreate(BaseModel):
 class RewriteRequest(BaseModel):
     model: Literal["flash", "pro"] | None = None
     prompt_template: str | None = None
+    video_format: str | None = None  # portrait / landscape / square
+    perspective: str | None = Field(default=None, max_length=500, description="洗稿前的补充观点（可选）")
+
+
+class CorrectRequest(BaseModel):
+    """洗稿后的修正观点请求."""
+    perspective: str = Field(..., min_length=1, max_length=500, description="修正观点")
+    model: Literal["flash", "pro"] | None = None
+
+
+
+class FetchUrlRequest(BaseModel):
+    url: str = Field(..., min_length=5)
+
+
+class FetchUrlResponse(BaseModel):
+    ok: bool
+    title: str | None = None
+    source_url: str | None = None
+    raw_text: str | None = None
+    error: str | None = None
 
 
 class ArticleUpdate(BaseModel):
@@ -31,6 +53,7 @@ class ArticleOut(BaseModel):
     title: str | None
     source_url: str | None
     status: str
+    perspective_1: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -48,6 +71,15 @@ class SegmentOut(BaseModel):
     estimated_duration: float | None
 
 
+class ArticleBriefOut(BaseModel):
+    """文章精简输出（仅 id + title）."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str | None
+
+
 class ScriptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -57,16 +89,27 @@ class ScriptOut(BaseModel):
     version: int
     script_text: str
     project_dir: str | None
+    video_format: str = "portrait"
+    perspective_2: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
     segments: list[SegmentOut]
+    article: ArticleBriefOut | None = None
+    title: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_title(self) -> Self:
+        if self.article is not None:
+            self.title = self.article.title
+        return self
 
 
 class ScriptUpdate(BaseModel):
     script_text: str | None = Field(default=None, min_length=1)
     status: str | None = None
     project_dir: str | None = None
+    video_format: str | None = None
 
 
 class SegmentUpdate(BaseModel):
@@ -243,6 +286,7 @@ class RoleOut(BaseModel):
     name: str
     reference_image: str
     description: str | None
+    view_groups: list[dict[str, Any]] = []
     views: dict[str, Any]
     workflow_used: str
     seed: int | None
@@ -426,5 +470,395 @@ class GenerateVideoResponse(BaseModel):
     has_audio_stream: bool
     frame_count: int | None
     validation_issues: list[str] = Field(default_factory=list)
+    validation_warnings: list[str] = Field(default_factory=list)
     elapsed_sec: float | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Director 2.0 schemas
+# ---------------------------------------------------------------------------
+class DirectorSlotPlan(BaseModel):
+    """导演 Agent 输出的单个 slot 计划(落 plan_json 前 schema 校验)."""
+
+    slot_index: int = Field(..., ge=0)
+    start_sec: float = Field(..., ge=0)
+    end_sec: float = Field(..., ge=0)
+    duration_sec: float | None = None
+    text_context: str | None = None
+    segment_id: str | None = None
+    visual_type: Literal[
+        "host",
+        "broll_pexels",
+        "broll_local",
+        "hf_chart",
+        "hf_title",
+        "mixed_host_broll",
+    ]
+    workflow: Literal[
+        "host",
+        "broll_pexels",
+        "broll_local",
+        "hf_chart",
+        "hf_title",
+        "mixed_host_broll",
+    ]
+    params: dict[str, Any] = Field(default_factory=dict)
+    camera_angle: int = Field(default=1, ge=1, le=4)
+    view_group_index: int = Field(default=0, ge=0)
+
+
+class DirectorPlan(BaseModel):
+    """导演 Agent 输出的完整工序单."""
+
+    slots: list[DirectorSlotPlan]
+    title: str | None = None
+    reasoning: str | None = None
+
+
+class DirectorJobCreate(BaseModel):
+    """手动创建导演任务(通常由 /scripts/{id}/direct 自动创建)."""
+
+    script_id: str
+    audio_file_id: str | None = None
+    view_group_index: int = 0
+    pipelines: str | None = None  # 逗号分隔启用的管线, e.g. "c,h". 默认全开.
+
+
+class DirectorSlotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    director_job_id: str
+    slot_index: int
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    text_context: str | None
+    segment_id: str | None
+    visual_type: str
+    workflow: str
+    params_json: dict[str, Any]
+    camera_angle: int = 1
+    view_group_index: int = 0
+    status: str
+    output_path: str | None
+    error_code: str | None
+    error_message: str | None
+    retry_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class DirectorJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    script_id: str
+    audio_file_id: str | None
+    title: str | None = None
+    video_format: str = "portrait"
+    pipelines: str | None = None
+    view_group_index: int = 0
+    status: str
+    plan_json: dict[str, Any]
+    total_duration_sec: float | None
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+    slots: list[DirectorSlotOut] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("completed", "failed")
+
+
+class DirectorDirectResponse(BaseModel):
+    job_id: str
+    status: str
+    slot_count: int
+    message: str
+
+
+class RetrySlotResponse(BaseModel):
+    slot_id: str
+    status: str
+    message: str
+
+
+class ComposeResponse(BaseModel):
+    job_id: str
+    status: str
+    output_path: str | None = None
+    duration_sec: float | None = None
+    message: str
+
+
+# ── Visual render (HF) ──────────────────────────────────────────────────
+
+class VisualRenderJobCreate(BaseModel):
+    """Body for ``POST /api/visual-render/jobs``.
+
+    ``input_data`` is validated server-side against the template's jsonschema.
+    """
+    template_id: str = Field(default="news-data-v1", min_length=1, max_length=64)
+    input_data: dict[str, Any]
+
+
+class VisualRenderJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    template_id: str
+    template_version: str
+    composition_id: str
+    status: str
+    input_path: str | None = None
+    output_path: str | None = None
+    manifest_path: str | None = None
+    preview_frames: dict[str, str] = Field(default_factory=dict)
+    media: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[Any] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+    render_seconds: float | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in ("completed", "failed", "cancelled")
+
+
+class TemplateInfo(BaseModel):
+    template_id: str
+    version: str
+    composition_id: str
+    duration_sec_range: list[int]
+    required_input: list[str]
+    json_schema: dict[str, Any]
+
+
+class GenerateVisualResponse(BaseModel):
+    job_id: str
+    status: str
+    output_path: str | None = None
+    manifest_path: str | None = None
+    media: dict[str, Any] = Field(default_factory=dict)
+    render_seconds: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Video asset library schemas (素材库多维标签体系)
+# ---------------------------------------------------------------------------
+
+VIDEO_ORIENTATION_CHOICES = ("landscape", "portrait")
+VIDEO_SOURCE_TYPE_CHOICES = ("footage", "creative")
+VIDEO_LOCATION_CHOICES = ("domestic", "foreign")
+VIDEO_PEOPLE_CHOICES = ("people", "none")
+VIDEO_PREFERENCE_CHOICES = ("like", "neutral", "dislike")
+
+VIDEO_SCENE_CHOICES = (
+    "城市", "自然", "商业", "科技", "财经", "生活", "美食", "医疗", "教育", "工业",
+)
+VIDEO_SHOT_TYPE_CHOICES = (
+    "航拍", "空镜", "建筑", "交通", "人像", "特写",
+)
+
+
+class VideoAssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    asset_no: str
+    source: str
+    pexels_id: int | None
+    file_path: str
+    orientation: str
+    width: int
+    height: int
+    duration_sec: float
+    description_en: str | None
+    description_zh: str | None
+    photographer: str | None
+    source_url: str | None
+    raw_query: str | None
+    source_type: str
+    location: str
+    scenes: list[str]
+    shot_types: list[str]
+    people: str
+    preference: str
+    tags: list[str]
+    ai_tagged_at: datetime | None = None
+    ai_tag_model: str | None = None
+    ai_confidence: dict | None = None
+    ai_tags_extra: dict | None = None
+    used_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class VideoAssetUpdate(BaseModel):
+    """用户可手动修正的字段(asset_no 不可改)."""
+
+    source_type: Literal["footage", "creative"] | None = None
+    location: Literal["domestic", "foreign"] | None = None
+    scenes: list[str] | None = None
+    shot_types: list[str] | None = None
+    people: Literal["people", "none"] | None = None
+    preference: Literal["like", "neutral", "dislike"] | None = None
+    description_en: str | None = Field(default=None, max_length=2000)
+    description_zh: str | None = Field(default=None, max_length=2000)
+    tags: list[str] | None = None
+
+
+class VideoAssetPreferenceRequest(BaseModel):
+    preference: Literal["like", "neutral", "dislike"]
+
+
+# ---------------------------------------------------------------------------
+# AI 素材打标 schemas
+# ---------------------------------------------------------------------------
+
+class TaggingRunRequest(BaseModel):
+    """批量打标请求."""
+    asset_ids: list[str] | None = Field(
+        default=None, description="指定素材 ID 列表；为空则全量打标"
+    )
+
+
+class TaggingProgressOut(BaseModel):
+    job_id: str
+    status: str  # pending / running / completed / failed / cancelled
+    total: int
+    done: int
+    failed: int
+    current_asset_no: str | None = None
+    error: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Pexels material resolve schemas (ID-003)
+# ---------------------------------------------------------------------------
+
+class ResolveItem(BaseModel):
+    """Pexels resolve 单条结果 — 本地/远程均可,必须含合规署名."""
+
+    id: int | None = Field(default=None, description="本地 material_assets.id")
+    local_path: str | None = Field(default=None, description="本地缓存路径")
+    source_url: str | None = Field(default=None, description="Pexels 原片 URL")
+    degraded: bool = Field(default=False, description="未下到本地,仅元数据")
+    reason: str | None = Field(default=None, description="降级原因")
+    duration_sec: int
+    width: int
+    height: int
+    fps: int | None = None
+    photographer: str
+    photographer_url: str
+    pexels_url: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class ResolveResponse(BaseModel):
+    items: list[ResolveItem] = Field(default_factory=list)
+    degraded: bool = Field(default=False)
+    reason: str | None = None
+
+
+class ResolveRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=256)
+    max_results: int | None = Field(default=None, ge=1, le=20)
+    min_duration_sec: int | None = Field(default=None, ge=1, le=300)
+    prefer_resolution: str | None = Field(default=None, pattern=r"^(UHD|FHD|HD|SD)$")
+    orientation: str | None = Field(default="any", pattern=r"^(landscape|portrait|any)$")
+
+
+class MaterialAssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    pexels_id: int
+    source_url: str
+    pexels_url: str
+    photographer: str
+    photographer_url: str
+    local_path: str | None
+    duration_sec: int
+    width: int
+    height: int
+    fps: int | None
+    resolution: str
+    tags: str
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Persona schemas (人物关联: 提示词模板 + 音色 + 形象)
+# ---------------------------------------------------------------------------
+class PersonaCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    prompt_template: str = Field(..., min_length=1, max_length=128, description="config/*.txt 文件名(不含 .txt)")
+    voice_id: str | None = None
+    role_id: str | None = None
+
+
+class PersonaUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    prompt_template: str | None = Field(default=None, min_length=1, max_length=128)
+    voice_id: str | None = None
+    role_id: str | None = None
+
+
+class PersonaOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    prompt_template: str
+    voice_id: str | None
+    role_id: str | None
+    voice: VoiceOut | None = None
+    role: RoleOut | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Video format specifications
+# ---------------------------------------------------------------------------
+
+VIDEO_FORMAT_SPECS: dict[str, dict[str, Any]] = {
+    "portrait": {
+        "width": 1080, "height": 1920,
+        "comfyui_w": 576, "comfyui_h": 1024,
+        "pexels_orientation": "portrait",
+        "label": "竖屏 9:16",
+    },
+    "landscape": {
+        "width": 1920, "height": 1080,
+        "comfyui_w": 1024, "comfyui_h": 576,
+        "pexels_orientation": "landscape",
+        "label": "横屏 16:9",
+    },
+    "square": {
+        "width": 1080, "height": 1080,
+        "comfyui_w": 768, "comfyui_h": 768,
+        "pexels_orientation": "square",
+        "label": "方形 1:1",
+    },
+}
+
+
+def get_video_format_spec(video_format: str | None) -> dict[str, Any]:
+    """Return spec dict for the given format, defaulting to portrait."""
+    return VIDEO_FORMAT_SPECS.get(video_format or "portrait", VIDEO_FORMAT_SPECS["portrait"])

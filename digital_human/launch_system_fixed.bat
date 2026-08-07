@@ -4,7 +4,7 @@ echo =================================================
 echo Digital Human News Crawler System
 echo =================================================
 
-cd /d C:\AI-Agent-Local\digital_human
+cd /d "%~dp0"
 
 echo Step 1: Starting news crawler...
 python run_crawler_fixed.py
