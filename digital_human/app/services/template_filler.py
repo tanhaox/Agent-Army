@@ -46,6 +46,10 @@ _SAFE_KEYS = frozenset(
         "chart_head",
         "source",
         "duration_sec",
+        # 品牌字段 (共享模板逐人设注入): 账号名/印章/标语 (2026-08-08)
+        "brand_name",
+        "stamp_name",
+        "brand_tag",
     }
 )
 
@@ -77,6 +81,10 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs["chart_head"] = str(chart.get("label") or chart.get("type") or "")
     subs["source"] = str(input_data.get("source", ""))
     subs["duration_sec"] = str(input_data.get("duration_sec", "12"))
+    # 品牌字段: 共享模板不硬编码账号名, 由 input_data 注入 (2026-08-08)
+    subs["brand_name"] = str(input_data.get("brand_name", ""))
+    subs["stamp_name"] = str(input_data.get("stamp_name", ""))
+    subs["brand_tag"] = str(input_data.get("brand_tag", ""))
     return subs
 
 

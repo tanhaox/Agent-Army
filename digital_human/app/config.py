@@ -74,6 +74,12 @@ class DefaultsConfig:
     pexels_preferred_resolution: str
     max_host_slots: int
     job_auto_cleanup_days: int
+    # 素材保留策略 (2026-08-07): completed job 的 slot 素材保留天数。
+    # 0 = 关闭保留 (回退到旧行为, 出片即删 slots/)。
+    slot_retention_days: int
+    # 导演素材输入模式 (ID-034): "vocabulary" = 注入关键词词表包 (默认, ~3KB,
+    # 解决全量 catalog ~26KB 拖慢 DeepSeek); "full" = 注入全量素材库清单 (旧行为)。
+    director_catalog_mode: str
 
 
 @dataclass(frozen=True)
@@ -215,6 +221,8 @@ def load_config(path: Path | str | None = None) -> Config:
         ),
         max_host_slots=int(defaults_raw.get("max_host_slots", 4)),
         job_auto_cleanup_days=int(defaults_raw.get("job_auto_cleanup_days", 7)),
+        slot_retention_days=int(defaults_raw.get("slot_retention_days", 7)),
+        director_catalog_mode=defaults_raw.get("director_catalog_mode", "vocabulary"),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),

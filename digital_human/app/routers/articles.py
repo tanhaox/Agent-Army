@@ -1,6 +1,7 @@
 """Article router: CRUD + trigger rewrite."""
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -9,8 +10,10 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
-from ..database import get_db, get_session_maker
-from ..models import Article, Host, Script
+from ..database import db_session, get_db, get_session_maker
+from ..models import Article, Host, Persona, Script
+
+logger = logging.getLogger(__name__)
 from ..schemas import (
     ArticleCreate,
     ArticleOut,
@@ -223,83 +226,159 @@ def rewrite_article(
     perspective = request.perspective
 
     def _do_rewrite():
-        Session = get_session_maker()
-        if Session is None:
+        if get_session_maker() is None:
             _publish(job_id, {"type": "rewrite_error", "error": "Database not initialized"})
             return
-        db2 = Session()
-        try:
-            article = db2.query(Article).filter(Article.id == article_id).first()
-            if not article:
-                _publish(job_id, {"type": "rewrite_error", "error": "Article not found"})
-                return
-
-            host = db2.query(Host).filter(Host.persona_key == "laochen").first()
-            host_id = host.id if host else None
-
-            chunks: list[str] = []
-
-            def _cb(chunk: str) -> None:
-                chunks.append(chunk)
-                _publish(job_id, {"type": "rewrite_chunk", "chunk": chunk})
-
-            # 保存补充观点到 article
-            if perspective and perspective.strip():
-                article.perspective_1 = perspective.strip()
-                db2.commit()
-
-            script_text = llm.rewrite_article(
-                article.raw_text,
-                prompt_template=prompt_template,
-                model=model_alias,
-                stream=True,
-                chunk_callback=_cb,
-                perspective=perspective,
-            )
-
-            script = Script(
-                article_id=article.id,
-                host_id=host_id,
-                version=1,
-                prompt_template=prompt_template,
-                script_text=script_text,
-                video_format=video_format,
-                status="drafting",
-            )
-            db2.add(script)
-            db2.commit()
-            db2.refresh(script)
-
-            project_root = Path(__file__).resolve().parents[2]
-            project_dir = _create_project_dirs(script.id, project_root)
-            script.project_dir = str(project_dir)
-            db2.commit()
-            db2.refresh(script)
-
-            fixed_opening = host.fixed_opening if host else None
-            fixed_ending = host.fixed_ending if host else None
-            segments_data = parse_script(script_text, fixed_opening, fixed_ending)
-            for seg_data in segments_data:
-                from ..models import Segment
-
-                db2.add(Segment(script_id=script.id, **seg_data))
-            db2.commit()
-
-            article.status = "rewritten"
-            db2.commit()
-
-            _publish(job_id, {"type": "rewrite_done", "script_id": script.id, "project_dir": str(project_dir)})
-        except Exception as exc:
+        with db_session() as db2:
             try:
                 article = db2.query(Article).filter(Article.id == article_id).first()
-                if article:
-                    article.status = "failed"
+                if not article:
+                    _publish(job_id, {"type": "rewrite_error", "error": "Article not found"})
+                    return
+
+                # 数字人绑定 (2026-08-08): 洗稿不再强制 laochen.
+                # 人物即账号: 前端显式 persona_id → host_id → config 默认 → 首个 host 回退.
+                # persona_id 解析出的 host 同时带出品牌/开结尾, 随 script.host_id 贯通
+                # audio / HF 品牌注入 / C 线出镜.
+                host = None
+                persona: Persona | None = None
+                if request.persona_id:
+                    persona = db2.query(Persona).filter(Persona.id == request.persona_id).first()
+                    if not persona:
+                        _publish(job_id, {"type": "rewrite_error", "error": "Persona not found"})
+                        return
+                    host = db2.query(Host).filter(Host.id == persona.host_id).first() if persona.host_id else None
+                if host is None and request.host_id:
+                    host = db2.query(Host).filter(Host.id == request.host_id).first()
+                    if not host:
+                        _publish(job_id, {"type": "rewrite_error", "error": "Host not found"})
+                        return
+                if host is None and request.persona_id:
+                    # persona 已显式指定但未绑 host: 视为绑定失败, 不让老陈兜底冒名顶替
+                    _publish(job_id, {"type": "rewrite_error", "error": "Persona has no bound host"})
+                    return
+                if host is None:
+                    from ..config import get_config
+
+                    try:
+                        cfg = get_config()
+                        default_key = cfg.defaults.host_id if cfg.defaults else "laochen"
+                    except Exception:
+                        default_key = "laochen"
+                    host = (
+                        db2.query(Host).filter(Host.persona_key == default_key).first()
+                        or db2.query(Host).order_by(Host.created_at).first()
+                    )
+                host_id = host.id if host else None
+
+                chunks: list[str] = []
+
+                def _cb(chunk: str) -> None:
+                    chunks.append(chunk)
+                    _publish(job_id, {"type": "rewrite_chunk", "chunk": chunk})
+
+                # 保存补充观点到 article
+                if perspective and perspective.strip():
+                    article.perspective_1 = perspective.strip()
                     db2.commit()
-            except Exception:
-                pass
-            _publish(job_id, {"type": "rewrite_error", "error": str(exc)})
-        finally:
-            db2.close()
+
+                script_text = llm.rewrite_article(
+                    article.raw_text,
+                    prompt_template=prompt_template,
+                    model=model_alias,
+                    stream=True,
+                    chunk_callback=_cb,
+                    perspective=perspective,
+                )
+
+                script = Script(
+                    article_id=article.id,
+                    host_id=host_id,
+                    version=1,
+                    prompt_template=prompt_template,
+                    script_text=script_text,
+                    video_format=video_format,
+                    status="drafting",
+                )
+                db2.add(script)
+                db2.commit()
+                db2.refresh(script)
+
+                project_root = Path(__file__).resolve().parents[2]
+                project_dir = _create_project_dirs(script.id, project_root)
+                script.project_dir = str(project_dir)
+                db2.commit()
+                db2.refresh(script)
+
+                # 开结尾: 人物(persona)显式编辑优先, 其次 host 兼容老数据 (2026-08-08)
+                fixed_opening = (persona.fixed_opening if persona else None) or (host.fixed_opening if host else None)
+                fixed_ending = (persona.fixed_ending if persona else None) or (host.fixed_ending if host else None)
+                segments_data = parse_script(script_text, fixed_opening, fixed_ending)
+                for seg_data in segments_data:
+                    from ..models import Segment
+
+                    db2.add(Segment(script_id=script.id, **seg_data))
+                db2.commit()
+
+                # 爆品改造 (2026-08-10): 洗稿后自动跑 P1开场→P2预埋→P3节奏.
+                # 并入洗稿后台任务, 改造完成才 publish; 失败自动回退原稿不卡死.
+                def _emit_boost(evt: str, msg: str) -> None:
+                    _publish(job_id, {"type": evt, "script_id": script.id, "msg": msg})
+
+                try:
+                    from ..services.boost_service import run_boost
+
+                    boost = run_boost(
+                        db2, script.id,
+                        title=article.title,
+                        emit=_emit_boost,
+                    )
+                    script.boosted_text = boost["boosted_text"]
+                    script.boost_titles = boost["boost_titles"] or None
+                    db2.commit()
+
+                    # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
+                    # 删旧段 → 按改造后全文重新 parse → 重建
+                    for seg in list(script.segments):
+                        db2.delete(seg)
+                    db2.flush()
+                    boosted_segments = parse_script(boost["boosted_text"], fixed_opening, fixed_ending)
+                    for seg_data in boosted_segments:
+                        from ..models import Segment
+
+                        db2.add(Segment(script_id=script.id, **seg_data))
+                    db2.commit()
+                    _publish(job_id, {
+                        "type": "boost_done",
+                        "script_id": script.id,
+                        "boosted": True,
+                        "p1_ok": boost["p1_ok"],
+                        "p2_ok": boost["p2_ok"],
+                        "p3_ok": boost["p3_ok"],
+                    })
+                except Exception as boost_exc:
+                    # 改造失败 → 保留原稿 (segments 已按原稿建好), 仅记日志, 不阻断
+                    logger.exception("[boost] boost pipeline failed for script %s: %s", script.id, boost_exc)
+                    _publish(job_id, {
+                        "type": "boost_done",
+                        "script_id": script.id,
+                        "boosted": False,
+                        "error": str(boost_exc)[:200],
+                    })
+
+                article.status = "rewritten"
+                db2.commit()
+
+                _publish(job_id, {"type": "rewrite_done", "script_id": script.id, "project_dir": str(project_dir)})
+            except Exception as exc:
+                try:
+                    article = db2.query(Article).filter(Article.id == article_id).first()
+                    if article:
+                        article.status = "failed"
+                        db2.commit()
+                except Exception:
+                    pass
+                _publish(job_id, {"type": "rewrite_error", "error": str(exc)})
 
     background_tasks.add_task(_do_rewrite)
     return {"job_id": job_id, "status": "started", "model": model_alias or "default"}

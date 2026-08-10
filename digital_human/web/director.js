@@ -5,6 +5,8 @@ let pollTimer = null;
 let allSlots = [];
 let _selectedSlotIdx = null;  // 当前展开的 slot 索引，轮询时保持展开
 let _jobExecuting = false;    // 当前任务是否在执行中
+let _composingJobIds = new Set();  // 正在合成的 job_id 集合 (本地跟踪, SSE compose_done/compose_error/force_stopped 时移除)
+function _isComposing(jobId) { return _composingJobIds.has(jobId); }
 let _retrying = false;       // 防重入：重试中避免重复点击
 let _audioGenES = null;       // 音频生成 SSE（/api/jobs/{id}/events，注意与导演 SSE 前缀不同）
 let _audioGenJob = null;      // 当前音频生成任务 id
@@ -341,6 +343,18 @@ function renderJobDetail(job) {
   const btnCancel = document.getElementById('btn-cancel');
   if (btnCancel) btnCancel.classList.toggle('hidden', !isExecuting);
 
+  // ⚠ 强制停止：执行/规划中常驻；合成进行中变为「强制停止合成」
+  const composingActive = _isComposing(job.id);
+  const btnForce = document.getElementById('btn-force-stop');
+  if (btnForce) {
+    const show = isExecuting || composingActive;
+    btnForce.classList.toggle('hidden', !show);
+    btnForce.textContent = composingActive ? '⚠ 强制停止合成' : '⚠ 强制停止';
+    btnForce.title = composingActive
+      ? '杀掉本任务合成进程(ffmpeg)并立即终止, 已完成的 slot 保留, 可稍后重试'
+      : '杀掉该任务全部子进程(ffmpeg/ComfyUI/HF)并立即终止, 已完成的 slot 保留, 可稍后重试';
+  }
+
   document.getElementById('btn-compose').disabled = !hasCompleted && !isDone;
   document.getElementById('btn-download').disabled = !isDone;
 
@@ -400,7 +414,9 @@ function showSlotDetail(idx) {
   document.getElementById('slot-output').textContent = slot.output_path || '—';
   document.getElementById('slot-error').textContent = slot.error_message || '无';
   // #5 重新生成按钮：completed/failed/skipped 可重新生成，running/queued 不可点
-  const canRegenerate = slot.status === 'completed' || slot.status === 'failed' || slot.status === 'skipped';
+  // 僵尸 running: job 不在执行中 (服务重启/中断遗留) 时 running 也可重试恢复
+  const zombieRunning = slot.status === 'running' && !_jobExecuting;
+  const canRegenerate = slot.status === 'completed' || slot.status === 'failed' || slot.status === 'skipped' || zombieRunning;
   const btnRetry = document.getElementById('btn-retry-slot');
   btnRetry.dataset.slotId = slot.id;
   btnRetry.classList.toggle('hidden', _jobExecuting);
@@ -539,6 +555,8 @@ async function executeJob() {
     btn.disabled = false;
     btn.innerHTML = '执行 Slots';
     disconnectSSE();
+    // 🚀 自动模式: 触发失败无终态事件, 立即中断
+    if (_onestopActive) _onestopFail('执行触发失败: ' + e.message);
   }
 }
 
@@ -574,8 +592,30 @@ function disconnectSSE() {
   if (_evtSource) { _evtSource.close(); _evtSource = null; }
   setTimeout(() => { document.body.style.paddingBottom = ''; }, 3000);
 }
+// ── 🚀 一键成片 自动串联 (2026-08-09) ──
+// 首页 index.html 点击「一键成片」→ 音频完成后跳转本页(auto=1), 并写 localStorage 'dh_onestop'='1'。
+// 本页按 SSE 终态事件自动触发下一步: plan_done→executeJob → exec_done→composeJob → compose_done(结束)。
+// 防重入: 每次触发前主动 disconnectSSE + 校验标志, 消除双击/重连导致的二次触发。
+let _onestopActive = false;
+let _onestopTransitioning = false;  // 防重入锁: 仅在同一阶段 transition 期间置位, 不改变 _onestopActive
+function _onestopOn() {
+  try { return localStorage.getItem('dh_onestop') === '1'; } catch (_) { return false; }
+}
+function _onestopClear() {
+  try { localStorage.removeItem('dh_onestop'); } catch (_) {}
+  _onestopActive = false;
+}
+function _onestopFail(msg) {
+  _onestopClear();
+  toast('一键成片已中断: ' + msg, 'error');
+  const btnExec = document.getElementById('btn-execute');
+  if (btnExec) { btnExec.disabled = false; btnExec.innerHTML = '执行 Slots'; }
+  const btnComp = document.getElementById('btn-compose');
+  if (btnComp) { btnComp.disabled = false; btnComp.innerHTML = '合成视频'; }
+  // 中断不跳转, 留在导演台手动续跑 (产出信息未丢失, 可重试)
+}
 // terminal 事件: 结束 SSE 连接; 其余(心跳/进度/warning)保持连接等待后续事件
-const SSE_TERMINAL = new Set(['plan_error', 'plan_cancelled', 'plan_done', 'exec_done', 'exec_cancelled', 'compose_done', 'compose_error']);
+const SSE_TERMINAL = new Set(['plan_error', 'plan_cancelled', 'plan_done', 'exec_done', 'exec_cancelled', 'compose_done', 'compose_error', 'force_stopped']);
 function connectSSE(jobId) {
   disconnectSSE();
   _sseRetry = 0;
@@ -586,6 +626,10 @@ function connectSSE(jobId) {
       appendExecEvent(d);
       if (SSE_TERMINAL.has(d.type)) {
         disconnectSSE();
+        // compose 终止 (含强停): 本地合成集合移除, 按钮恢复
+        if (d.type === 'compose_done' || d.type === 'compose_error' || d.type === 'force_stopped') {
+          _composingJobIds.delete(currentJobId);
+        }
         // 恢复执行/合成按钮
         const btnExec = document.getElementById('btn-execute');
         if (btnExec && (d.type === 'exec_done' || d.type === 'exec_cancelled')) {
@@ -594,7 +638,7 @@ function connectSSE(jobId) {
         const btnComp = document.getElementById('btn-compose');
         if (btnComp) { btnComp.disabled = false; btnComp.innerHTML = '合成视频'; }
         // 刷新任务详情: 让时间轴/下载按钮同步最新状态
-        if (d.type === 'plan_done' || d.type === 'exec_done' || d.type === 'compose_done') {
+        if (d.type === 'plan_done' || d.type === 'exec_done' || d.type === 'compose_done' || d.type === 'force_stopped') {
           await selectJob(currentJobId);
           refreshJobs();
         }
@@ -605,8 +649,33 @@ function connectSSE(jobId) {
           if (d.output_path) {
             setTimeout(() => openOutputFolder(), 500);
           }
+          // 🚀 一键成片: 全流程完成, 结束自动模式
+          if (_onestopActive) {
+            _onestopClear();
+            toast('🚀 一键成片完成', 'success');
+          }
         } else if (d.type === 'compose_error') {
           toast('合成失败: ' + (d.msg || '未知错误'), 'error');
+          if (_onestopActive) _onestopFail(d.msg || '合成失败');
+        } else if (d.type === 'force_stopped') {
+          toast('任务已强制停止: ' + (d.msg || ''), 'warning');
+          if (_onestopActive) _onestopFail('已强制停止');
+        } else if (d.type === 'plan_done') {
+          // 🚀 自动模式: 规划完成 → 自动执行 Slots (防重入: 双击/重连会产生重复 plan_done)
+          if (_onestopActive && !_onestopTransitioning) {
+            _onestopTransitioning = true;
+            try { await executeJob(); } finally { _onestopTransitioning = false; }
+          }
+        } else if (d.type === 'exec_done') {
+          // 🚀 自动模式: Slots 执行完成 → 自动合成
+          if (_onestopActive && !_onestopTransitioning) {
+            _onestopTransitioning = true;
+            try { await composeJob(); } finally { _onestopTransitioning = false; }
+          }
+        } else if (d.type === 'plan_error' || d.type === 'plan_cancelled') {
+          if (_onestopActive) _onestopFail(d.msg || (d.type === 'plan_error' ? '规划失败' : '规划已取消'));
+        } else if (d.type === 'exec_cancelled') {
+          if (_onestopActive) _onestopFail('执行已取消');
         }
         // ID-012: 仅 terminal 事件后 3s 自动收起日志抽屉 (心跳/进度不收起)
         if (_sseCollapseTimer) { clearTimeout(_sseCollapseTimer); }
@@ -660,6 +729,8 @@ function appendExecEvent(d) {
       color = '#3b82f6'; text = '\uD83C\uDFC1 ' + (d.msg || ''); break;
     case 'plan_cancelled': case 'exec_cancelled':
       color = '#f59e0b'; text = '\u26A0 ' + (d.msg || '已取消'); break;
+    case 'force_stopped':
+      color = '#f87171'; text = '🚨 强制停止: ' + (d.msg || '任务已强制停止'); break;
     case 'heartbeat':
       color = '#64748b'; text = '  ⏳ ' + (d.msg || '服务端仍在运行') + (d.elapsed_sec != null ? '（已等待 ' + Math.round(d.elapsed_sec) + 's）' : ''); break;
     case 'alignment_heartbeat':
@@ -691,11 +762,16 @@ async function composeJob() {
     // 端点立即返回 {status:'composing'}, compose_start/compose_step/compose_done
     // 由 connectSSE 接收渲染; compose_done 后自动刷新详情 + 下载按钮可用
     await api(`/jobs/${currentJobId}/compose`, { method: 'POST' });
+    // 登记本地合成集合: 让「⚠ 强制停止合成」按钮在合成期间显示
+    _composingJobIds.add(currentJobId);
+    if (btn) btn.textContent = '⏳ 合成中...';
   } catch (e) {
     toast('合成触发失败: ' + e.message, 'error');
     btn.disabled = false;
     btn.innerHTML = '合成视频';
     disconnectSSE();
+    // 🚀 自动模式: 触发失败无终态事件, 立即中断
+    if (_onestopActive) _onestopFail('合成触发失败: ' + e.message);
   }
 }
 
@@ -757,6 +833,10 @@ async function retrySlot(btn) {
     return;
   }
   const slotIdx = _selectedSlotIdx;
+  // 展示执行日志抽屉并连接 SSE: 后端 retry_slot 会发布 slot_start/slot_done 事件,
+  // 让用户能看到重试的真实进度 (与「重试同类」走 /execute 的事件流一致)。
+  showExecLog();
+  connectSSE(currentJobId);
   try {
     // 管线开关经 localStorage 统一读取，重试时也遵守禁用规则。
     // 始终显式发送 (与 executeJob 一致): 全开 "c,p,h" / 部分 "c,p" / 全关 ""
@@ -839,6 +919,29 @@ async function cancelJob() {
     await selectJob(currentJobId);
   } catch (e) {
     toast('取消失败: ' + e.message, 'error');
+  }
+}
+
+// ── ⚠ 强制停止 (kill 卡死子进程) ──
+async function forceStopJob() {
+  if (!currentJobId) return;
+  const composing = _isComposing(currentJobId);
+  const hint = composing
+    ? '强制停止会中断本次合成的全部 ffmpeg 进程。已完成的 slot 保留，可稍后重试。确认强制停止合成？'
+    : '强制停止会杀掉该任务的全部子进程(ffmpeg/ComfyUI/HF)，立即终止当前执行/规划。\n已完成的 slot 保留，可稍后重试。确认强制停止？';
+  if (!confirm(hint)) return;
+  const btn = document.getElementById('btn-force-stop');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 强制停止中...'; }
+  try {
+    const resp = await api(`/jobs/${currentJobId}/force-stop`, { method: 'POST' });
+    const killed = resp.killed != null ? ` (杀掉 ${resp.killed} 个进程树)` : '';
+    toast(`已强制停止，任务状态: ${resp.status}${killed}`, resp.status === 'failed' ? 'warning' : 'success');
+    await selectJob(currentJobId);
+    refreshJobs();
+  } catch (e) {
+    toast('强制停止失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; }
   }
 }
 
@@ -1113,7 +1216,9 @@ refreshJobs();
   syncScriptTitleInput();
   history.replaceState(null, '', window.location.pathname);
   if (params.get('auto') === '1') {
-    toast('已接收流水线产出，自动创建导演任务…', 'info');
+    // 🚀 一键成片标记存在时启用自动模式: plan_done→executeJob→composeJob 全程无人值守
+    if (_onestopOn()) _onestopActive = true;
+    toast(_onestopActive ? '🚀 一键成片: 已接收流水线产出，自动创建导演任务…' : '已接收流水线产出，自动创建导演任务…', 'info');
     createJob();
   } else {
     toast('已带入流水线的脚本与音频，点击"创建并规划"继续', 'info');

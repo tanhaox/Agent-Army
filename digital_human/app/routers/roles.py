@@ -34,7 +34,7 @@ from ..schemas import (
     RoleOut,
     RoleUpdate,
 )
-from .comfyui import _find_workflow, _load_workflow_json, _inject_inputs, submit_and_wait
+from app.services import comfyui_service
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ async def generate_views(
         db.commit()
         db.refresh(role)
 
-    wf_meta = _find_workflow(role.workflow_used)
+    wf_meta = comfyui_service.find_workflow(role.workflow_used)
     if not wf_meta:
         raise HTTPException(
             status_code=400,
@@ -218,11 +218,11 @@ async def generate_views(
         )
 
     try:
-        wf_json = _load_workflow_json(wf_meta["source"])
+        wf_json = comfyui_service.load_workflow_json(wf_meta["source"])
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    payload = _inject_inputs(
+    payload = comfyui_service.inject_inputs(
         wf_json,
         {
             "description": description,
@@ -231,7 +231,7 @@ async def generate_views(
         },
     )
 
-    result = await submit_and_wait(
+    result = await comfyui_service.submit_and_wait(
         workflow_payload=payload,
         role_id=role_id,
         base_url=cfg.defaults.base_url_comfyui,

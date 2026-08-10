@@ -10,8 +10,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ..database import get_db, get_session_maker
-from ..models import AudioFile, AudioJob, Host, Script, Segment, Voice
+from ..database import db_session, get_db, get_session_maker
+from ..models import AudioFile, AudioJob, Host, Persona, Script, Segment, Voice
 from ..schemas import AudioFileOut, AudioJobOut
 from ..services.gpu_service_manager import get_gpu_service_manager
 from ..services.tts_service import TTSService
@@ -43,8 +43,14 @@ def generate_audio(
     voice = None
     if voice_id:
         voice = db.query(Voice).filter(Voice.id == voice_id).first()
-    # 未显式选音色 → 优先用 host.default_voice_id (2026-08-07: 老陈默认=大学教授 indextts),
-    # 而非 host 下第一条 voice (旧逻辑会取到已弃用的 fish laochen_default)。
+    # 未显式选音色 → 人物即账号 (2026-08-08): 优先 persona.voice_id (人物页编辑的音色),
+    # 其次 host.default_voice_id (老陈默认=大学教授 indextts), 最后 host 下第一条 voice。
+    if not voice and script.host_id:
+        persona = (
+            db.query(Persona).filter(Persona.host_id == script.host_id).first()
+        )
+        if persona and persona.voice_id:
+            voice = db.query(Voice).filter(Voice.id == persona.voice_id).first()
     if not voice and script.host_id:
         host = db.query(Host).filter(Host.id == script.host_id).first()
         if host and host.default_voice_id:
@@ -87,120 +93,117 @@ def generate_audio(
 
 
 def _do_tts(job_id: str):
-    Session = get_session_maker()
-    if Session is None:
+    if get_session_maker() is None:
         _publish(job_id, {"type": "tts_error", "error": "Database not initialized"})
         return
-    db = Session()
-    try:
-        job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
-        if not job:
-            _publish(job_id, {"type": "tts_error", "error": "Audio job not found"})
-            return
-
-        script = db.query(Script).filter(Script.id == job.script_id).first()
-        voice = None
-        if job.voice_id:
-            voice = db.query(Voice).filter(Voice.id == job.voice_id).first()
-
-        query = db.query(Segment).filter(Segment.script_id == job.script_id)
-        query = query.filter(Segment.selected_for_host == True)
-        segments = query.order_by(Segment.host_order).all()
-
-        if not segments:
-            job.status = "failed"
-            job.error_message = "No segments to synthesize"
-            db.commit()
-            _publish(job_id, {"type": "tts_error", "error": "No segments to synthesize"})
-            return
-
-        job.status = "running"
-        job.total_segments = len(segments)
-        db.commit()
-
-        tts = get_tts()
-
-        def _progress(completed: int, total: int, text: str | None, audio_file: AudioFile | None = None) -> None:
-            job.completed_segments = completed
-            db.commit()
-            event: dict = {
-                "type": "tts_progress",
-                "completed": completed,
-                "total": total,
-                "text": text,
-            }
-            if audio_file:
-                db.add(audio_file)
-                db.commit()
-                db.refresh(audio_file)
-                event["audio_file"] = {
-                    "id": audio_file.id,
-                    "filename": audio_file.filename,
-                    "duration": audio_file.duration,
-                    "segment_id": audio_file.segment_id,
-                }
-            _publish(job_id, event)
-
-        # ── GPU 服务托管: 排队 + 按需拉起 TTS 后端 + 空闲自动关停腾显存 ──
-        from ..config import get_config
-
-        backend = (voice.backend if voice and voice.backend else get_config().defaults.backend)
-
-        def _svc_notify(message: str) -> None:
-            _publish(job_id, {"type": "tts_service", "message": message})
-
-        manager = get_gpu_service_manager()
-        with manager.session(backend, status_callback=_svc_notify):
-            result = tts.generate(job, segments, voice, progress_callback=_progress)
-        # audio_files rows are already committed one-by-one inside _progress,
-        # so no add_all here — a second add would double-insert (P0-1 related).
-
-        for af in result["audio_files"]:
-            if af.segment_id and af.duration:
-                seg = db.query(Segment).filter(Segment.id == af.segment_id).first()
-                if seg:
-                    seg.estimated_duration = af.duration
-
-        # ── Save combined paragraph audio as AudioFile ──
-        combined_info = result.get("combined_file")
-        combined_audio_file = None
-        if combined_info and combined_info.get("file_path"):
-            combined_audio_file = AudioFile(
-                audio_job_id=job.id,
-                segment_id=None,
-                filename=combined_info["file"],
-                file_path=combined_info["file_path"],
-                duration=combined_info.get("duration"),
-                sample_rate=combined_info.get("sample_rate"),
-            )
-            db.add(combined_audio_file)
-
-        job.status = "completed"
-        job.completed_segments = len(segments)
-        db.commit()
-
-        output_dir = Path(job.output_dir)
-        done_event: dict = {"type": "tts_done", "job_id": job.id, "output_dir": str(output_dir)}
-        if combined_audio_file:
-            done_event["combined_audio"] = {
-                "id": combined_audio_file.id,
-                "filename": combined_audio_file.filename,
-                "duration": combined_audio_file.duration,
-            }
-        _publish(job_id, done_event)
-    except Exception as exc:
+    with db_session() as db:
         try:
             job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
-            if job:
+            if not job:
+                _publish(job_id, {"type": "tts_error", "error": "Audio job not found"})
+                return
+
+            script = db.query(Script).filter(Script.id == job.script_id).first()
+            voice = None
+            if job.voice_id:
+                voice = db.query(Voice).filter(Voice.id == job.voice_id).first()
+
+            query = db.query(Segment).filter(Segment.script_id == job.script_id)
+            query = query.filter(Segment.selected_for_host == True)
+            segments = query.order_by(Segment.host_order).all()
+
+            if not segments:
                 job.status = "failed"
-                # P0-1 方案 1: 失败不删盘 → 已生成 wav 保留, 可重试续传
-                job.error_message = f"{exc}（已生成的音频已保留，重新生成将从断点继续）"
+                job.error_message = "No segments to synthesize"
                 db.commit()
-        except Exception:
-            pass
-        _publish(job_id, {"type": "tts_error", "error": str(exc)})
-    finally:
-        db.close()
+                _publish(job_id, {"type": "tts_error", "error": "No segments to synthesize"})
+                return
+
+            job.status = "running"
+            job.total_segments = len(segments)
+            db.commit()
+
+            tts = get_tts()
+
+            def _progress(completed: int, total: int, text: str | None, audio_file: AudioFile | None = None) -> None:
+                job.completed_segments = completed
+                db.commit()
+                event: dict = {
+                    "type": "tts_progress",
+                    "completed": completed,
+                    "total": total,
+                    "text": text,
+                }
+                if audio_file:
+                    db.add(audio_file)
+                    db.commit()
+                    db.refresh(audio_file)
+                    event["audio_file"] = {
+                        "id": audio_file.id,
+                        "filename": audio_file.filename,
+                        "duration": audio_file.duration,
+                        "segment_id": audio_file.segment_id,
+                    }
+                _publish(job_id, event)
+
+            # ── GPU 服务托管: 排队 + 按需拉起 TTS 后端 + 空闲自动关停腾显存 ──
+            from ..config import get_config
+
+            backend = (voice.backend if voice and voice.backend else get_config().defaults.backend)
+
+            def _svc_notify(message: str) -> None:
+                _publish(job_id, {"type": "tts_service", "message": message})
+
+            manager = get_gpu_service_manager()
+            with manager.session(backend, status_callback=_svc_notify):
+                result = tts.generate(job, segments, voice, progress_callback=_progress)
+            # audio_files rows are already committed one-by-one inside _progress,
+            # so no add_all here — a second add would double-insert (P0-1 related).
+
+            for af in result["audio_files"]:
+                if af.segment_id and af.duration:
+                    seg = db.query(Segment).filter(Segment.id == af.segment_id).first()
+                    if seg:
+                        seg.estimated_duration = af.duration
+
+            # ── Save combined paragraph audio as AudioFile ──
+            combined_info = result.get("combined_file")
+            combined_audio_file = None
+            if combined_info and combined_info.get("file_path"):
+                combined_audio_file = AudioFile(
+                    audio_job_id=job.id,
+                    segment_id=None,
+                    filename=combined_info["file"],
+                    file_path=combined_info["file_path"],
+                    duration=combined_info.get("duration"),
+                    sample_rate=combined_info.get("sample_rate"),
+                )
+                db.add(combined_audio_file)
+
+            job.status = "completed"
+            job.completed_segments = len(segments)
+            db.commit()
+
+            output_dir = Path(job.output_dir)
+            done_event: dict = {"type": "tts_done", "job_id": job.id, "output_dir": str(output_dir)}
+            if combined_audio_file:
+                done_event["combined_audio"] = {
+                    "id": combined_audio_file.id,
+                    "filename": combined_audio_file.filename,
+                    "duration": combined_audio_file.duration,
+                }
+            _publish(job_id, done_event)
+        except Exception as exc:
+            try:
+                job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
+                if job:
+                    job.status = "failed"
+                    # P0-1 方案 1: 失败不删盘 → 已生成 wav 保留, 可重试续传
+                    job.error_message = f"{exc}（已生成的音频已保留，重新生成将从断点继续）"
+                    db.commit()
+            except Exception:
+                pass
+            _publish(job_id, {"type": "tts_error", "error": str(exc)})
 
 
 @router.get("/jobs", response_model=list[AudioJobOut])

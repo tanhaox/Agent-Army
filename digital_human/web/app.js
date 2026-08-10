@@ -96,11 +96,13 @@ async function rewriteArticle() {
   const model = document.getElementById('rewrite-model').value;
   const template = document.getElementById('rewrite-template').value || 'laochen_default';
   const videoFormat = document.getElementById('rewrite-format').value || 'portrait';
+  const hostSelect = document.getElementById('rewrite-host');
+  const personaId = (hostSelect && hostSelect.value) || null;
   toggle('btn-rewrite', false);
   setStatus('status-rewrite', '洗稿中，请稍候...');
   try {
     const perspective = document.getElementById('perspective-1')?.value?.trim() || null;
-    const { job_id } = await api('POST', `/articles/${currentArticle.id}/rewrite`, { model, prompt_template: template, video_format: videoFormat, perspective });
+    const { job_id } = await api('POST', `/articles/${currentArticle.id}/rewrite`, { model, prompt_template: template, video_format: videoFormat, perspective, persona_id: personaId });
     const source = new EventSource(`${API}/jobs/${job_id}/events`);
     source.onmessage = (ev) => {
       let data;
@@ -255,6 +257,44 @@ async function loadVoices() {
   } catch (e) {
     console.error('加载音色失败', e);
     select.innerHTML = '<option value="">默认音色（音色列表加载失败）</option>';
+  }
+}
+
+async function loadHosts() {
+  const select = document.getElementById('rewrite-host');
+  if (!select) return; // 非流水线页无此元素
+  try {
+    // 人物即账号 (2026-08-08): 下拉读 /personas, 选项值 = persona.id,
+    // 洗稿 POST 带 persona_id, 后端从 persona→host 闭环取账号/品牌/开结尾。
+    const personas = await api('GET', '/personas');
+    select.innerHTML = '';
+    if (!personas.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '无人物（请先到「人物」页创建）';
+      select.appendChild(opt);
+      return;
+    }
+    // 默认选中绑定 laochen host 的人物（与后端 config 默认 host 一致），其次选第一条
+    let defaultSelected = false;
+    personas.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.brand_name ? `${p.name} · ${p.brand_name}` : `${p.name} · ${p.prompt_template}`;
+      select.appendChild(opt);
+      // 展示标记: 绑定 host 的优先 (带品牌即代表绑定了账号)
+      if (!defaultSelected && p.brand_name) {
+        opt.selected = true;
+        defaultSelected = true;
+      }
+    });
+    if (!defaultSelected && personas.length) select.selectedIndex = 0;
+  } catch (e) {
+    console.error('加载数字人失败', e);
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '人物加载失败';
+    select.appendChild(opt);
   }
 }
 
@@ -481,6 +521,7 @@ async function saveDirectorSelections() {
 async function generateAudio() {
   if (!currentScript) return;
   toggle('btn-audio', false);
+  toggle('btn-onestop', false);
   setStatus('status-audio', '生成音频中...');
   try {
     const voiceId = document.getElementById('voice-select').value;
@@ -494,6 +535,74 @@ async function generateAudio() {
   } catch (e) {
     setStatus('status-audio', e.message, true);
     toggle('btn-audio', true);
+    toggle('btn-onestop', true);
+  }
+}
+
+// ── 🚀 一键成片 (2026-08-09) ──
+// 等价于依次点击「生成音频 → 创建并规划 → 执行 Slots → 合成视频」。
+// 音频生成由本页完成; 之后三阶段(规划/执行/合成)在导演台 director.html 执行。
+// 通过 localStorage 'dh_onestop' 标记自动模式, 导演台按 SSE 事件自动串联:
+//   tts_done → 跳导演台(auto=1) → plan_done → executeJob → exec_done → composeJob → compose_done(结束)
+let _onestopAudioSSE = null;
+async function oneStop() {
+  if (!currentScript) return;
+  const btn = document.getElementById('btn-onestop');
+  btn.disabled = true;
+  btn.textContent = '⏳ 一键成片中...';
+  toggle('btn-audio', false);
+  try {
+    const voiceId = document.getElementById('voice-select').value;
+    const query = voiceId ? `?voice_id=${encodeURIComponent(voiceId)}&selected_only=true` : '?selected_only=true';
+    const job = await api('POST', `/audio/scripts/${currentScript.id}/generate-audio${query}`);
+    setStatus('status-audio', `一键成片: 音频任务已提交 (${job.id})`);
+    const container = document.getElementById('audio-list');
+    container.innerHTML = '';
+    if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
+    _onestopAudioSSE = new EventSource(`${API}/jobs/${job.id}/events`);
+    _onestopAudioSSE.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (_) { return; }
+      if (data.type === 'tts_service') {
+        setStatus('status-audio', data.message);
+      } else if (data.type === 'tts_progress') {
+        setStatus('status-audio', `一键成片: 音频进度 ${data.completed}/${data.total}`);
+        if (data.audio_file) appendAudioItem(data.audio_file);
+      } else if (data.type === 'tts_done') {
+        if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
+        const btnOnestop = document.getElementById('btn-onestop');
+        if (btnOnestop) btnOnestop.textContent = '🚀 一键成片';
+        setStatus('status-audio', '音频就绪 — 即将进入导演台自动跑完剩余步骤', false, true);
+        if (data.combined_audio) prependCombinedAudio(data.combined_audio);
+        loadAudioFiles(job.id);
+        // 写入自动成片标记 + 跳转导演台 (auto=1 触发自动创建规划)
+        try { localStorage.setItem('dh_onestop', '1'); } catch (_) {}
+        window.location.href = `/web/director.html?script_id=${encodeURIComponent(currentScript.id)}`
+          + (data.combined_audio ? `&audio_id=${encodeURIComponent(data.combined_audio.id)}` : '')
+          + '&auto=1';
+      } else if (data.type === 'tts_error') {
+        if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
+        const btnOnestop = document.getElementById('btn-onestop');
+        if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
+        toggle('btn-audio', true);
+        setStatus('status-audio', data.error, true);
+        try { localStorage.removeItem('dh_onestop'); } catch (_) {}
+      }
+    };
+    _onestopAudioSSE.onerror = () => {
+      if (_onestopAudioSSE && _onestopAudioSSE.readyState === EventSource.CLOSED) {
+        _onestopAudioSSE.close(); _onestopAudioSSE = null;
+        const btnOnestop = document.getElementById('btn-onestop');
+        if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
+        toggle('btn-audio', true);
+        setStatus('status-audio', 'SSE 连接错误', true);
+      }
+    };
+  } catch (e) {
+    const btnOnestop = document.getElementById('btn-onestop');
+    if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
+    toggle('btn-audio', true);
+    setStatus('status-audio', e.message, true);
   }
 }
 

@@ -1,11 +1,11 @@
-"""Persona API — 数字人物关联 (提示词模板 + 音色 + 形象)."""
+"""Persona API — 数字人物关联 (提示词模板 + 音色 + 形象 + 账号/品牌)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Persona, Role, Voice
+from ..models import Host, Persona, Role, Voice
 from ..schemas import PersonaCreate, PersonaOut, PersonaUpdate
 
 router = APIRouter(prefix="/api/personas", tags=["personas"])
@@ -34,12 +34,20 @@ def create_persona(body: PersonaCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Voice {body.voice_id} not found")
     if body.role_id and not db.get(Role, body.role_id):
         raise HTTPException(status_code=404, detail=f"Role {body.role_id} not found")
+    if body.host_id and not db.get(Host, body.host_id):
+        raise HTTPException(status_code=404, detail=f"Host {body.host_id} not found")
 
     persona = Persona(
         name=body.name,
         prompt_template=body.prompt_template,
         voice_id=body.voice_id,
         role_id=body.role_id,
+        brand_name=body.brand_name,
+        stamp_name=body.stamp_name,
+        brand_tag=body.brand_tag,
+        fixed_opening=body.fixed_opening,
+        fixed_ending=body.fixed_ending,
+        host_id=body.host_id,
     )
     db.add(persona)
     db.commit()
@@ -77,6 +85,17 @@ def update_persona(persona_id: str, body: PersonaUpdate, db: Session = Depends(g
         if body.role_id and not db.get(Role, body.role_id):
             raise HTTPException(status_code=404, detail=f"Role {body.role_id} not found")
         persona.role_id = body.role_id or None
+    if body.host_id is not None:
+        if body.host_id and not db.get(Host, body.host_id):
+            raise HTTPException(status_code=404, detail=f"Host {body.host_id} not found")
+        persona.host_id = body.host_id or None
+
+    # 品牌/开结尾: 显式传值直接写入 (空串经 Pydantic 为 None, 不覆盖已有值);
+    # 传 null 用于显式清空 (与 Host PUT 语义一致)
+    for attr in ("brand_name", "stamp_name", "brand_tag", "fixed_opening", "fixed_ending"):
+        val = getattr(body, attr)
+        if val is not None:
+            setattr(persona, attr, val or None)
 
     db.commit()
     db.refresh(persona)

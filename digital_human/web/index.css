@@ -146,6 +146,9 @@
     .btn-secondary:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
     .btn-success { background: var(--success); color: #fff; }
     .btn-success:hover { background: #059669; }
+    .btn-violet { background: var(--violet); color: #fff; }
+    .btn-violet:hover { background: #7c3aed; box-shadow: 0 4px 16px rgba(139,92,246,0.4); }
+    .btn-violet:disabled { background: #334155; cursor: not-allowed; box-shadow: none; }
     .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
     .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 

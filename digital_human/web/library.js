@@ -6,6 +6,14 @@ let _searchTimer = null;
 let _dimensionOptions = {};
 let _currentAssets = [];
 let _selectedIds = new Set();
+// 分页: 每页 PAGE_SIZE 条, 数字翻页 (减少一次性渲染大量 <video> 的加载开销)
+const PAGE_SIZE = 10;
+let _assetPage = 0;
+let _outputPage = 0;
+let _assetTotal = 0;
+let _outputTotal = 0;
+let _lastAssetQueryKey = null;
+let _lastOutputQueryKey = null;
 let _taggingJobId = null;
 let _taggingSource = null;
 let _taggingPollTimer = null;
@@ -35,6 +43,8 @@ function switchTab(tab) {
   document.getElementById('grid-outputs').classList.toggle('hidden', tab !== 'outputs');
   document.getElementById('asset-filters').classList.toggle('hidden', tab !== 'assets');
   document.getElementById('batch-bar').classList.toggle('hidden', tab !== 'assets');
+  _assetPage = 0;
+  _outputPage = 0;
   loadCurrentTab();
 }
 
@@ -74,15 +84,28 @@ async function loadAssets() {
   if (preference) params.set('preference', preference);
   if (scenes) params.set('scenes', scenes);
   if (shotTypes) params.set('shot_types', shotTypes);
-  params.set('limit', '100');
+
+  const key = params.toString();
+  if (key !== _lastAssetQueryKey) { _assetPage = 0; _lastAssetQueryKey = key; }
+
+  params.set('limit', String(PAGE_SIZE));
+  params.set('offset', String(_assetPage * PAGE_SIZE));
 
   try {
     const r = await fetch(`${API}/assets?${params}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
     _currentAssets = data.items || [];
-    document.getElementById('result-count').textContent = `共 ${data.total} 条`;
+    _assetTotal = data.total || 0;
+    // 当前页被删空 (本页最后一条被删) → 回退一页
+    if (_assetPage > 0 && _currentAssets.length === 0 && _assetTotal > 0) {
+      _assetPage -= 1;
+      loadAssets();
+      return;
+    }
     renderAssets(_currentAssets);
+    renderPager('assets', _assetPage, _assetTotal);
+    document.getElementById('result-count').textContent = `共 ${_assetTotal} 条`;
   } catch (e) { toast('加载失败: ' + e.message, 'error'); }
 }
 
@@ -147,14 +170,27 @@ async function loadOutputs() {
   const orient = document.getElementById('filter-orientation').value;
   if (q) params.set('q', q);
   if (orient) params.set('orientation', orient);
-  params.set('limit', '100');
+
+  const key = params.toString();
+  if (key !== _lastOutputQueryKey) { _outputPage = 0; _lastOutputQueryKey = key; }
+
+  params.set('limit', String(PAGE_SIZE));
+  params.set('offset', String(_outputPage * PAGE_SIZE));
 
   try {
     const r = await fetch(`${API}/outputs?${params}`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const data = await r.json();
-    document.getElementById('result-count').textContent = `共 ${data.total} 条`;
+    _outputTotal = data.total || 0;
+    // 当前页被删空 → 回退一页
+    if (_outputPage > 0 && (data.items || []).length === 0 && _outputTotal > 0) {
+      _outputPage -= 1;
+      loadOutputs();
+      return;
+    }
+    document.getElementById('result-count').textContent = `共 ${_outputTotal} 条`;
     renderOutputs(data.items);
+    renderPager('outputs', _outputPage, _outputTotal);
   } catch (e) { toast('加载失败: ' + e.message, 'error'); }
 }
 
@@ -187,7 +223,42 @@ function renderOutputs(items) {
   }).join('');
 }
 
-// ── Video play mutual exclusive + overlay ──
+// ── Pagination ──
+function renderPager(kind, page, total) {
+  const el = document.getElementById(kind === 'assets' ? 'pager-assets' : 'pager-outputs');
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.min(page, totalPages - 1);
+  if (totalPages <= 1) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+
+  // 数字窗口: 最多 7 个页码, 当前页居中
+  const WINDOW = 7;
+  let start = Math.max(0, current - Math.floor(WINDOW / 2));
+  let end = Math.min(totalPages - 1, start + WINDOW - 1);
+  start = Math.max(0, end - WINDOW + 1);
+
+  const nums = [];
+  for (let i = start; i <= end; i++) {
+    nums.push(i === current
+      ? `<span class="page-num active">${i + 1}</span>`
+      : `<a class="page-num" href="javascript:void(0)" onclick="goPage('${kind}', ${i})">${i + 1}</a>`);
+  }
+  el.innerHTML = `
+    <a class="page-btn ${current === 0 ? 'disabled' : ''}" href="javascript:void(0)" onclick="goPage('${kind}', ${current - 1})">‹ 上一页</a>
+    ${nums.join('')}
+    <a class="page-btn ${current === totalPages - 1 ? 'disabled' : ''}" href="javascript:void(0)" onclick="goPage('${kind}', ${current + 1})">下一页 ›</a>
+    <span class="page-info">${current + 1}/${totalPages}</span>`;
+}
+
+function goPage(kind, page) {
+  const total = kind === 'assets' ? _assetTotal : _outputTotal;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (page < 0 || page >= totalPages) return;
+  if (kind === 'assets') { _assetPage = page; loadAssets(); }
+  else { _outputPage = page; loadOutputs(); }
+  const gridId = kind === 'assets' ? 'grid-assets' : 'grid-outputs';
+  document.getElementById(gridId).scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 document.addEventListener('play', (e) => {
   const v = e.target;
   if (!v || v.tagName !== 'VIDEO') return;
@@ -361,6 +432,66 @@ async function scanImport() {
   }
 }
 
+// ── Import Folder + Tag ──
+function _parseCsv(value) {
+  return (value || '').split(/[,，]/).map(t => t.trim()).filter(Boolean);
+}
+
+async function loadImportFolders() {
+  try {
+    const r = await fetch(`${API}/folders`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const sel = document.getElementById('import-folder-select');
+    if (!sel) return;
+    sel.innerHTML = (data.folders || []).length
+      ? (data.folders || []).map(f => `<option value="${escHtml(f)}">${escHtml(f)}</option>`).join('')
+      : '<option value="">（materials 下暂无子文件夹）</option>';
+  } catch (_) {}
+}
+
+function openImportFolderModal() {
+  loadImportFolders();
+  document.getElementById('import-modal').classList.remove('hidden');
+  document.getElementById('import-scenes').value = '';
+  document.getElementById('import-shot_types').value = '';
+}
+
+function closeImportModal() { document.getElementById('import-modal').classList.add('hidden'); }
+
+async function importFolder() {
+  const folder = document.getElementById('import-folder-select').value;
+  if (!folder) { toast('请选择素材文件夹', 'info'); return; }
+  const scenes = _parseCsv(document.getElementById('import-scenes').value);
+  const shot_types = _parseCsv(document.getElementById('import-shot_types').value);
+  if (!scenes.length && !shot_types.length) {
+    toast('请至少填写一个标签（场景或镜头）', 'info');
+    return;
+  }
+  const btn = document.getElementById('import-modal-ok');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/import-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, scenes, shot_types }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    const data = await r.json();
+    closeImportModal();
+    toast(`导入完成: 发现 ${data.scanned} 个视频, 新导入 ${data.imported} 个, 跳过 ${data.skipped} 个, 打标 ${data.labeled} 个`, 'success');
+    loadAssets();
+    loadTaggingCount();
+  } catch (e) {
+    toast('导入失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ── Edit Modal ──
 function openEdit(id) {
   editingId = id;
@@ -514,7 +645,7 @@ function connectTaggingSSE(jobId) {
         toast('AI 打标任务失败: ' + (data.error || '未知错误'), 'error');
         finishTagging();
       } else if (data.type === 'cancelled') {
-        toast('AI 打标已取消', 'info');
+        toast(`AI 打标已取消 — 本次已处理 ${(data.done || 0) + (data.failed || 0)}/${data.total || 0}`, 'info');
         finishTagging();
       }
     } catch (_) { /* ignore parse errors */ }
@@ -536,6 +667,8 @@ async function pollTaggingStatus(jobId) {
     if (['completed', 'failed', 'cancelled'].includes(data.status)) {
       if (data.status === 'completed') {
         toast(`AI 打标完成: ${data.done} 成功${data.failed ? `, ${data.failed} 失败` : ''}`, data.failed ? 'error' : 'success');
+      } else if (data.status === 'cancelled') {
+        toast(`AI 打标已取消 — 本次已处理 ${(data.done || 0) + (data.failed || 0)}/${data.total || 0}`, 'info');
       }
       finishTagging();
       return;
@@ -570,8 +703,15 @@ function renderTaggingProgress(data) {
     statusText.textContent = `❌ 打标失败: ${data.error || ''}`;
     currentEl.textContent = '';
   } else if (state === 'cancelled') {
-    statusText.textContent = '⏹ 已取消';
+    statusText.textContent = `⏹ 已取消 — 本次已处理 ${done}/${total}`;
     currentEl.textContent = '';
+  } else if (state === 'channel') {
+    // 通道级进度: 当前素材第 N/4 通道
+    const ch = data.channel || 0;
+    const chTotal = data.channel_total || 4;
+    const assetNo = data.current_asset_no || '';
+    statusText.textContent = `🤖 AI 打标进行中 — ${assetNo} (第 ${ch}/${chTotal} 通道: ${data.channel_name || ''})`;
+    currentEl.textContent = data.msg ? `当前: ${data.msg}` : '';
   } else {
     statusText.textContent = '🤖 AI 打标进行中...';
     currentEl.textContent = data.current_asset_no ? `当前: ${data.current_asset_no}` : '';
@@ -599,11 +739,17 @@ function finishTagging() {
 async function cancelTagging() {
   if (!_taggingJobId) return;
   if (!confirm('确认取消 AI 打标任务？')) return;
+  const jobId = _taggingJobId;
+  // 不立即隐藏进度条 — 保留本次已处理数量, 等 SSE cancelled 事件 (带 done/failed) 到达后再收起
+  document.getElementById('tagging-status-text').textContent = '⏹ 正在取消...';
+  document.getElementById('tagging-current').textContent = '';
   try {
-    await fetch(`${TAGGING_API}/cancel/${_taggingJobId}`, { method: 'POST' });
+    await fetch(`${TAGGING_API}/cancel/${jobId}`, { method: 'POST' });
   } catch (_) {}
-  finishTagging();
-  hideTaggingProgress();
+  // SSE 已断开时兜底轮询终态; SSE 正常时等 cancelled 事件即可
+  if (!_taggingSource) {
+    _taggingPollTimer = setTimeout(() => pollTaggingStatus(jobId), 8000);
+  }
 }
 
 async function loadTaggingCount() {

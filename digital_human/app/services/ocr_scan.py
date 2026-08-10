@@ -83,6 +83,7 @@ def _detect_flag_colors(frame_path: Path) -> bool:
 # ── EasyOCR 封装 ──────────────────────────────────────────────
 
 _EASYOCR_AVAILABLE = None
+_READER = None               # Reader 进程级单例 (init 开销大, 复用)
 
 
 def _ensure_easyocr():
@@ -98,6 +99,21 @@ def _ensure_easyocr():
                      "Install with: pip install easyocr")
         _EASYOCR_AVAILABLE = False
     return _EASYOCR_AVAILABLE
+
+
+def _get_reader():
+    """惰性创建进程级 Reader 单例, 复用避免每次调用重复 init.
+
+    本机 torch 为 CPU 版 (cuda_available=False), gpu=True 反而每次触发
+    DataLoader pin_memory UserWarning 刷屏, 且白做 GPU 探测。显式 gpu=False。
+    easyocr.Reader 初始化 (torch 探测 + 模型加载) 单次可达数秒, 预抽帧
+    全库 1400+ 素材每素材一调, 必须复用。
+    """
+    global _READER
+    if _READER is None:
+        import easyocr  # 模块级不可见, 必须函数内再导入
+        _READER = easyocr.Reader(["ch_sim", "en"], gpu=False, verbose=False)
+    return _READER
 
 
 def _empty_ocr_result() -> dict:
@@ -143,7 +159,8 @@ def ocr_scan_frames(frame_paths: list[Path]) -> dict:
     import easyocr
 
     try:
-        reader = easyocr.Reader(["ch_sim", "en"], gpu=True, verbose=False)
+        # 进程级 Reader 单例 (复用, 避免每次调用重复 init)
+        reader = _get_reader()
     except Exception as exc:
         logger.warning("EasyOCR init failed: %s", exc)
         return _empty_ocr_result()

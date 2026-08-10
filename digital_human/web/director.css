@@ -240,6 +240,7 @@ select:focus, input:focus { outline: none; border-color: var(--accent); box-shad
 .toast.success { background: rgba(16,185,129,0.9); color: #fff; }
 .toast.error { background: rgba(239,68,68,0.9); color: #fff; }
 .toast.info { background: rgba(59,130,246,0.9); color: #fff; }
+.toast.warning { background: rgba(245,158,11,0.9); color: #fff; }
 body.log-open .toast { bottom: 280px; }
 
 /* ── Loading Spinner ── */

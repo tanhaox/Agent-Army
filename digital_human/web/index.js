@@ -61,6 +61,7 @@
 
     document.querySelectorAll('[id^="step-"][id$="-card"]').forEach(el => observer.observe(el));
 
-    // ── Init: load prompt templates & voices ──
+    // ── Init: load prompt templates, hosts & voices ──
     loadPromptTemplates();
+    loadHosts();
     loadVoices();

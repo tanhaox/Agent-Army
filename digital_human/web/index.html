@@ -65,6 +65,12 @@
     <div class="card" id="step-2-card">
       <h3><span class="icon">🤖</span> AI 洗稿</h3>
       <div class="form-row" style="margin-bottom:1rem;">
+        <div style="flex:0 0 200px;">
+          <label>数字人（人物）</label>
+          <select id="rewrite-host" style="width:100%;padding:0.4rem 0.6rem;font-size:0.82rem;">
+            <option value="">加载中…</option>
+          </select>
+        </div>
         <div style="flex:0 0 220px;">
           <label>数字人 / 提示词模板</label>
           <select id="rewrite-template" style="width:100%;padding:0.4rem 0.6rem;font-size:0.82rem;">
@@ -162,6 +168,7 @@
         </div>
         <div class="btn-group" style="margin-top:0.5rem;">
           <button class="btn btn-primary" id="btn-audio" onclick="generateAudio()" disabled>生成音频</button>
+          <button class="btn btn-violet" id="btn-onestop" onclick="oneStop()" disabled title="生成音频 → 创建并规划 → 执行 Slots → 合成视频，每步完成后自动触发下一步">🚀 一键成片</button>
         </div>
       </div>
       <div class="status" id="status-audio"></div>
@@ -172,7 +179,7 @@
   <!-- Toast -->
   <div class="toast" id="toast"></div>
 
-  <script src="/web/app.js?v=5"></script>
+  <script src="/web/app.js?v=6"></script>
   <script src="/web/index.js"></script>
 </body>
 </html>

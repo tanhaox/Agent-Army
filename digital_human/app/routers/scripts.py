@@ -9,8 +9,8 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, selectinload
 
-from ..database import get_db, get_session_maker
-from ..models import Script, Segment, AudioJob, AudioFile, DirectorJob, Host
+from ..database import db_session, get_db, get_session_maker
+from ..models import Script, Segment, AudioJob, AudioFile, DirectorJob, Host, Persona
 from ..schemas import ScriptOut, ScriptUpdate, SegmentOut, SegmentUpdate, CorrectRequest
 from ..services.llm_service import LLMService
 from ..services.script_parser import parse_script
@@ -275,56 +275,57 @@ def correct_script(
     job_id = str(uuid.uuid4())
 
     def _do_correct():
-        Session2 = get_session_maker()
-        if Session2 is None:
+        if get_session_maker() is None:
             _publish(job_id, {"type": "correct_error", "error": "Database not initialized"})
             return
-        db2 = Session2()
-        try:
-            script2 = db2.query(Script).filter(Script.id == script_id).first()
-            if not script2:
-                _publish(job_id, {"type": "correct_error", "error": "Script not found"})
-                return
+        with db_session() as db2:
+            try:
+                script2 = db2.query(Script).filter(Script.id == script_id).first()
+                if not script2:
+                    _publish(job_id, {"type": "correct_error", "error": "Script not found"})
+                    return
 
-            chunks: list[str] = []
+                chunks: list[str] = []
 
-            def _cb(chunk: str) -> None:
-                chunks.append(chunk)
-                _publish(job_id, {"type": "correct_chunk", "chunk": chunk})
+                def _cb(chunk: str) -> None:
+                    chunks.append(chunk)
+                    _publish(job_id, {"type": "correct_chunk", "chunk": chunk})
 
-            corrected_text = llm.correct_article(
-                script2.script_text,
-                perspective=request.perspective,
-                prompt_template=script2.prompt_template,
-                model=request.model,
-                stream=True,
-                chunk_callback=_cb,
-            )
+                corrected_text = llm.correct_article(
+                    script2.script_text,
+                    perspective=request.perspective,
+                    prompt_template=script2.prompt_template,
+                    model=request.model,
+                    stream=True,
+                    chunk_callback=_cb,
+                )
 
-            # 保存修正观点
-            script2.perspective_2 = request.perspective.strip()
-            script2.script_text = corrected_text
+                # 保存修正观点
+                script2.perspective_2 = request.perspective.strip()
+                script2.script_text = corrected_text
 
-            # 重新分段
-            host = db2.query(Host).filter(Host.id == script2.host_id).first()
-            fixed_opening = host.fixed_opening if host else None
-            fixed_ending = host.fixed_ending if host else None
-            segments_data = parse_script(corrected_text, fixed_opening, fixed_ending)
+                # 重新分段: 开结尾取人物(persona)显式值, 其次 host 兼容老数据 (2026-08-08)
+                host = db2.query(Host).filter(Host.id == script2.host_id).first()
+                persona = (
+                    db2.query(Persona).filter(Persona.host_id == script2.host_id).first()
+                    if script2.host_id else None
+                )
+                fixed_opening = (persona.fixed_opening if persona else None) or (host.fixed_opening if host else None)
+                fixed_ending = (persona.fixed_ending if persona else None) or (host.fixed_ending if host else None)
+                segments_data = parse_script(corrected_text, fixed_opening, fixed_ending)
 
-            # 清除旧分段，重新写入
-            for seg in list(script2.segments):
-                db2.delete(seg)
-            db2.flush()
-            for seg_data in segments_data:
-                db2.add(Segment(script_id=script2.id, **seg_data))
+                # 清除旧分段，重新写入
+                for seg in list(script2.segments):
+                    db2.delete(seg)
+                db2.flush()
+                for seg_data in segments_data:
+                    db2.add(Segment(script_id=script2.id, **seg_data))
 
-            db2.commit()
+                db2.commit()
 
-            _publish(job_id, {"type": "correct_done", "script_id": script2.id})
-        except Exception as exc:
-            _publish(job_id, {"type": "correct_error", "error": str(exc)})
-        finally:
-            db2.close()
+                _publish(job_id, {"type": "correct_done", "script_id": script2.id})
+            except Exception as exc:
+                _publish(job_id, {"type": "correct_error", "error": str(exc)})
 
     background_tasks.add_task(_do_correct)
     return {"job_id": job_id, "status": "started"}

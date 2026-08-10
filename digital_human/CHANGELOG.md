@@ -4,6 +4,180 @@
 
 ---
 
+## 2026-08-08｜Slot「重试」按钮无反应修复 — 僵尸 running 放行 + retry 事件流打通
+
+### 背景
+用户：Director 页面 Slot #2，「重试同类」点击后执行日志有明确反应，但「重试」点击后执行日志毫无反应。
+
+### 根因
+job `79fc44b6` 处于 `reviewing`，但 slot_index 2（`hf_title`）是 **`running`** 且无 output —— 服务重启/执行中断遗留的僵尸状态。此状态卡死两条链路：
+1. **前端** `showSlotDetail` 的 `canRegenerate` 只认 `completed/failed/skipped` → 僵尸 running 的「重试」按钮被 `disabled` → 点击物理无反应。
+2. **后端** `retry_slot` 对 `status=="running"` 一律 409 拒绝，即使 job 已不在后台执行。
+「重试同类」只看同类其它已完成 slot，故不受影响 —— 这正是两按钮行为差异的来源。
+另：`retry_slot` 正常路径原本无日志、不发 SSE 事件，即使重试成功执行日志也空白。
+
+### 改动
+1. **`app/routers/director_routes/retry.py`**：
+   - 新增 `_job_truly_executing(job)` 僵尸检测（`job.status=="executing" and job.id in _executing_jobs`）；`running` 分支改为：真在执行 → 409；僵尸 → `logger.warning` + 重置 queued 放行。
+   - `retry_slot` 补 `logger.info/warning` + `director_events.publish` 的 `slot_start/slot_done/slot_fail` 事件（与 `/execute` 事件流一致）。
+2. **`web/director.js`**：
+   - `showSlotDetail` 的 `canRegenerate` 增加 `zombieRunning = status=='running' && !_jobExecuting`。
+   - `retrySlot` 点击后先 `showExecLog()` + `connectSSE(currentJobId)`，与「重试同类」一致，让重试进度实时显示在执行日志抽屉。
+
+### 涉及模块
+`app/routers/director_routes/retry.py` / `web/director.js`
+
+### 验证
+- ✅ 僵尸 running slot（`ab9b278d`，slot_index 2）POST retry：HTTP **200** `completed` + 产出 `visual_segment.mp4`（此前 409 拒绝）
+- ✅ SSE 订阅实测捕获 `slot_start` → `slot_done` 两条事件（msg「Slot #2 重试开始/重试完成」）
+- ✅ 服务器日志出现 `treat as zombie and allow retry`
+- ✅ `py_compile` + 模块导入 + `node --check` 全过
+
+---
+
+### 背景
+用户：合成后语音和画面没对齐，视频长一截（4:24 vs 音频 4:09 就结束）。量化 job 79fc44b6（58 slots）：`sum(alloc)=245.89s` vs `sum(actual)=264.19s`，视频超长 **+18.30s**。
+
+### 根因
+`hf.py` 渲染 HF 卡时 `input_data["duration_sec"] = max(5, min(30, round(duration)))` — 模板 schema 硬约束 `duration_sec ∈ [5,30]` 整数秒，短卡（如分配 1.77s）被夹取渲染为 **5.00s**。concat 用 `-c copy` 不裁剪，累积偏差让视频轨比按分配时长精确切片的 TTS 轨（`atrim`/`aevalsrc`）长一截，尾部画面无配音。broll 精确（`-t` 重编码）、host 直接传精确时长，唯独 hf 被夹取。模板约束无法源头修复，须在合成阶段归一化。
+
+### 改动
+1. **`app/services/composition_service/slots.py`**：Step 1 `_collect_slot_sources` 循环后对每个 clip 做时长归一化 `_normalize_clip_duration`：
+   - 实际时长 vs 分配时长（`slot.end_sec - slot.start_sec`）偏差 ≤ `_NORMALIZE_TOLERANCE`（0.2s）→ 复用原文件，保持 `-c copy` 零重编码
+   - 超长 → `-vf tpad + -af apad + -t <alloc>` 重编码裁剪（`tpad=stop_mode=clone` 冻结尾帧、`apad` 补静音，`-t` 钉死精确时长）；下溢 → 冻结尾帧 + 静音补齐
+   - 输出落点 = **job root** `normalized_<slot_index>.mp4`（非 `src_paths[0].parent`），确保 cleanup 能回收
+   - 编码参数（h264 / 48kHz aac / 30fps / yuv420p）与 `render_scale_pad` 一致，可与 `-c copy` concat 混拼
+2. **`app/services/composition_service/pipeline.py`**：`_collect_slot_sources(db, completed, evt, root=root)` 传入 job root。
+3. **`app/services/composition_service/common.py`**：`_cleanup_intermediates` patterns 加 `normalized_*.mp4`。
+
+### 涉及模块
+`app/services/composition_service/slots.py` / `app/services/composition_service/pipeline.py` / `app/services/composition_service/common.py`
+
+### 验证
+- ✅ 真实素材离线三阶段（normalize→concat→mix）：drift **+18.30s → +0.34s**；真实 `compose_director_job` 重跑成片 **246.25s**，`video=246.25s audio=246.25s delta=+0.00s`（目标 ≤0.2s），归一化 13/58 clips（slot 2/7/14/17/21/26/31/32/41/51/52/54/57）
+- ✅ 音量无回归：成片 mean −29.7 dB / max −8.9 dB，与修复前成片（−30.0/−8.9）一致
+- ✅ cleanup 闭环：82.8 MB 中间件全部回收，成片 + manifest + 洗稿.txt 保留，slots/ 零残留
+- ⚠️ 已知（修复前已存在，非本次引入）：loudnorm `input_i=-inf` 走 copy fallback，成片音频流实际有声音
+
+---
+
+## 2026-08-08｜合成视频后写入洗稿文本 — 成片同目录产出 `洗稿.txt`（对照复核）
+
+### 背景
+用户：洗稿后的 txt 长期只存 DB（`scripts.script_text`），本地找不到文本文件，人工对照成片复核不便。要求**合并到【合成视频】流程**：合成成功后把洗稿 txt 放进视频同一文件夹。
+
+### 改动
+1. **`app/services/composition_service/output.py`**：`_finalize_output` 成功路径（manifest 落盘后、`job.status="completed"` 前）新增 `_write_script_txt(job, final_normalized.parent)` — 取 `job.script.script_text`（洗稿后手动编辑以最新编辑为准），UTF-8 写入 `composition_root/洗稿.txt`，与 `director_<job_id>.mp4` 同目录。空文本/无 script 跳过（非致命，异常不阻断合成）。
+2. **`app/main.py`** retention sweep 孤儿清理白名单加入 `洗稿.txt` — 过期 job 扫描不再误删洗稿文本（与成片 + manifest 同保留）。
+
+### 涉及模块
+`app/services/composition_service/output.py` / `app/main.py`
+
+### 验证
+- ✅ 单测 `_write_script_txt`：正常写入（内容一致）x2 / 空文本跳过 x1 / 无 script 跳过 x1
+- ✅ 回归 `_cleanup_intermediates`：仅删 concat_list/concat_raw/with_audio/normalized/silence_fallback，成片 + manifest + 洗稿.txt 全保留
+- ✅ `main.py` retention sweep 保留集含 `洗稿.txt`
+- ⚠️ **必须重启后端**（`reload=False`）生效
+
+---
+
+## 2026-08-08｜人物即账号 — Persona 吸收品牌/开结尾/host_id，成片去「老陈」硬编码（最终方案）
+
+### 背景
+成片上仍出现「老陈」字样。已排查确认模板已完全占位符化，字样来自注入数据链路：`main.py` seed 硬编码唯一 host「老陈聊财经」（persona_key=`laochen`）+ `hf.py _merge_brand` 从 `host.name` 注入全名、猜前 2 字注入印章。用户设计指令：**如果需要注入，页面上应该有选择、可编辑、可流水线改造，或在人物关联中绑定**（同一人的洗稿 txt 是每个数字人的开始，不会乱）。经三次方向纠正，定稿为「人物即账号」：人物（Persona）与账号（Host）合并为一个人物页，人物页是唯一管理入口。
+
+### 改动
+1. **数据模型（人物即账号）**：`Persona` 吸收品牌三字段 `brand_name`(128)/`stamp_name`(16)/`brand_tag`(64) + 口播开结尾 `fixed_opening`/`fixed_ending` + 显式 `host_id` FK（1:1 绑定 Host）。`Host` 保留三 brand 字段（迁移遗留，兼容旧数据回退）。`database.py _apply_manual_migrations` 幂等 `ALTER TABLE ADD COLUMN`，personas 数据绑定修复仅在 `len(hosts)==1` 时自动补绑。
+2. **API 层**：`personas.py` CRUD 支持 brand 三字段 + 开结尾 + host_id；`GET /api/personas/by-template/{tpl}` 供模板联动。洗稿 `RewriteRequest` 带 `persona_id`，`articles.py _do_rewrite` 解析链路 `persona_id → persona 的 host → request.host_id → config 默认 → 首个 host`；persona 未绑 host 时明确报错「Persona has no bound host」，不让老陈兜底冒名顶替。
+3. **流水线取数闭环**：品牌取 `persona.brand_name/stamp_name/brand_tag` > `host` 同名字段 > 中性兜底（财经频道/财经/数据解读）；开结尾取 `persona.fixed_opening/fixed_ending` > `host` 同名字段；音色取 `persona.voice_id` > `host.default_voice_id` > host 下第一条 voice。`hf.py _merge_brand` 经 host.id 反查 persona 取品牌，显式字段优先。
+4. **前端**：人物页 `web/personas.html` 为唯一管理入口（人物 = 模板 + 音色 + 形象 + 账号/品牌 + 开结尾）。「账号管理」页 `web/hosts.html` 已弃用入回收站。洗稿页「数字人账号」下拉改从 `/api/personas` 读取（选项值 = persona.id），`rewriteArticle` POST body 带 `persona_id`，模板选择联动自动锁定音色/形象/账号。
+5. **去硬编码**：`main.py _seed_defaults()` 默认 host 品牌三字段置 None（name=「数字人频道」，persona_key=`laochen` 保留为 config 默认键，纯回退不再上屏）。
+
+### 涉及模块
+`app/models/content.py` / `app/models/persona.py` / `app/database.py` / `app/schemas/articles.py` / `app/routers/personas.py` / `app/routers/articles.py` / `app/services/slot_workflows/hf.py` / `app/main.py` / `web/personas.html` / `web/index.html` / `web/app.js`
+
+### 验证
+- ✅ **E2E 35 PASS / 0 FAIL**（`e2e_persona_account.py`，临时库隔离）：迁移幂等 x2 / seed 中性无老陈 / persona CRUD 品牌字段 / 洗稿 `persona_id→host` 解析 / 首段 opening + 末段 ending 取 persona 开结尾 / 洗稿文本与注入数据均无「老陈」/ `_merge_brand` 注入谭聊财经·谭聊·数据锐评
+- ✅ 「老陈」全仓残留审计：无真正影响成片的硬编码，残留均为注释、LLM 示例（已被 `_strip_host.py` 去出镜化）、测试占位符或清洗规则
+- ⚠️ **必须重启后端**（`reload=False`）迁移才应用到生产库（personas 表新增列、seed 中性化生效）
+
+---
+
+## 2026-08-08｜HF 渲染 300s 超时修复 — `--low-memory-mode` 绕开 calibration 卡死 + 横屏模板 letterSpacing lint error 清理
+
+### 背景
+job 79fc44b6 slot#2（hf_title，横屏）渲染报 `HyperFrames timed out after 300s`。render.log 显示 compile 41.9s 后 **capture_calibration 阶段卡死**：auto-worker calibration 两次 `Runtime.evaluate timed out`，150 帧 0 完成。
+
+### 改动
+1. **后端 `app/services/hf_client.py`**：render 命令追加 `--low-memory-mode` — 固定 1 worker + 强制 screenshot 捕获 + 跳过 auto-worker calibration。本机 32 cores + Intel UHD 集显下 `--workers auto` 高并发起多个 Chrome → 集显资源耗尽 → calibration 超时；`--low-memory-mode` 实测 39s 稳定出片（此前 300s 超时）。产物规格（1920×1080 / 30fps / h264）与成功 render 完全一致。
+2. **横屏模板 `news_magazine_v1_ls\index.html`（仓库外）L415-418**：移除 `tl.fromTo(headline, { letterSpacing: "0.12em" }, { letterSpacing: "0.02em" })` — 触发 `gsap_non_transform_motion` lint error（文本重排属性，seek-by-frame 捕获引擎下 stutter）。字距展开感已由逐字 stagger 弹入承担，无需额外字距动画。
+
+### 涉及模块
+`app/services/hf_client.py` / `E:\AI\digital_human\hf_prep\news_magazine_v1_ls\index.html`（仓库外）
+
+### 验证
+- ✅ 后端链路（fill_template → render_visual）完整渲染：44.6s exit=0，mp4 333632 bytes，1920×1080 / 30fps / h264
+- ✅ render.log 无 `gsap_non_transform` / `letterSpacing` lint error（此前存在）
+- ✅ slot#2 产物已回填（`hf_title_002.mp4`，DB status=completed，供合成继续）
+- ⚠️ **必须重启后端**（`reload=False`）新渲染才用上 `--low-memory-mode`
+- ⚠️ job 79fc44b6 另 6 个 CANCELLED slot（#26/31/41/51/54/57，用户主动取消）未重跑，待确认
+
+---
+
+## 2026-08-08｜HF 模板三件套 — 圆饼图缺角修复 + 横屏模板 + 品牌泛化
+
+### 背景
+近三块 HF 模板相关工作此前未入账，本次统一归档：① 用户反馈「圆饼图有缺角」；② 横屏画幅此前硬编码竖屏模板；③ 模板被多账号共享但品牌栏/印章硬编码账号名。
+
+### 改动
+1. **圆饼图缺角修复（模板层）**：竖屏/横屏新闻杂志模板 `buildDonut` 三处守恒重写 — `avail = C - n*SEG_GAP`（缺口按比例预留）、`stroke-dashoffset = -used` + `used += len + SEG_GAP`（offset 守恒）、去主段 `scale:1.1`/`rotation:14°` 分离动画改纯 opacity 错峰淡入。根因三重叠：主段分离动画 + 小段 clamp 失配 + offset 不守恒。
+2. **HF 横屏模板**：新增 `news-magazine-v1-ls`（1920×1080，composition_id `news_main_ls`），`_pick_hf_template` 按 `job.video_format` 宽高比自动选横/竖模板（代码引入 commit `4997ca1c`，2026-08-07）。
+3. **品牌泛化**：`_SAFE_KEYS` 27 个 key 新增 `brand_name`/`stamp_name`/`brand_tag`；`_merge_brand` 从 `slot.director_job.script.host` 注入账号名/印章/标语（lazy=selectin 零额外查询，缺省中性回退）。
+
+### 涉及模块
+`app/services/template_filler.py` / `app/services/slot_workflows/hf.py` / `app/services/template_library.py` / `app/services/slot_workflows/common.py` / `E:\AI\digital_human\hf_prep\news_magazine_v1\index.html`（仓库外） / `news_magazine_v1_ls\index.html`（仓库外）
+
+### 验证
+- ✅ 双模板各重渲染一条含 pie 成片（`items:[58,22,15,4.9,0.1]`，含 0.1% 极小段，8s），抽 2.4s/7.8s 关键帧，PIL 沿环 0.5° 扫描：竖屏 719/720、横屏 720/720 整环闭合，**无缺角**（缺失约 0.5° 为 1px SEG_GAP 设计内细缝）
+- ✅ 几何模拟（同压测数据）：旧算法段对重叠 2 次 → 新算法 0 次，段间 gap 均匀 0.3-0.4°
+- ✅ 品牌泛化/横屏选择逻辑 `python -m py_compile` 通过
+- ⚠️ 品牌泛化待重启后端后 E2E 验证（`reload=False` 不会自动加载新代码）
+
+### 决策
+- 模板实体位于 `E:\AI\digital_human\hf_prep\`（`hf_template_root` 默认路径），**不在 git 仓库内、无版本控制**，改动需手动备份
+- 首版「固定弧长 gap」方案经几何模拟证明仍有 wrap 重叠，收敛为 offset 守恒方案
+
+---
+
+## 2026-08-07｜素材生命周期策略升级 — 保留 slot 素材防返工（保留 7 天 + 出口闭环）
+
+### 背景
+原策略（v3 引入）在合成成功后无条件 `shutil.rmtree(slots/)` 删除全部 slot 产出，而 retry 只重置**部分** slot 的 DB 记录。两者不一致 → 用户「重试同类 / 换素材」局部重制后，其余 completed slot 的 `output_path` 指向已删除文件 → REPAIR 被迫用新素材+新搜索补齐 → 画面与用户当初选定不一致 = **返工**；REPAIR 失败还直接触发合成线程崩溃。
+
+### 改动
+1. **删除合成后自清理（Step 7）**：composition_service.py 移除 `shutil.rmtree(slots/)`，slot 素材默认保留至 job 删除或过期保留扫描
+2. **新增保留扫描**：main.py `_auto_cleanup_stale_jobs()` 增加分支 — completed 且 `completed_at` 超 `slot_retention_days` 的 job → 清 `slots/` + `hf_visual/<job_id>/` + 孤儿中间件，**保留成片** `director_<job_id>.mp4` + `composition_manifest.json`
+3. **清理补充**：`_cleanup_intermediates` patterns 追加 `silence_fallback.wav`（此前遗漏，0f1f7ed3 有 84KB 残留）
+4. **purge 连带删目录**：`purge_replaced_slots` 删 DB 行基础上连带删 `composition_output_root/<job_id>/slots/<replaced_id>/`
+5. **新配置项**：`slot_retention_days: 7`（defaults 节，0 = 关闭保留，回退到旧「出片即删」行为）
+
+### 涉及模块
+`app/services/composition_service.py` / `app/main.py` / `app/routers/director.py` / `app/config.py` / `config/app.yaml` / `scripts/verify_retention.py`（新建隔离验证脚本）
+
+### 验证
+- ✅ 隔离验证脚本 `scripts/verify_retention.py`（临时 DB + 临时 composition 目录，不触碰真实数据）**19/19 通过**：核心链路 slots/ 保留 / retry 单条其余 slot mtime 不变 / 幂等返回 / 保留扫描清 slots 留成片+manifest / silence_fallback.wav 清理
+- ✅ 现状磁盘清理：85f51962 / b64aeb28 孤儿中间件（manifest + with_audio.mp4 + concat_list.txt 残留）已清；0f1f7ed3 的 silence_fallback.wav 已清
+- ⚠️ 待重启后端后 E2E 验证（`reload=False` 不会自动加载新代码）
+
+### 决策
+- 拒绝「最小改动」，整体升级素材生命周期策略：保留 slot 素材使「重试同类 / 换素材重合成」不返工
+- 删 slots/ 的**唯二出口**：① 用户删 job（`_cleanup_job_files` rmtree）② 保留扫描（completed 超 7 天）
+- REPAIR 补齐逻辑（缺失 slot 自动补）保留为安全网：仅当素材确实丢失时触发，不再承担「正常返工」职责
+- 幂等守卫语义更新：job completed + 成片存在 + 无 `slots_changed_since_compose` → 幂等返回，不再触碰磁盘
+- 素材库 GC 本次不纳入（用户确认）
+
+---
+
 ## 2026-08-03｜导演生产路径优化 v3 — 零拷贝 + 48kHz 统一 + 合成后自清理（8 阶段）
 
 ### 背景

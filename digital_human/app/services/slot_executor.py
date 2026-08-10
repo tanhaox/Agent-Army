@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # 取消标志 — 由 director router 的 /cancel 端点设置
 _cancel_flags: set[str] = set()
 
+# 强制停止标志 — 由 force-stop 端点设置. 无天然清理点, 每个新执行入口
+# (execute_job/compose_job/retry_slot/retry_by_workflow) 必须显式 clear_force_stopped.
+_force_stopped: set[str] = set()
+
 
 def request_cancel(job_id: str) -> None:
     """Signal the execute loop to stop after the current phase."""
@@ -42,6 +46,30 @@ def _is_cancelled(job_id: str) -> bool:
     return job_id in _cancel_flags
 
 
+def mark_force_stopped(job_id: str) -> None:
+    """标记强制停止. 后台线程任何状态写前查 is_force_stopped → 跳过终态覆盖."""
+    _force_stopped.add(job_id)
+
+
+def is_force_stopped(job_id: str) -> bool:
+    return job_id in _force_stopped
+
+
+def clear_force_stopped(job_id: str) -> None:
+    """清除强制停止标记. 必须在每个新执行入口调用, 防脏标记阻断后续执行."""
+    _force_stopped.discard(job_id)
+
+
+def clear_force_stopped_all() -> None:
+    """清空全部强制停止标记 (lifespan 重启清理)."""
+    _force_stopped.clear()
+
+
+def clear_cancel_flags_all() -> None:
+    """清空全部取消标记 (lifespan 重启清理)."""
+    _cancel_flags.clear()
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -59,32 +87,38 @@ def execute_slot(db: Session, slot: DirectorSlot) -> DirectorSlot:
     slot.retry_count += 1
     db.commit()
 
-    handler = WORKFLOW_HANDLERS.get(slot.workflow)
-    if handler is None:
-        slot.status = "failed"
-        slot.error_code = "UNKNOWN_WORKFLOW"
-        slot.error_message = f"unknown workflow {slot.workflow}"
-        db.commit()
-        return slot
-
+    # 线程子进程上下文: 绑定 job_id, 供 proc_registry 自动关联本 slot 的子进程
+    from app.services.proc_registry import set_current_job_id
+    set_current_job_id(slot.director_job_id)
     try:
-        if slot.workflow in ("hf_chart", "hf_title"):
-            output_path = handler(db, slot, slot.workflow)
-        else:
-            output_path = handler(db, slot)
-        slot.output_path = output_path
-        slot.status = "completed"
-        slot.error_code = None
-        slot.error_message = None
-    except Exception as exc:
-        logger.exception("Slot %s workflow %s failed", slot.id, slot.workflow)
-        slot.status = "failed"
-        slot.error_code = type(exc).__name__.upper()
-        slot.error_message = str(exc)[:512]
+        handler = WORKFLOW_HANDLERS.get(slot.workflow)
+        if handler is None:
+            slot.status = "failed"
+            slot.error_code = "UNKNOWN_WORKFLOW"
+            slot.error_message = f"unknown workflow {slot.workflow}"
+            db.commit()
+            return slot
 
-    db.commit()
-    db.refresh(slot)
-    return slot
+        try:
+            if slot.workflow in ("hf_chart", "hf_title"):
+                output_path = handler(db, slot, slot.workflow)
+            else:
+                output_path = handler(db, slot)
+            slot.output_path = output_path
+            slot.status = "completed"
+            slot.error_code = None
+            slot.error_message = None
+        except Exception as exc:
+            logger.exception("Slot %s workflow %s failed", slot.id, slot.workflow)
+            slot.status = "failed"
+            slot.error_code = type(exc).__name__.upper()
+            slot.error_message = str(exc)[:512]
+
+        db.commit()
+        db.refresh(slot)
+        return slot
+    finally:
+        set_current_job_id(None)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +399,11 @@ def execute_all_slots(db: Session, job_id: str, *, auto_replace: bool = True, en
                      f"Fallback 兜底结束, 仍失败 {fbd_failed}/{len(all_failed)}")
 
     _cancel_flags.discard(job_id)  # 清除取消标志
+    # 强制停止兜底: 后台线程返回时若已被 force-stop, 跳过 exec_done 事件与
+    # complete_job_if_slots_done — 终态已由端点写入, 防止覆盖/误导.
+    if is_force_stopped(job_id):
+        logger.info("[execute] job %s force-stopped, skip terminal state write", job_id)
+        return job
     _evt(job_id, {"type": "exec_done", "msg": "所有 Slots 执行完毕"})
     append_trace(db, job, "execute", "done", "所有 Slots 执行完毕")
     from app.services.director_service import complete_job_if_slots_done

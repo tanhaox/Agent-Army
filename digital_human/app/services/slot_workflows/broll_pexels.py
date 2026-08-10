@@ -1,0 +1,213 @@
+"""Broll Pexels 线: 本地优先碰撞 + 降维搜索 + 同片去重 + 写回 pexels_id.
+
+对应 _EXECUTION_PHASES 的 P 线 (broll_pexels / mixed_host_broll 背景)。
+本地素材匹配见 broll.py; black 兜底见 fallback.py。
+
+本地优先碰撞 (2026-08-09): P 线不再无脑下载 —— 用导演的 9 维度 + orientation
++ keywords 先碰撞本地库 (match_local_assets, 同 broll_local 标准), 命中即用
+本地, 未命中才走 Pexels 在线降维搜索。chosen_pexels_id=None 表示本地命中,
+不写回 params, 不污染 Pexels 同片去重。
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from sqlalchemy.orm import Session
+
+from app.config import get_config
+from app.infrastructure import render_scale_pad
+from app.models import DirectorSlot
+from app.schemas import get_video_format_spec
+from app.services.asset_matcher import MIN_HIT_RATIO, match_local_assets, register_asset_usage
+from app.services.pexels_service import pexels_service
+from app.services.slot_workflows.common import ensure_slot_dir
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "execute_broll_pexels_slot",
+    "_collect_used_pexels_ids",
+    "_resolve_pexels",
+    "_persist_chosen_pexels_id",
+    "_try_local_collision",
+]
+
+
+def _collect_used_pexels_ids(db: Session, slot: DirectorSlot) -> set[int]:
+    """Collect Pexels video ids already used by earlier completed broll slots.
+
+    同片不重复素材约束 (2026-08-01): 遍历同 job 已完成且已持久化
+    ``params_json["pexels_id"]`` 的 broll 类 slot, 收集已用过的 id。
+    仅收集本 slot 之前 (slot_index 更小) 的 slot, 保证时间顺序、避免自引用。
+    """
+    job_id = slot.director_job_id
+    rows = (
+        db.query(DirectorSlot)
+        .filter(
+            DirectorSlot.director_job_id == job_id,
+            DirectorSlot.slot_index < slot.slot_index,
+            DirectorSlot.workflow.in_(("broll_pexels", "mixed_host_broll")),
+            DirectorSlot.status == "completed",
+        )
+        .all()
+    )
+    used: set[int] = set()
+    for r in rows:
+        pid = (r.params_json or {}).get("pexels_id")
+        if pid is not None:
+            try:
+                used.add(int(pid))
+            except (TypeError, ValueError):
+                pass
+    return used
+
+
+def _try_local_collision(
+    db: Session, slot: DirectorSlot, min_dur: int, orientation: str,
+) -> tuple[Path, str] | None:
+    """本地优先碰撞 (2026-08-09): 用导演的 9 维度碰撞本地素材库.
+
+    与 broll_local 同标准 (ID-034): 硬维度硬过滤 + 软维度命中率 ≥75%。
+    关键差异 —— 精确时长防护: render_scale_pad 无 loop, 素材短于 slot 时长
+    会黑尾截断, 因此额外要求素材 duration_sec >= slot 时长 (min_dur)。
+    命中返回 (本地路径, 描述); 未命中返回 None 走 Pexels 在线降维搜索。
+    """
+    params = slot.params_json or {}
+    # 无任何维度约束 (旧 params 只有 keywords) → 碰撞标准不成立, 直接跳过
+    if not any([
+        params.get("scenes"), params.get("shot_types"),
+        params.get("tone"), params.get("motion_level"),
+        params.get("content_density"), params.get("time_of_day"),
+    ]):
+        return None
+    results = match_local_assets(
+        db,
+        keywords=params.get("keywords"),
+        scenes=params.get("scenes"),
+        shot_types=params.get("shot_types"),
+        tone=params.get("tone"),
+        motion_level=params.get("motion_level"),
+        content_density=params.get("content_density"),
+        time_of_day=params.get("time_of_day"),
+        orientation=orientation,
+        location=params.get("location"),
+        people=params.get("people"),
+        min_duration_sec=float(min_dur),
+        limit=1,
+    )
+    if not results:
+        return None
+    best = results[0]
+    hit_ratio = best.get("hit_ratio")
+    if hit_ratio is not None and hit_ratio < MIN_HIT_RATIO:
+        logger.info(
+            "[broll_pexels] slot %d: local collision hit_ratio=%.2f < %.0f%%, fall through to pexels",
+            slot.slot_index, hit_ratio, MIN_HIT_RATIO * 100,
+        )
+        return None
+    src = Path(best["file_path"])
+    if not src.exists():
+        return None
+    register_asset_usage(db, best["file_path"])
+    logger.info(
+        "[broll_pexels] slot %d: LOCAL COLLISION HIT %s (score=%d, hit_ratio=%s, dur=%.1fs >= %ds)",
+        slot.slot_index, src.name, best.get("score", 0), hit_ratio,
+        best.get("duration_sec") or 0.0, min_dur,
+    )
+    return src, f"local_collision:{src.name}"
+
+
+def _resolve_pexels(
+    db: Session, slot: DirectorSlot, used_ids: set[int],
+    min_dur: int, orientation: str,
+) -> tuple[Path, str, object]:
+    """Resolve a single Pexels source clip via keyword-descending or legacy query.
+
+    Returns (local_path, desc, chosen_pexels_id). desc is used in error/log
+    messages; chosen_pexels_id is persisted for the same-job dedup constraint.
+    """
+    # 本地优先碰撞 (2026-08-09): 命中即用本地, 未命中才走 Pexels 在线搜索。
+    # chosen_pexels_id=None → 调用方不写回 params, 不污染 Pexels 同片去重。
+    local = _try_local_collision(db, slot, min_dur, orientation)
+    if local is not None:
+        src, desc = local
+        return src, desc, None
+
+    params = slot.params_json or {}
+    keywords = params.get("keywords")
+    used_query: str | None = None
+    if isinstance(keywords, list) and keywords:
+        items, used_query = pexels_service.resolve_descending(
+            [str(k) for k in keywords], max_results=1,
+            min_duration_sec=min_dur, orientation=orientation,
+            exclude_pexels_ids=used_ids,
+        )
+        desc = f"keywords={keywords} hit_query={used_query}"
+    else:
+        # 兼容旧 params: category / text_context 单次搜索
+        category = params.get("category") or slot.text_context or "business"
+        items = pexels_service.resolve(
+            category, max_results=5, min_duration_sec=min_dur,
+            orientation=orientation, exclude_pexels_ids=used_ids,
+        )
+        used_query = category
+        desc = f"query={category}"
+
+    usable = [i for i in items if i.local_path and Path(i.local_path).exists()]
+    if not usable:
+        raise RuntimeError(f"no usable Pexels material for {desc}")
+    chosen = usable[0]
+    return Path(chosen.local_path), desc, (chosen.pexels_id or chosen.id)
+
+
+def _persist_chosen_pexels_id(db: Session, slot: DirectorSlot, chosen_id) -> None:
+    """Write the selected pexels_id back to slot.params_json (唯一素材约束)."""
+    new_params = dict(slot.params_json or {})
+    new_params["pexels_id"] = chosen_id
+    slot.params_json = new_params
+    db.commit()
+    logger.info("[broll_pexels] slot %d -> pexels_id=%s", slot.slot_index, chosen_id)
+
+
+def execute_broll_pexels_slot(db: Session, slot: DirectorSlot) -> str:
+    """Resolve Pexels video (降维搜索优先), trim to slot duration, return mp4 path.
+
+    本地优先碰撞 (2026-08-09): 先用 9 维度碰撞本地库 (match_local_assets),
+    命中即渲染本地素材 (不写回 pexels_id, 不占用 Pexels 同片去重额度);
+    未命中才走降维搜索。
+
+    降维搜索 (2026-08-01): LLM 给出按重要性排序的关键词数组
+    ``params.keywords``(≤6, 第 1 个是全局主体关键词)。API 侧每次去掉末尾
+    1 个词重搜, 命中即停, 主关键词永远保留在查询里 → 保证全片地域/主题一致性。
+    兼容旧 params: 无 keywords 时退化为 category/query 单次搜索。
+
+    同片不重复素材 (2026-08-01): 一个 Pexels 视频 (pexels_id) 在同一 DirectorJob
+    中只允许用一次。已用过的 id 会传给 resolve 排除, 选中后写回
+    slot.params_json["pexels_id"] 持久化, 供后续 slot 排除。
+    """
+    root = ensure_slot_dir(slot)
+    spec = get_video_format_spec(slot.director_job.video_format)
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    min_dur = int(duration) or 5
+    orientation = spec["pexels_orientation"]
+
+    # 同一 job 内已用过的 Pexels 素材 id (从已完成 broll slot 的 params 收集)
+    used_ids: set[int] = set()
+    try:
+        used_ids = _collect_used_pexels_ids(db, slot)
+    except Exception:  # noqa: BLE001
+        logger.warning("collect used pexels ids failed, fallback empty set", exc_info=True)
+    if used_ids:
+        logger.info("[broll_pexels] job already used %d material(s), excluding them", len(used_ids))
+
+    src, desc, chosen_pexels_id = _resolve_pexels(db, slot, used_ids, min_dur, orientation)
+    if chosen_pexels_id is not None:
+        _persist_chosen_pexels_id(db, slot, chosen_pexels_id)
+
+    out_path = root / f"broll_pexels_{slot.slot_index:03d}.mp4"
+    render_scale_pad(
+        src, out_path,
+        width=spec["width"], height=spec["height"], duration=duration,
+    )
+    return str(out_path)

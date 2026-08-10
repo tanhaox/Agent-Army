@@ -34,7 +34,27 @@
 ```
 
 ## 输入2:素材库清单(JSON)
-形如:
+
+可能收到两种形态:
+
+**形态 A:关键词词表包(默认)** — 按维度分组、可直接检索的画面词,形如:
+```json
+{
+  "type": "vocabulary_pack",
+  "dimensions": {
+    "scenes": ["城市街景", "港口码头", "工厂车间"],
+    "shot_types": ["航拍", "中景", "特写"],
+    "tone": ["明亮", "暗调", "暖色"],
+    "motion_level": ["低", "中", "高"],
+    "content_density": ["低", "中", "高"],
+    "time_of_day": ["白天", "黄昏", "夜晚"],
+    "keywords": ["雨天城市街道", "繁华都市街头", "集装箱港口航拍"]
+  }
+}
+```
+词表包模式下您**不指定具体文件名**,而是从各维度分组选词拼出画面（见规则4.1）。
+
+**形态 B:全量素材清单(旧)** — 形如:
 ```json
 {
   "港口": {
@@ -45,6 +65,7 @@
   "标题卡":   {"素材列表": [], "默认推荐": null, "动态渲染": true}
 }
 ```
+
 
 ## 输入3:每句口播的真实起止时间(秒)
 下游已经对整段音频跑了 Whisper 强制对齐,每行口播都有 `start` / `end` / `segment_id`。您必须把每个 slot 的 `start_sec` / `end_sec` 落在这条时间轴上,**不允许超出音频总时长**。允许的微调范围 ±0.5s。
@@ -80,17 +101,20 @@
 
 **mixed_host_broll**: 同上 + `{"category": "<素材大类>", "file": "<静态素材文件名>", "fallback_file": "<备选静态素材文件名>"}`
 
-**broll_local**: `{"file": "<精确文件名>", "keywords": ["<搜索词1>", "<搜索词2>", ...], "scenes": ["<场景>"], "shot_types": ["<镜头类型>"], "tone": "<色调>", "motion_level": "<动态程度>", "content_density": "<信息密度>", "time_of_day": "<时段>", "category": "<大类>", "intensity": "...", "emotion": "..."}`
+**broll_local**: `{"keywords": ["<搜索词1>", "<搜索词2>", ...], "scenes": ["<场景>"], "shot_types": ["<镜头类型>"], "tone": "<色调>", "motion_level": "<动态程度>", "content_density": "<信息密度>", "time_of_day": "<时段>", "location": "domestic|foreign", "orientation": "portrait|landscape|square", "people": "people|none", "category": "<大类>", "intensity": "...", "emotion": "..."}`
 
-- 优先使用 `file` 精确指定（从素材库清单看到的具体文件名），下游精确匹配。
-- 无 `file` 时提供 `keywords`（数组，按重要性排序），下游会通过 AI 多维标签（tone/motion_level/content_density/time_of_day/scenes/shot_types）做语义匹配。
-- 额外维度 `tone`/`motion_level`/`content_density`/`time_of_day` 可从素材清单中每条的描述获取，帮助精准筛选。
+- **不指定 `file` 精确文件名**（ID-034：本地按语义维度碰撞匹配，具体文件由下游从素材库选）。
+- 必须输出**全部 9 个维度**（见规则4.1），每维度最少 1-2 个词，词只能从词表包对应分组取。
+- `location` / `orientation` / `people` 为**硬维度**（必须全中，否则直接排除）：只允许枚举值 `domestic|foreign`、`portrait|landscape|square`、`people|none`。讲中国产业链时 `location` 必须为 `domestic`，绝不出现外国工人。
+- 软维度 `tone`/`motion_level`/`content_density`/`time_of_day` 需命中 ≥75%（6 中 ≥4）才算符合画面；不符则下游转在线下载新素材。
 
-**broll_pexels**: `{"keywords": ["<全局主体关键词>", "<场景词>", "<细节词1>", "<细节词2>", ...], "category": "<大类>", "intensity": "...", "emotion": "..."}`
+**broll_pexels**: `{"keywords": ["<全局主体关键词>", "<场景词>", "<细节词1>", "<细节词2>", ...], "location": "domestic|foreign", "people": "people|none", "category": "<大类>", "intensity": "...", "emotion": "..."}`
 
 - `keywords` 是**按重要性排序的有序数组**，最多 6 个，第 1 个必须是**全局主体关键词**（见规则5）。
 - 下游搜索会**降维重试**：先用全部词搜，搜不到就去掉末尾 1 个再搜，直到命中。所以主关键词永远在查询里 → 全片画面地域/主题一致。
 - **关键词不得互相冲突**（如 "Japan" 与 "China" 不得同数组；"风景/空拍" 与 "城市街道" 不得同数组）。
+- `location`/`people` 为可选硬维度（ID-034），传给在线搜索定向：讲中国产业链时 `location=domestic` 锁定国内画面，绝不出现外国工人。
+- **必须同时输出 9 维度**（`scenes`/`shot_types`/`tone`/`motion_level`/`content_density`/`time_of_day`，词从词表包对应分组取，格式同 broll_local 规则4.1）——仅供本地素材优先碰撞使用，不参与 Pexels 下载搜索；缺 9 维度则本地碰撞直接跳过（P 线全部走下载）。
 
 **hf_chart**: `{"render_config": {"chart_type": "pie_chart|bar_chart", "label": "...", "unit": "...", "growth": "15%", "color_scheme": "黑金", "data": [{"label": "...", "value": 12.3}, ...]}, "intensity": "...", "emotion": "..."}`
 
@@ -157,19 +181,36 @@
 
 ## 规则4:素材选择策略
 
-### 4.1 已知清单中存在的 category → 直接指定具体文件
-清单中找到对应 category,从"素材列表"中选择 tags 匹配度最高的文件。
-如果多个文件匹配度相同,选未被最近 3 个 slot 使用过的(避免重复画面)。
+### 4.1 broll_local 全维度选词（词表包模式，ID-034）
+**每个 `broll_local` slot 必须从输入2 词表包输出全部 9 个维度的词**，
+用这些词拼出该画面的精确内容。每维度最少 1-2 个词：
 
-**素材清单每条均含 AI 多维标签**（description_zh 中文描述、tone 色调、motion_level 动态程度、
-content_density 信息密度、time_of_day 时段），请参考这些维度选择与口播情绪/场景最匹配的素材。
-例如：口播情绪 rising 时优先选 motion_level=high 的动态素材，closing 时选 tone=dark/calm 的收束感素材。
+| 维度 | 类型 | 必填 | 允许值（只从词表包对应分组取） |
+|---|---|---|---|
+| `location` | 硬 | 是 | `domestic` / `foreign`（只选其一） |
+| `orientation` | 硬 | 是 | `portrait` / `landscape` / `square`（只选其一） |
+| `people` | 硬 | 是 | `people` / `none`（只选其一） |
+| `scenes` | 软 | 是 | 从词表包 `scenes` 分组选 1-2 个 |
+| `shot_types` | 软 | 是 | 从词表包 `shot_types` 分组选 1-2 个 |
+| `tone` | 软 | 是 | 从词表包 `tone` 分组选 1 个 |
+| `motion_level` | 软 | 是 | 从词表包 `motion_level` 分组选 1 个 |
+| `content_density` | 软 | 是 | 从词表包 `content_density` 分组选 1 个 |
+| `time_of_day` | 软 | 是 | 从词表包 `time_of_day` 分组选 1 个 |
+| `keywords` | 补充 | 是 | 从词表包 `keywords` 分组选 2-6 个画面词 |
+
+- **选词语义必须与口播一致**：讲中国产业链时 `location=domestic`（绝不用 `foreign`，绝不出现外国工人）；讲海外对比句才允许 `foreign`。
+- `keywords` 画面词与硬/软维度**不得冲突**（选 `domestic` 时不得再选海外地标词）。
+- 下游本地碰撞规则：硬维度必须全中（否则排除该素材），软维度命中率 ≥75%（6 中 ≥4）才算符合画面。**选词不全或词不在词表包内 → 该 slot 转在线下载新素材**，画面可能与您预期不符。
+- 若输入2 是**形态 B 全量清单**，则维持旧行为：清单中找到对应 category 时直接指定 `file` 精确文件名（选 tags 匹配度最高、且非最近 3 个 slot 使用过的）。
+
+**broll_pexels 解耦（2026-08-09）**：`broll_pexels` 的 `keywords` 是**自由画面搜索词**，不受词表包限制——允许词表外词（专有名词/实时事件/具体画面，如 特朗普、伊朗、雨后街道），用于 Pexels 在线下载搜索；第 1 个必须是全局主体关键词（规则5.1）。`location`/`people` 可选硬维度用于定向；**必须同时输出 9 维度**（词从词表包对应分组取），仅供本地素材优先碰撞使用，不参与 Pexels 下载搜索——因此**词表约束不会限制 P 线在线下载**；缺 9 维度则本地碰撞直接跳过（P 线全部走下载）。
 
 ### 4.2 清单中该 category 的"素材列表"为空,但有"动态渲染":true → 使用 hf_chart 或 hf_title
 根据内容性质区分:数据类用 `hf_chart`,标题/章节切换用 `hf_title`。
 
 ### 4.3 清单中该 category 不存在 → 改用 `broll_pexels`(再降级为 host)
 按 broll_pexels → broll_local → host 的优先级降级。宁可让老陈出镜,也不配错画面。
+（本地碰撞不达标时，`broll_local` 下游会自动转 `broll_pexels` 在线下载——见规则4.1 备注。）
 
 ### 4.4 混合场景的素材选择
 `mixed_host_broll` = 老陈出镜(画中画小窗) + 素材画面(主画面)
@@ -198,6 +239,8 @@ content_density 信息密度、time_of_day 时段），请参考这些维度选�
 ### 5.4 keywords 写法
 - 按重要性降序:`keywords[0]` 全局主体词 → 场景词 → 细节词。后续词是**缩小**搜索范围(场景、动作、元素),不是开新话题。
 - 数组 2~6 个词,一般 3~4 个最优;下游会自动降维(去尾重搜),所以宁可多给细节词也别让词互相冲突。
+- 词表包模式下（规则4.1）：`broll_local` 的 `keywords` 从词表包 `keywords` 分组取，并与硬/软维度选词保持一致（讲中国产业链 → `location=domestic`，画面词也不得指向海外）。
+- **`broll_pexels` 的 `keywords` 不受词表约束**——自由画面搜索词（专有名词/实时事件/具体画面），仅须遵守 5.1 全局主体 + 5.5 画幅一致性构图约束；**必须同时输出 9 维度**（词从词表包对应分组取，供本地碰撞，不参与下载搜索）。
 
 ### 5.5 画幅一致性（横版/竖版/方版）
 - 本片画幅在输入4 中已指定(竖屏/横屏/方形),所有 broll_pexels 的 `keywords` 必须选与该画幅匹配的构图词。
@@ -260,6 +303,8 @@ content_density 信息密度、time_of_day 时段），请参考这些维度选�
       "workflow": "broll_pexels",
       "params": {
         "keywords": ["china", "city", "street", "people", "traffic"],
+        "location": "domestic",
+        "people": "people",
         "category": "城市街景",
         "intensity": "low",
         "emotion": "opening"
@@ -361,6 +406,8 @@ content_density 信息密度、time_of_day 时段），请参考这些维度选�
 - [ ] **每个 broll_pexels 的 keywords 是否按重要性降序、且词间不冲突？**
 - [ ] **是否按本片画幅（竖屏/横屏/方形）选择了匹配的 broll 构图？**（竖屏禁横向宽景、横屏禁竖向特写、方形禁贴边构图）
 - [ ] **每个 `hf_chart` slot 的 `data` 每项是否含 `label`+`value`？`growth` 是否为最核心百分比？**（否则降级为纯文字展示）
+- [ ] **词表包模式下，每个 `broll_local` 是否输出了全部 9 个维度、每维度 ≥1-2 词、且词只取自词表包？**（`broll_pexels` 的 keywords 为自由搜索词，不受词表约束；**每个 `broll_pexels` 是否也输出了全部 9 维度**（词从词表包取，供本地碰撞，缺则 P 线全部走下载））
+- [ ] **讲中国产业链的 slot `location` 是否严格为 `domestic`，且全片未出现外国工人/海外地标画面词？**
 
 
 # 注意事项

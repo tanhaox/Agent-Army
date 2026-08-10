@@ -70,6 +70,7 @@
       </select>
       <span class="result-count" id="result-count"></span>
       <button class="tagging-btn" id="scan-import-btn" onclick="scanImport()" title="扫描 materials 目录，自动导入未入库的视频文件">📥 扫描导入</button>
+      <button class="tagging-btn" id="import-folder-btn" onclick="openImportFolderModal()" title="选择 materials 下某个子文件夹，导入其中未入库的视频并批量添加标签">📂 导入</button>
       <button class="tagging-btn" id="tagging-start-btn" onclick="startTagging()" title="使用本地 AI 模型分析视频画面，自动生成多维标签">🤖 AI 打标</button>
       <span class="tagging-count" id="tagging-count" title="AI 已打标 / 总数"></span>
     </div>
@@ -90,8 +91,10 @@
 
     <!-- Assets Grid -->
     <div class="video-grid" id="grid-assets"></div>
+    <div class="pagination hidden" id="pager-assets"></div>
     <!-- Outputs Grid -->
     <div class="video-grid hidden" id="grid-outputs"></div>
+    <div class="pagination hidden" id="pager-outputs"></div>
 
     <!-- AI Tagging Progress Bar -->
     <div class="tagging-progress hidden" id="tagging-progress">
@@ -172,7 +175,35 @@
     </div>
   </div>
 
+  <!-- Import Folder Modal -->
+  <div class="modal hidden" id="import-modal">
+    <div class="modal-content">
+      <h3>📂 导入文件夹并打标</h3>
+      <div class="form-group">
+        <label>素材文件夹（materials 下子文件夹）</label>
+        <select id="import-folder-select" title="选择 materials 下已放置素材的子文件夹"></select>
+      </div>
+      <div class="form-row cols-2">
+        <div class="form-group">
+          <label>场景标签（逗号分隔，可新建）</label>
+          <input type="text" id="import-scenes" placeholder="中国夜景, 城市">
+        </div>
+        <div class="form-group">
+          <label>镜头标签（逗号分隔，可新建）</label>
+          <input type="text" id="import-shot_types" placeholder="航拍, 空镜">
+        </div>
+      </div>
+      <div class="form-group" style="font-size:0.72rem;color:var(--text-muted);">
+        已入库的素材会跳过；本次新导入的素材统一附加上述标签。
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="import-modal-ok" onclick="importFolder()">导入并打标</button>
+        <button class="btn btn-secondary" onclick="closeImportModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
-  <script src="/web/library.js"></script>
+  <script src="/web/library.js?v=4"></script>
 </body>
 </html>

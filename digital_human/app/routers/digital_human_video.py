@@ -13,29 +13,23 @@
 设计要点:
   - 与 IndexTTS2 一致: 同步生成 + 后台 SSE 模式备选 (本任务选同步, 5-10s 音频对应 1-3min 出视频)
   - 视频落盘到 E:/数字人计划/dhv/<video_id>/<video_id>.mp4
-  - ComfyUI 产物拷贝路径复用 _persist_outputs 思路
+  - 生成 6 步编排下沉到 app/services/dhv_service.py (行为不变)
   - ffprobe 验证三件套 (用户禁忌: 不要跳过音频流/时长/帧率)
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import os
-import time
 import uuid
 from pathlib import Path
-from typing import Any
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from ..config import get_config
-from ..database import get_db
-from ..models import AudioFile, DigitalHumanVideo, Role
-from ..schemas import (
+from app.config import get_config
+from app.database import get_db
+from app.models import AudioFile, DigitalHumanVideo, Role
+from app.schemas import (
     DigitalHumanVideoCreate,
     DigitalHumanVideoOut,
     EligibleAudioItem,
@@ -43,19 +37,12 @@ from ..schemas import (
     GenerateVideoResponse,
     StoryboardUploadResponse,
 )
-from ..services.audio_aggregator import aggregate_segments
-from ..services.lit_video_builder import build_ltx23_video_workflow
-from ..services.video_validator import validate_mp4
-from ..services.file_utils import safe_trash
+from app.services import dhv_service
+from app.services.file_utils import safe_trash
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dhv", tags=["digital_human_video"])
-
-
-def _dhv_root() -> Path:
-    cfg = get_config()
-    return Path(r"E:/数字人计划/dhv")
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +153,7 @@ async def upload_storyboard(
     if v.status not in ("pending",):
         raise HTTPException(status_code=409, detail=f"video status={v.status} 不允许上传分镜")
 
-    storyboard_dir = _dhv_root() / video_id / "storyboard"
+    storyboard_dir = dhv_service.dhv_root() / video_id / "storyboard"
     storyboard_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded: list[str] = []
@@ -189,7 +176,7 @@ async def upload_storyboard(
 
 
 # ---------------------------------------------------------------------------
-# 6. 生成 (核心)
+# 6. 生成 (核心) — 6 步编排在 dhv_service.generate_dhv_video
 # ---------------------------------------------------------------------------
 @router.post("/videos/{video_id}/generate", response_model=GenerateVideoResponse)
 async def generate_video(video_id: str, db: Session = Depends(get_db)):
@@ -203,209 +190,14 @@ async def generate_video(video_id: str, db: Session = Depends(get_db)):
     if not v.storyboard_paths:
         raise HTTPException(status_code=400, detail="storyboard_paths 为空, 请先 upload-storyboard")
 
-    cfg = get_config()
-    t0 = time.time()
-
     v.status = "running"
     v.error_message = None
     db.commit()
     db.refresh(v)
 
-    issues: list[str] = []
-    try:
-        # ── Step A: 聚合音频 ──
-        out_root = _dhv_root() / video_id
-        out_root.mkdir(parents=True, exist_ok=True)
-        agg_path = out_root / "audio_aggregated.wav"
-        agg = aggregate_segments(
-            v.audio_source_paths,
-            target_duration_sec=v.target_duration_sec,
-            min_duration_sec=5.0,
-            output_path=agg_path,
-            silence_gap_sec=0.3,
-        )
-        if not agg["ok"]:
-            v.status = "failed"
-            v.error_message = " | ".join(agg["issues"])
-            db.commit()
-            return GenerateVideoResponse(
-                video_id=video_id, status="failed", prompt_id=None,
-                output_video_path=None, aggregated_audio_path=None,
-                aggregated_duration_sec=None, duration_actual=None,
-                fps_actual=None, has_audio_stream=False, frame_count=None,
-                validation_issues=agg["issues"],
-                validation_warnings=[],
-                elapsed_sec=time.time() - t0,
-                error=v.error_message,
-            )
-        v.aggregated_audio_path = str(agg_path)
-        v.aggregated_duration_sec = agg["actual_duration_sec"]
-        db.commit()
-
-        # ── Step B: 构造 workflow dict ──
-        # 把绝对路径的 audio + storyboard 拷贝到 ComfyUI input/
-        comfy_input = Path(r"E:/AI/ComfyUI_windows_portable/ComfyUI/input")
-        comfy_input.mkdir(parents=True, exist_ok=True)
-
-        audio_dst = comfy_input / f"dhv_{video_id}_{Path(agg_path).name}"
-        shutil.copy2(str(agg_path), str(audio_dst))
-
-        storyboard_for_wf: list[dict[str, Any]] = []
-        for i, src in enumerate(v.storyboard_paths):
-            src_p = Path(src)
-            if not src_p.exists():
-                issues.append(f"storyboard file missing: {src}")
-                continue
-            img_dst = comfy_input / f"dhv_{video_id}_sb{i}_{src_p.name}"
-            shutil.copy2(str(src_p), str(img_dst))
-            storyboard_for_wf.append({
-                "filename": img_dst.name,
-                "frame_idx": i * 60,
-                "strength": 0.85,
-            })
-        if not storyboard_for_wf:
-            raise RuntimeError("no storyboard images available")
-
-        orientation = "landscape" if v.width > v.height else "portrait"
-        workflow = build_ltx23_video_workflow(
-            audio_filename=audio_dst.name,
-            storyboard=storyboard_for_wf,
-            duration_sec=v.target_duration_sec,
-            fps=v.fps, orientation=orientation,
-            seed=v.seed,
-            filename_prefix=f"dhv_{video_id}_",
-        )
-
-        # ── Step C: 提交 ComfyUI /prompt ──
-        base_url = cfg.defaults.base_url_comfyui.rstrip("/")
-        prompt_id: str | None = None
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            client_id = str(uuid.uuid4())
-            try:
-                resp = await client.post(
-                    f"{base_url}/prompt",
-                    json={"prompt": workflow, "client_id": client_id},
-                )
-            except httpx.RequestError as exc:
-                raise RuntimeError(f"ComfyUI 不可达: {exc}") from exc
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"ComfyUI /prompt HTTP {resp.status_code}: {resp.text[:300]}"
-                )
-            try:
-                prompt_id = resp.json()["prompt_id"]
-            except (KeyError, ValueError) as exc:
-                raise RuntimeError(f"ComfyUI 响应异常: {exc}") from exc
-
-        v.prompt_id = prompt_id
-        v.comfy_log = {"submitted_at": time.time(), "client_id": client_id}
-        db.commit()
-        logger.info("[dhv %s] submitted prompt_id=%s", video_id, prompt_id)
-
-        # ── Step D: 轮询 /history/{prompt_id} ──
-        deadline = time.time() + cfg.defaults.comfyui_timeout_sec
-        history_entry: dict[str, Any] | None = None
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            while time.time() < deadline:
-                await asyncio.sleep(2.0)
-                try:
-                    h = await client.get(f"{base_url}/history/{prompt_id}")
-                except httpx.RequestError:
-                    continue
-                if h.status_code >= 400:
-                    continue
-                entry = (h.json() or {}).get(prompt_id)
-                if not entry:
-                    continue
-                status_dict = entry.get("status") or {}
-                if status_dict.get("completed"):
-                    history_entry = entry
-                    break
-                if status_dict.get("errored"):
-                    raise RuntimeError(
-                        f"ComfyUI task errored: {(status_dict.get('error') or 'unknown')[:500]}"
-                    )
-
-        if history_entry is None:
-            raise RuntimeError(
-                f"ComfyUI task timeout after {cfg.defaults.comfyui_timeout_sec}s"
-            )
-
-        # ── Step E: 落盘 mp4 ──
-        mp4_src = _find_mp4(history_entry)
-        if not mp4_src or not mp4_src.exists():
-            raise RuntimeError(f"ComfyUI outputs 中无 mp4: {history_entry.get('outputs')}")
-        mp4_dst = out_root / f"{video_id}.mp4"
-        try:
-            os.replace(str(mp4_src), str(mp4_dst))
-        except OSError:
-            shutil.copy2(str(mp4_src), str(mp4_dst))
-            mp4_src.unlink(missing_ok=True)
-        v.output_video_path = str(mp4_dst)
-
-        # ── Step F: ffprobe 校验 ──
-        val = validate_mp4(
-            mp4_dst,
-            expected_duration=v.target_duration_sec,
-            expected_fps=v.fps,
-            min_duration=5.0,
-        )
-        issues = list(val["issues"])
-        warnings = list(val.get("warnings") or [])
-        v.duration_actual = (val["meta"] or {}).get("duration_actual")
-        v.fps_actual = (val["meta"] or {}).get("fps_actual")
-        v.has_audio_stream = bool((val["meta"] or {}).get("has_audio_stream"))
-        v.frame_count = (val["meta"] or {}).get("frame_count")
-        if warnings:
-            v.comfy_log = {**(v.comfy_log or {}), "validation_warnings": warnings}
-
-        # 关键硬约束: 视频有 audio stream 才算真正成功
-        if val["ok"]:
-            v.status = "completed"
-            v.completed_at = _now()
-        else:
-            v.status = "validation_failed"
-            v.error_message = " | ".join(issues)
-        db.commit()
-        db.refresh(v)
-
-        return GenerateVideoResponse(
-            video_id=video_id,
-            status=v.status,
-            prompt_id=prompt_id,
-            output_video_path=v.output_video_path,
-            aggregated_audio_path=v.aggregated_audio_path,
-            aggregated_duration_sec=v.aggregated_duration_sec,
-            duration_actual=v.duration_actual,
-            fps_actual=v.fps_actual,
-            has_audio_stream=v.has_audio_stream,
-            frame_count=v.frame_count,
-            validation_issues=issues,
-            validation_warnings=warnings,
-            elapsed_sec=time.time() - t0,
-            error=v.error_message if v.status != "completed" else None,
-        )
-
-    except Exception as exc:
-        logger.exception("[dhv %s] generate failed", video_id)
-        v.status = "failed"
-        v.error_message = str(exc)[:1000]
-        db.commit()
-        db.refresh(v)
-        return GenerateVideoResponse(
-            video_id=video_id, status="failed", prompt_id=v.prompt_id,
-            output_video_path=v.output_video_path,
-            aggregated_audio_path=v.aggregated_audio_path,
-            aggregated_duration_sec=v.aggregated_duration_sec,
-            duration_actual=v.duration_actual,
-            fps_actual=v.fps_actual,
-            has_audio_stream=v.has_audio_stream,
-            frame_count=v.frame_count,
-            validation_issues=issues,
-            validation_warnings=[],
-            elapsed_sec=time.time() - t0,
-            error=v.error_message,
-        )
+    cfg = get_config()
+    result = await dhv_service.generate_dhv_video(db, v, cfg)
+    return GenerateVideoResponse(**result)
 
 
 # ---------------------------------------------------------------------------
@@ -433,44 +225,8 @@ def delete_video(video_id: str, db: Session = Depends(get_db)):
     if not v:
         raise HTTPException(status_code=404, detail="DigitalHumanVideo not found")
     # 删除产物目录 — 优先走回收站 (CLAUDE.md 铁律)
-    out_dir = _dhv_root() / video_id
+    out_dir = dhv_service.dhv_root() / video_id
     if out_dir.exists():
         safe_trash(out_dir)
     db.delete(v)
     db.commit()
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-def _find_mp4(history_entry: dict[str, Any]) -> Path | None:
-    """从 ComfyUI /history outputs 找到第一个 .mp4 产物.
-
-    VHS_VideoCombine 的产物形态:
-      outputs: {"800": {"gifs": [{"filename": "xxx.mp4", "type": "output", "subfolder": ""}]}}
-    """
-    comf_output = Path(r"E:/AI/ComfyUI_windows_portable/ComfyUI/output")
-    outputs = history_entry.get("outputs") or {}
-    for _nid, payload in outputs.items():
-        for key in ("gifs", "images", "files"):
-            for f in payload.get(key) or []:
-                fn = f.get("filename", "")
-                if fn.lower().endswith((".mp4", ".mov", ".webm")):
-                    sub = f.get("subfolder", "")
-                    t = f.get("type", "output")
-                    base = (
-                        comf_output
-                        if t == "output"
-                        else Path(r"E:/AI/ComfyUI_windows_portable/ComfyUI/input")
-                        if t == "input"
-                        else Path(r"E:/AI/ComfyUI_windows_portable/ComfyUI/temp")
-                    )
-                    cand = base / sub / fn if sub else base / fn
-                    if cand.exists():
-                        return cand
-    return None
-
-
-def _now():
-    from datetime import datetime
-    return datetime.utcnow()

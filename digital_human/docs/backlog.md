@@ -162,12 +162,12 @@
 - **动机/背景**:
   最终产出物是完整视频，当前只到音频阶段。
 - **涉及模块**:
-  - 后端：`app/services/composition_service.py`（concat copy + loudnorm + 合成后自清理）
-  - 后端：director.py compose 端点（异步后台线程 + SSE 进度透传）
+  - 后端：`app/services/composition_service.py`（concat copy + loudnorm + slot 素材保留策略）  - 后端：director.py compose 端点（异步后台线程 + SSE 进度透传）
   - 外部：ComfyUI 数字人工作流 / FFmpeg 合成
 - **备注**:
   - 依赖 ID-002、ID-003、ID-004（均已 done）。
-  - 2026-08-03 v3 优化：零拷贝流水线（`-c copy` concat 无需预归一化）、os.replace 替代 copy2、48kHz 音频统一、合成后 slots/ 自动清理。
+  - 2026-08-03 v3 优化：零拷贝流水线（`-c copy` concat 无需预归一化）、os.replace 替代 copy2、48kHz 音频统一。
+  - 2026-08-07 素材生命周期策略升级：不再「合成后自动清理 slots/」，slot 素材默认保留 `slot_retention_days`（默认 7 天），超期由 `main.py` 保留扫描回收（留成片）；删除 slots/ 唯二出口 = 用户删 job / 保留扫描（详见 [已完成-20260807-素材生命周期保留策略.md](improvements/已完成-20260807-素材生命周期保留策略.md)）。
 
 ### ID-006：爬虫自动写入 articles 表
 
@@ -728,7 +728,7 @@
 
 ### ID-031：【优化】导演生产路径优化 v3 — 零拷贝 + 48kHz 统一 + 合成后自清理
 
-- **状态**: done（2026-08-03，8 阶段全部完成）
+- **状态**: done（2026-08-03，8 阶段全部完成；2026-08-07 第 7 项「合成后 slots/ 自清理」已被素材生命周期保留策略取代，见 ID-032）
 - **优先级**: P1
 - **提出时间**: 2026-08-03
 - **开发周期**: 2026-08-03（单日完成）
@@ -741,7 +741,7 @@
   4. 删除 `_prepare_inputs()`（80 行代码 → 存在性校验 + 直接 `-c copy` concat）
   5. slot_root() 统一到 composition_output_root；HF 产物自动归一化 wrapper（48kHz 静音轨注入）
   6. copy2 → os.replace（5 处，跨盘 fallback copy2+unlink）
-  7. 合成后 slots/ 自清理 + stale job 磁盘删除
+  7. 合成后 slots/ 自清理 + stale job 磁盘删除（⚠️ 2026-08-07 被 ID-032 取代：不再删除 slots/，改为默认保留 7 天）
   8. app.yaml deprecated 注释（director_output_root + hf_visual_root）
 - **涉及模块**:
   - `app/services/slot_workflows.py`（poll 零搬运 / 48kHz / slot_root / 静音轨 / 删 fallback）
@@ -756,6 +756,147 @@
 - **备注**:
   - 计划文件：`C:\Users\tanhaox\.claude\plans\glowing-spinning-crayon.md`
   - 所有 8 阶段代码已完成，待重启后端后 E2E 验证。
+
+### ID-032：【优化】素材生命周期策略升级 — 保留 slot 素材防返工
+
+- **状态**: done（2026-08-07，验证 19/19 通过）
+- **优先级**: P1
+- **提出时间**: 2026-08-07
+- **开发周期**: 2026-08-07（单日完成）
+- **描述**:
+  取代 ID-031 第 7 项「合成后 slots/ 自动清理」。原策略合成成功即 `shutil.rmtree(slots/)`，而 retry 只重置部分 slot → 「重试同类 / 换素材」局部重制后其余 completed slot 的 output_path 指向已删除文件 → REPAIR 用新素材补齐 = 返工，REPAIR 失败即合成崩溃。升级后 slot 素材默认保留 `slot_retention_days`（默认 7 天）。
+- **改动清单**:
+  1. composition_service.py 删除 Step 7 `rmtree(slots/)`（合成成功路径不再触碰 slots/）
+  2. main.py `_auto_cleanup_stale_jobs()` 新增保留扫描分支：completed 且 completed_at 超 `slot_retention_days` → 清 slots/ + hf_visual/<job_id>/ + 孤儿中间件，**保留成片** director_<job_id>.mp4 + composition_manifest.json
+  3. `_cleanup_intermediates` patterns 追加 `silence_fallback.wav`（master 音频缺失兜底）
+  4. `purge_replaced_slots` 删 DB 行时连带删 `composition_output_root/<job_id>/slots/<replaced_id>/` 目录
+  5. config: `DefaultsConfig.slot_retention_days: int`（默认 7）+ app.yaml `slot_retention_days: 7`（0 = 关闭保留回退旧行为）
+- **删除 slots/ 唯二出口**:
+  - ① 用户删 job → `_cleanup_job_files` rmtree 整个 job 目录（含 slots/）
+  - ② 保留扫描 → completed 超保留天数
+- **涉及模块**:
+  - `app/services/composition_service.py`（删 Step 7 / 清理补充）
+  - `app/main.py`（保留扫描分支）
+  - `app/routers/director.py`（purge 连带删目录）
+  - `app/config.py` + `config/app.yaml`（slot_retention_days）
+  - `scripts/verify_retention.py`（新建隔离验证脚本）
+- **验证**:
+  - ✅ 隔离验证 19/19（临时 DB + 临时 composition 目录，不触碰真实数据）：核心链路 slots/ 保留 / retry 单条其余 slot mtime 不变 / 幂等返回 / 保留扫描清 slots 留成片+manifest / silence_fallback.wav 清理
+  - ✅ 现状磁盘清理：85f51962 / b64aeb28 孤儿中间件、0f1f7ed3 silence_fallback.wav 已清
+- **备注**:
+  - 计划文件：`C:\Users\tanhaox\.claude\plans\glimmering-jumping-heron.md`
+  - 详细报告：`docs/improvements/已完成-20260807-素材生命周期保留策略.md`
+  - REPAIR 补齐逻辑保留为安全网（仅素材确实丢失时触发）；幂等守卫语义更新（job completed + 成片存在 + 无 slots_changed_since_compose → 幂等返回）
+
+### ID-033：【挂起】素材库导入文件夹预标注 — 加快 AI 标注 + 补地域维度
+
+> 讨论背景：2026-08-07 导演关键词动态包 + 本地碰撞方案讨论中提出。**已确认挂起**，待后续升级 AI 标注时实现。
+
+- **现状痛点**：素材包（空拍/夜景/产业工人/街道街景等）以单一角度成批导入，且**都带固定先决条件**（如"中国"标签）。但当前 `location` 维度 93% 为 foreign、仅 7% domestic；AI 标注重新标注地域还**可能标错**。
+- **方案**：素材库**导入时按文件夹做粗略预标注**（如"中国"、"空拍/航拍"），使 AI 标注时**直接跳过这两个维度**，加快标注速度。
+- **关键点**：
+  - 预标注 = 导入时从目录名/元数据推断硬维度（地域、拍摄角度），写入 VideoAsset 初始标签。
+  - AI 标注阶段跳过已预标注的维度（减少 LLM 幻觉标错风险 + 省 token）。
+  - 与本方案 ID-034（导演关键词动态包）衔接：预标注补全硬维度 → 本地碰撞的硬维度（地域/画幅/人物）命中率更高 → 少降级下载。
+- **待定**：实现形式（导入器参数？目录约定？配置文件映射？）与预标注字段扩展。
+
+### ID-034：【优化】导演关键词动态包 + 本地碰撞检索（替代全量素材清单）
+
+> 2026-08-07 确认方案。解决「导演 LLM 全量素材清单发给 DeepSeek → 包过大 → 回传慢拖慢 slot 切片」。
+
+- **核心矛盾**：现 `build_real_material_catalog` 每场景 top-8 裁剪后仍 ~26KB/1424 素材全量塞进 DeepSeek prompt（`stream=False`, timeout=120s）→ 回传极慢。
+- **方案**：
+  1. **关键词动态包** `data/vocabulary_pack.json`（~385 词 / ~3KB，比现包小 8 倍）：从全库聚合 scenes/shot_types/清洗后 tags/维度值，不写死；**AI 打标任务完成 / 素材导入 / 手动脚本后自动重建** → 每次从包里拉词，非开发更新。
+  2. **导演选词约束**：按全维度输出检索条件，**每个维度 ≥1-2 个词**（非 3-6 个关键词）；第 1 个为画面主体词；只能从包内选词。
+  3. **本地碰撞**（仅 AI 打标素材）：已有 `match_local_assets` 加权打分。**维度分级 + 命中规则**：硬维度（地域 location / 画幅 orientation / 人物 people）**必须全中**，否则排除；软维度（场景/镜头/tone/motion/content_density/time_of_day）**命中 ≥75%** 才算符合。
+  4. **降级**：不符合 → 该 slot 转 broll_pexels 在线下载。
+- **已确认决策**：维度分级（硬：地域/画幅/人物；软：其余 6）✅；命中规则（硬全中 + 软≥75%）✅；降级策略（全维度缺失就下载）✅；先只查 AI 打标素材（484 条）✅。
+- **✅ 已落地（2026-08-09）**：三项缺口全部修复 + P 线本地碰撞 + 素材不复用登记，详见 `docs/improvements/已完成-20260809-P线本地碰撞-ID034匹配修复.md`：
+  - `match_local_assets` 接入 location/people/orientation 硬维度硬过滤 + `min_duration_sec` 精确时长防护（素材须 ≥ slot 时长，防 render_scale_pad 黑尾截断）。
+  - **根因修复**：scenes/shot_types 中文值在 SQLite JSON 列被存成 `\uXXXX` 字面量，`cast(String)+ilike` 永远 0 命中（P/L 两线本地匹配从未真正生效）→ 改 Python 层精确匹配，SQL 只按明文列 + 英文四维收窄。
+  - `ai_tags_extra` 四维改为按值精确比对（含 4 条 time_of_day list 脏数据兼容）。
+  - **P 线（broll_pexels）本地碰撞优先**：`_try_local_collision` 在下载前先查 9 维度守卫 + 碰撞，命中即 `register_asset_usage`（used_count 递增，`used_count.asc()` 排序自然降优先级，不做同 job 硬去重），未命中才走 Pexels 降维搜索；命中时 `chosen_pexels_id=None` 不污染 Pexels 同片去重。
+  - L 线（broll_local）`_match_local` 传 `min_duration_sec=duration` + 命中登记 `register_asset_usage`（`_try_exact_file` 精确路径不登记）。
+  - 提示词 4 处"建议"→"必须"（`_prompt.py` + `visual_director_v2.txt`）：broll_pexels 必须同时输出 9 维度（仅供本地碰撞，不参与 Pexels 下载搜索；keywords 仍为自由搜索词不受词表约束）；缺 9 维度则碰撞跳过（P 线全部走下载）。
+  - 验证：词表包真实枚举值构造 P 线碰撞 2/6 HIT（城市+航拍 warm slow moderate day→685.mp4；自然+空镜 bright medium sparse sunset→584.mp4）；4 MISS 为数据稀疏（科技 12/财经 6），符合"词不在包内 → 转在线下载"预期；import/签名回归 OK。
+- **数据现状**：1536 素材（全 hasfile）；portrait 943 / landscape 593；scenes 城市768/街景489/生活221/商业210/自然205/工业87/科技82/财经38/美食13/教育13/医疗7；shot_types 空镜626/建筑503/交通390/人像293/航拍279/特写221；tone cool499/warm376/bright322/neutral221/dark20/monochrome4。词表包 `data/vocabulary_pack.json` 聚合库内全标签（stats assets 1467）。
+- **相关**：ID-033（文件夹预标注补硬维度，挂起）。
+
+### ID-035：【BUG】圆饼图缺角修复 — offset 守恒 + 纯 opacity 淡入（模板层）
+
+- **状态**: done（2026-08-08，双模板各重渲染含 0.1% 极小段的 pie 成片 + PIL 像素验证 4/4 帧无缺角）
+- **优先级**: P1
+- **提出时间**: 2026-08-08
+- **描述**: 竖屏/横屏新闻杂志模板在「出现圆饼图」时生成的圆有缺角。帧验证 + 几何模拟实锤**三重叠根因**：
+  1. **主段分离动画**：GSAP 对主扇区加 `scale: 1.1` 放大 + `rotation: 14°` 分离——圆周任何尺寸/角度变化都会在动画帧露出缺口。
+  2. **小段 clamp 失配**：段间 gap 按固定弧长预留（名义比例），极小段（如 0.1%）被 `Math.max` clamp 失真，段间错位叠加缺口。
+  3. **offset 不守恒**：偏移量用名义比例累加，与实际占用弧长不一致 → 末段 wrap 后落进第一段内部（几何模拟：旧算法段对重叠 2 次）。
+- **改动**（`buildDonut` 三处守恒重写）:
+  - `avail = C - n * SEG_GAP`：缺口按比例预留，不再用固定弧长。
+  - `stroke-dashoffset = -used`，`used += len + SEG_GAP`：offset 全程守恒，段间无错位。
+  - 去主段 `scale`/`rotation` 分离动画，扇区改**纯 opacity 错峰淡入**（任何尺寸/角度变化都会让圆周在动画帧出现缺口）。
+- **涉及模块**: `E:\AI\digital_human\hf_prep\news_magazine_v1\index.html`、`news_magazine_v1_ls\index.html`（⚠️ 模板实体在仓库外，无版本控制）
+- **验证**:
+  - ✅ 竖屏/横屏各重渲染一条含 pie 成片（`items:[58,22,15,4.9,0.1]`，含 0.1% 极小段，duration 8s），抽 2.4s/7.8s 关键帧。
+  - ✅ PIL 沿环 0.5° 步长扫描（R±40 内 5 径向样本）：竖屏 719/720、横屏 720/720 命中，**全部整环闭合**；缺失约 0.5° 为设计内 1px SEG_GAP 细缝。
+  - ✅ 几何模拟同压测数据：旧算法段对重叠 2 次 → 新算法 0 次，段间 gap 均匀 0.3-0.4°。
+- **备注**:
+  - 模板实体位于 `E:\AI\digital_human\hf_prep\`（`hf_template_root` 默认路径），**不在 git 仓库内**，改动需手动备份。
+  - 首版修复曾用「固定弧长 gap」思路，经几何模拟证明仍存在 wrap 重叠，故收敛为 offset 守恒方案。
+
+### ID-036：【优化】HF 横屏模板 news-magazine-v1-ls — 按 video_format 自动选横/竖
+
+- **状态**: done（代码引入 commit `4997ca1c` 2026-08-07；横竖屏成片像素验证 2026-08-08 随 ID-035 完成）
+- **优先级**: P1
+- **提出时间**: 2026-08-07
+- **描述**: H 线 HF 视觉渲染此前**硬编码竖屏模板**，选 `landscape` 画幅时所有 HF 视频仍产出 1080×1920 竖屏。新增横屏模板 `news-magazine-v1-ls`（1920×1080，composition_id `news_main_ls`），`_pick_hf_template` 按 `job.video_format` 宽高比自动选横/竖模板。
+- **改动清单**:
+  1. `app/services/template_library.py`：`TEMPLATES` 新增 `news-magazine-v1-ls`（source_dir `news_magazine_v1_ls`，横屏 1920×1080，schema 与竖屏同构）。
+  2. `app/services/slot_workflows/common.py`：新增 `_pick_hf_template(job)` — `spec["width"] > spec["height"]` → 横屏模板，否则竖屏。
+  3. 模板源：`E:\AI\digital_human\hf_prep\news_magazine_v1_ls\index.html`（仓库外），donut 布局：`#chart` 居中 (960,540)、wrap 540×540、scale 1.35。
+- **涉及模块**: `app/services/template_library.py`、`app/services/slot_workflows/common.py`、`E:\AI\digital_human\hf_prep\news_magazine_v1_ls\index.html`
+- **备注**:
+  - commit `4997ca1c` 同时含「合成缺失 slot 自动补齐」与「幂等守卫细化」（job completed + 成片存在 + 无 slot 变化才跳过）。
+  - 横屏模板成片（含 pie）已随 ID-035 的 2026-08-08 重渲染完成 PIL 像素验证，无缺角。
+
+### ID-037：【优化】HF 模板品牌泛化 — brand_name / stamp_name / brand_tag 注入
+
+- **状态**: done（2026-08-08，工作区未提交，待重启后端验证）
+- **优先级**: P2
+- **提出时间**: 2026-08-08
+- **描述**: 新闻杂志模板由多数数字人账号共享，品牌栏/印章此前**硬编码账号名**（如「老陈聊财经」）。新增三个品牌字段动态注入，模板不写死任何账号：
+  - `brand_name`：账号名（从 `slot.director_job.script.host` 注入，缺省回退「财经频道」）。
+  - `stamp_name`：印章字，取账号名前 2 字竖排（适配 120px 印章框；短名取首字符），回退「财经」。
+  - `brand_tag`：标语，优先 `render_config` 覆盖，回退「数据解读」。
+- **改动清单**:
+  1. `app/services/template_filler.py`：`_SAFE_KEYS` 新增 3 个白名单 key（**27 个**）；`_build_substitutions` 从 `input_data` 填充三个品牌字段。
+  2. `app/services/slot_workflows/hf.py`：新增 `_merge_brand(input_data, slot)` — 从 `slot.director_job.script.host.name` 注入（全部 lazy=selectin，**零额外查询**）；找不到 host 时回退中性占位，保证标题卡不出现他人账号名或空块。
+- **涉及模块**: `app/services/template_filler.py`、`app/services/slot_workflows/hf.py`
+- **备注**:
+  - 若未来 hf_title 等模板引用 `{{brand_name}}` 等占位符，同一喂料链路自动注入。
+  - ⚠️ **必须重启后端**再重跑合成验证（`reload=False` 不会自动加载新代码）。
+
+### ID-038：【BUG】HF 渲染 300s 超时 — 本机 auto-worker calibration 卡死 + 模板 letterSpacing lint error
+
+- **状态**: done（2026-08-08，代码已改；后端重启后新渲染自动生效）
+- **优先级**: P0
+- **提出时间**: 2026-08-08
+- **描述**: job 79fc44b6 slot#2 渲染报 `HyperFrames timed out after 300s`。render.log 显示 compile 41.9s 后 **capture_calibration 阶段卡死**：两次 `Runtime.evaluate timed out`，150 帧 0 完成。
+- **根因分析**（两点独立，均已修）:
+  1. **auto-worker calibration 卡死（后端层）**: 本机 32 cores → `--workers auto` 高并发起多个 Chrome → Intel UHD 集显资源耗尽 → calibration `Runtime.evaluate` 超时。HF 兜底重试截图模式仍超时，浪费 ~95s 后才降级到 1 worker。
+  2. **模板 letterSpacing 动画 lint error（模板层）**: 横屏模板 `tl.fromTo(headline, { letterSpacing: "0.12em" }, { letterSpacing: "0.02em" })` 触发 `gsap_non_transform_motion` lint error — 文本重排属性在 seek-by-frame 捕获引擎下 stutter。
+- **修复方案**:
+  1. `app/services/hf_client.py`：render 命令追加 `--low-memory-mode` — 固定 1 worker + 强制 screenshot 捕获 + 跳过 auto-worker calibration，**实测 39s 稳定出片**（之前 300s 超时）。
+  2. `E:\AI\digital_human\hf_prep\news_magazine_v1_ls\index.html` L415-418：移除 letterSpacing 动画（字距展开感已由逐字 stagger 弹入承担），lint 干净，渲染验证通过。
+- **涉及模块**: `app/services/hf_client.py`、`hf_prep/news_magazine_v1_ls/index.html`（仓库外）
+- **验证**:
+  - CLI + 后端链路（fill_template → render_visual）验证：44.6s exit=0，产物 1920×1080/30fps/h264 规格与成功 render 一致。
+  - render.log 无 `gsap_non_transform` / `letterSpacing` lint error。
+  - slot#2 产物已回填（`hf_title_002.mp4`，DB status=completed）。
+- **备注**:
+  - `--low-memory-mode` 只影响渲染 worker 数/捕获模式，产物规格不变，后续合成自动复用。
+  - ⚠️ **必须重启后端**（`reload=False`）新渲染才用上 `--low-memory-mode`。
+  - job 79fc44b6 另 6 个 CANCELLED slot（#26/31/41/51/54/57，用户主动取消）未重跑，待用户确认。
 
 ---
 
