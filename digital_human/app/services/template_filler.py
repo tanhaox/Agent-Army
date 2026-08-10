@@ -43,6 +43,20 @@ _SAFE_KEYS = frozenset(
         "chart_label_5",
         "chart_value_5",
         "chart_json",
+        # 开场字幕卡 (hf_opening, 2026-08-11): 多行台词 + 关键冲击词
+        "opening_lines_json",
+        "opening_red_words",
+        "opening_accent_words",
+        # 财经片头 (hf_opening v3, 2026-08-11): hero/热词/副句/scatter
+        "hero_text",
+        "hot_word",
+        "sub_text",
+        "scatter_words",
+        # 引用卡 (hf_quote, 2026-08-11): 一句话观点 + 出处/人物 + 人像
+        "quote_text",
+        "attrib_name",
+        "attrib_role",
+        "portrait_b64",
         "chart_head",
         "source",
         "duration_sec",
@@ -78,6 +92,20 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs["chart_json"] = _html_escape(
         json.dumps(chart, ensure_ascii=False, separators=(",", ":"))
     )
+    # 开场字幕卡 (hf_opening, 2026-08-11): 多行台词 + 强调词 (JSON 属性含引号, 须转义)
+    subs["opening_lines_json"] = _html_escape(str(input_data.get("opening_lines_json", "[]")))
+    subs["opening_red_words"] = _html_escape(str(input_data.get("opening_red_words", "[]")))
+    subs["opening_accent_words"] = _html_escape(str(input_data.get("opening_accent_words", "[]")))
+    # 财经片头 v3 参数
+    subs["hero_text"] = _html_escape(str(input_data.get("hero_text", "")))
+    subs["hot_word"] = _html_escape(str(input_data.get("hot_word", "")))
+    subs["sub_text"] = _html_escape(str(input_data.get("sub_text", "")))
+    subs["scatter_words"] = _html_escape(str(input_data.get("scatter_words", "[]")))
+    # 引用卡参数
+    subs["quote_text"] = _html_escape(str(input_data.get("quote_text", "")))
+    subs["attrib_name"] = _html_escape(str(input_data.get("attrib_name", "")))
+    subs["attrib_role"] = _html_escape(str(input_data.get("attrib_role", "")))
+    subs["portrait_b64"] = _html_escape(str(input_data.get("portrait_b64", "")))
     subs["chart_head"] = str(chart.get("label") or chart.get("type") or "")
     subs["source"] = str(input_data.get("source", ""))
     subs["duration_sec"] = str(input_data.get("duration_sec", "12"))

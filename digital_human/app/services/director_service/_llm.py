@@ -38,13 +38,28 @@ def _llm_plan_phase(
     """Run LLM plan phase, return parsed plan or None (failed path handled)."""
     cfg = get_config()
     llm = LLMService(cfg.deepseek)
+    # 优先用爆品改造稿 (boosted_text), 让导演按观众实际听到的新稿配画面.
+    # 若未改造或改造为空, 回退到原始洗稿稿.
+    director_script = (script.boosted_text or script.script_text) if hasattr(script, "boosted_text") else script.script_text
+    # 从改造稿提取结构意图 (钩子/预埋/回收/呼吸点/情绪), 解决导演盲盒.
+    visual_intent = None
+    if hasattr(script, "boosted_text") and script.boosted_text:
+        try:
+            from app.services.director_prompt._intent import extract_visual_intent, summarize_intent
+
+            visual_intent = extract_visual_intent(script.boosted_text, alignment["segment_timings"])
+            if visual_intent:
+                logger.info("[director] visual_intent: %s", summarize_intent(visual_intent))
+        except Exception as exc:
+            logger.warning("[director] extract_visual_intent failed: %s", exc)
     prompt = build_director_prompt(
-        script_text=script.script_text,
+        script_text=director_script,
         segment_timings=alignment["segment_timings"],
         material_catalog=material_catalog,
         video_format=job.video_format if job else script.video_format,
         script_title=script_title,
         enabled_pipelines=enabled_pipelines,
+        visual_intent=visual_intent,
     )
 
     try:

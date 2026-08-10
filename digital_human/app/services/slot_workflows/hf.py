@@ -5,12 +5,14 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from app.models import DirectorSlot, Persona, VisualRenderJob
+from app.schemas import get_video_format_spec
 from app.services.slot_workflows.common import _pick_hf_template
 from app.services.slot_workflows.hf_chart import _normalize_chart_input
 from app.services.slot_workflows.hf_extract import _extract_hf_content
@@ -90,8 +92,16 @@ def _ensure_metrics(input_data: dict) -> None:
 
 
 def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> str:
-    """Render an HF visual (chart or title card) for the slot duration."""
+    """Render an HF visual (chart / title card / opening text card) for the slot duration."""
     from app.services.visual_render_service import execute_visual_render_job
+
+    # 开场字幕卡 (hf_opening): 走专属模板 + 多行台词, 禁忌警告风
+    if workflow == "hf_opening":
+        return _execute_hf_opening(db, slot)
+
+    # 引用卡 (hf_quote): 一句话观点 + 出处/人物, 黑金质感
+    if workflow == "hf_quote":
+        return _execute_hf_quote(db, slot)
 
     # 按 video_format 选模板: 横屏→news-magazine-v1-ls, 竖屏/方屏→news-magazine-v1
     template_id = _pick_hf_template(slot.director_job)
@@ -117,6 +127,148 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     db.commit()
     db.refresh(job)
 
+    result = execute_visual_render_job(db, job.id, template_id, input_data)
+    if result.get("status") != "completed":
+        raise RuntimeError(result.get("error_message") or "HF render failed")
+    out_path = result.get("output_path")
+    if not out_path or not Path(out_path).exists():
+        raise RuntimeError("HF render output missing")
+    return out_path
+
+
+def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
+    """开场字幕卡 (hf_opening): 前 5 秒多行台词贴字兜听觉.
+
+    - style: v1 = 禁忌警告风 (黑底白字+警示红, 顿挫硬切), v2 = Apple 官网审美 (浅灰+深蓝强调, 细腻缓入),
+             v3 = 财经片头 (深炭+暖金 chrome-text, 多层时间轴+scatter, 大厂 UI 标准)
+    - 模板: hf-opening-v{1|2|3} (竖) / hf-opening-v{1|2}-ls (横, v3 当前仅横屏设计)
+    - 时长: 5-8 秒 (前 5 秒核心, 最多 8 秒)
+    - 内容: v1/v2=多行台词+强调词; v3=hero_text(主句)+hot_word(金词)+sub_text(副句)+scatter_words(散布词)
+    """
+    from app.services.visual_render_service import execute_visual_render_job
+
+    spec = get_video_format_spec(slot.director_job.video_format)
+    render_config = slot.params_json.get("render_config") or {}
+    style = render_config.get("style", "v1") or "v1"
+    if style not in ("v1", "v2", "v3"):
+        style = "v1"
+    is_landscape = spec["width"] > spec["height"]
+    template_id = f"hf-opening-v{style}-ls" if is_landscape and style != "v3" else f"hf-opening-v{style}"
+    duration = round(slot.end_sec - slot.start_sec, 3)
+
+    # v3 财经片头: hero/hot/sub/scatter 参数
+    if style == "v3":
+        input_data = {
+            "hero_text": str(render_config.get("hero") or render_config.get("hero_text") or ""),
+            "hot_word": str(render_config.get("hot") or render_config.get("hot_word") or ""),
+            "sub_text": str(render_config.get("sub") or render_config.get("sub_text") or ""),
+            "scatter_words": json.dumps(render_config.get("scatter") or render_config.get("scatter_words") or [], ensure_ascii=False),
+            "duration_sec": max(5, min(8, round(duration))),
+        }
+        # 无显式 hero 时从口播取首句
+        if not input_data["hero_text"]:
+            input_data["hero_text"] = (slot.text_context or "").split("||")[0][:20]
+        # 无 hot 词时从口播检测冲击词
+        if not input_data["hot_word"]:
+            try:
+                from app.services.slot_workflows.hf_extract import _pick_red_words
+                words = _pick_red_words(input_data["hero_text"])
+                if words:
+                    input_data["hot_word"] = words[0]
+            except Exception:
+                pass
+        # 无 scatter 时给默认财经词
+        if not input_data["scatter_words"].strip() or input_data["scatter_words"] == "[]":
+            input_data["scatter_words"] = json.dumps(["资本", "黑箱", "博弈", "杠杆", "泡沫", "算盘", "命门", "逻辑"], ensure_ascii=False)
+        _merge_brand(input_data, slot, db)
+        job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+        db.add(job); db.commit(); db.refresh(job)
+        result = execute_visual_render_job(db, job.id, template_id, input_data)
+        if result.get("status") != "completed":
+            raise RuntimeError(result.get("error_message") or "HF render failed")
+        out_path = result.get("output_path")
+        if not out_path or not Path(out_path).exists():
+            raise RuntimeError("HF render output missing")
+        return out_path
+
+    # v1/v2: 多行台词逻辑
+    accent_key = "opening_red_words" if style == "v1" else "opening_accent_words"
+
+    duration = round(slot.end_sec - slot.start_sec, 3)
+
+    # 多行台词: 优先用 render_config 显式给的, 否则从口播提取
+    lines = render_config.get("lines") or render_config.get("opening_lines") or []
+    accent_words = render_config.get("red_words") or render_config.get("accent_words") or []
+    if not lines:
+        # fallback: 从开场口播 (slot.text_context) 语义分行提取
+        try:
+            from app.services.slot_workflows.hf_extract import build_opening_lines
+
+            built = build_opening_lines(slot.text_context or "")
+            lines = built.get("lines", [])
+            if not accent_words:
+                accent_words = built.get("red_words", [])
+        except Exception:
+            lines = []
+
+    input_data = {
+        "opening_lines_json": json.dumps(lines, ensure_ascii=False),
+        accent_key: json.dumps(accent_words, ensure_ascii=False),
+        "duration_sec": max(5, min(8, round(duration))),
+    }
+    # 品牌注入
+    _merge_brand(input_data, slot, db)
+
+    job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    result = execute_visual_render_job(db, job.id, template_id, input_data)
+    if result.get("status") != "completed":
+        raise RuntimeError(result.get("error_message") or "HF render failed")
+    out_path = result.get("output_path")
+    if not out_path or not Path(out_path).exists():
+        raise RuntimeError("HF render output missing")
+    return out_path
+
+
+def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
+    """引用卡 (hf_quote): 一句话观点 + 出处/人物 + 可选人像, 黑金质感.
+
+    - 模板: hf-quote-v1 (横屏 1920x1080)
+    - 内容: quote_text(引用语) + hot_word(金词) + attrib_name(人物) + attrib_role(身份) + portrait_b64(人像)
+    """
+    from app.services.visual_render_service import execute_visual_render_job
+
+    template_id = "hf-quote-v1"
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    render_config = slot.params_json.get("render_config") or {}
+
+    input_data = {
+        "quote_text": str(render_config.get("quote") or render_config.get("quote_text") or ""),
+        "hot_word": str(render_config.get("hot") or render_config.get("hot_word") or ""),
+        "attrib_name": str(render_config.get("name") or render_config.get("attrib_name") or ""),
+        "attrib_role": str(render_config.get("role") or render_config.get("attrib_role") or ""),
+        "portrait_b64": str(render_config.get("portrait") or render_config.get("portrait_b64") or ""),
+        "duration_sec": max(4, min(10, round(duration))),
+    }
+    # 无 quote 时从口播取
+    if not input_data["quote_text"]:
+        input_data["quote_text"] = (slot.text_context or "").replace("||", "")[:80]
+    # 无 hot 词时从引用语检测冲击词
+    if not input_data["hot_word"]:
+        try:
+            from app.services.slot_workflows.hf_extract import _pick_red_words
+            words = _pick_red_words(input_data["quote_text"])
+            if words:
+                input_data["hot_word"] = words[0]
+        except Exception:
+            pass
+    _merge_brand(input_data, slot, db)
+
+    job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+    db.add(job); db.commit(); db.refresh(job)
     result = execute_visual_render_job(db, job.id, template_id, input_data)
     if result.get("status") != "completed":
         raise RuntimeError(result.get("error_message") or "HF render failed")

@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 _HOST_FAMILY = {"host", "mixed_host_broll"}
-_HF_WORKFLOWS = {"hf_chart", "hf_title"}
+_HF_WORKFLOWS = {"hf_chart", "hf_title", "hf_opening"}
 
 
 def _chain_for(prefer: str) -> tuple[tuple[str, str | None], ...]:
@@ -83,6 +83,28 @@ def _force_host_boundaries(slots: list[DirectorSlotPlan]) -> None:
         slots[pivot].params = {"fallback_reason": "forced_host_middle", **slots[pivot].params}
 
 
+def _force_opening_card(slots: list[DirectorSlotPlan], enabled_pipelines: set[str] | None) -> None:
+    """无人出镜(C线禁用): 强制第 1 个 slot 为 hf_opening (开场字幕卡).
+
+    前 5 秒视觉兜听觉: 用户可能没听清配音, 开场台词必须贴成大字.
+    仅当 H 线(hf)可用时生效; 否则回退 broll (至少不能是空卡).
+    """
+    if not slots:
+        return
+    first = slots[0]
+    # 已是 hf_opening: 仅校准时长
+    if first.workflow == "hf_opening":
+        first.end_sec = min(first.end_sec, first.start_sec + 8)
+        return
+    # H 线可用 → 强制 hf_opening (从口播提取台词在渲染层做)
+    h_enabled = enabled_pipelines is None or "h" in enabled_pipelines
+    if h_enabled:
+        first.workflow = "hf_opening"
+        first.visual_type = "hf_opening"
+        first.params = {"fallback_reason": "forced_opening_card", **first.params}
+        first.end_sec = min(first.end_sec, first.start_sec + 8)
+
+
 def enforce_host_rules(slots: list[DirectorSlotPlan], total_duration: float,
                        enabled_pipelines: set[str] | None = None) -> list[DirectorSlotPlan]:
     """Guarantee: first and last slots are host; if none in middle add one.
@@ -99,6 +121,8 @@ def enforce_host_rules(slots: list[DirectorSlotPlan], total_duration: float,
 
     if not c_enabled:
         _downgrade_hosts_c_disabled(slots, enabled_pipelines)
+        # 强制开场字幕卡 (前 5 秒视觉兜听觉)
+        _force_opening_card(slots, enabled_pipelines)
         slots = enforce_adjacency_rules(slots)
         from app.config import get_config
         max_host = get_config().defaults.max_host_slots

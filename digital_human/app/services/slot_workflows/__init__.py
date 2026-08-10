@@ -33,6 +33,8 @@ WORKFLOW_HANDLERS = {
     "broll_local": execute_broll_local_slot,
     "hf_chart": execute_hf_visual_slot,
     "hf_title": execute_hf_visual_slot,
+    "hf_opening": execute_hf_visual_slot,
+    "hf_quote": execute_hf_visual_slot,
     "mixed_host_broll": execute_mixed_host_broll_slot,
     "black_placeholder": execute_black_placeholder_slot,
 }

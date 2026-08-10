@@ -12,3 +12,4 @@ jsonschema
 Pillow
 httpx
 send2trash
+agentmemory

@@ -119,3 +119,90 @@ def _extract_hf_content(text: str, title_max: int = 16) -> dict:
         "metrics": _score_metrics(metrics)[:4],
         "chart": {"type": "bar", "unit": "", "items": chart_items[:5]},
     }
+
+
+# ── 多行台词分行 (hf_opening, 2026-08-11) ─────────────────────────────────────
+# 语义保护: 禁止在词语中间截断, 优先在标点/语气停顿处换行.
+
+# 中文可断点 (标点/语气词后)
+_BREAK_AFTER = re.compile(r"[，。！？；、：,.!?;:）)]")
+# 不可断开的词 (数字+单位, 专有名词前后缀)
+_NO_BREAK = re.compile(r"(\d+[.%]?\s*[个亿万千百条块元秒%]?|AI|OpenAI|GitHub|Meta|华为|微软|谷歌)")
+# 常见双字词: 若断点把这类词切开, 会破坏语义 (如"几乎"→"几"+"乎")
+_TWO_CHAR_WORDS = {
+    "几乎", "因为", "但是", "已经", "就是", "通过", "可以", "开始", "成为",
+    "他们", "我们", "你们", "这个", "一个", "那个", "背后", "真的", "可能",
+    "过去", "现在", "未来", "然后", "接着", "自己", "没有", "不是", "只是",
+}
+
+
+def _split_lines_semantic(text: str, max_chars: int = 12) -> list[str]:
+    """按语义分行: 每行 ≤ max_chars 字, 优先在标点/停顿处断, 禁止切词.
+
+    实现: 贪心填满 max_chars, 但:
+      - 优先在标点后断 (从后往前找最近标点);
+      - 无标点时, 若断点把常见双字词切开, 倒退到词首 (保护语义);
+      - 仍无安全断点才保底 max_chars。
+    """
+    if not text:
+        return []
+    # 去情绪标记和停顿符
+    t = re.sub(rf"\[{_EMOTION}\]", "", text)
+    t = t.replace("||", "").replace("\n", "").strip()
+    if not t:
+        return []
+
+    lines: list[str] = []
+    while t:
+        if len(t) <= max_chars:
+            lines.append(t)
+            break
+        window = t[: max_chars + 3]
+        # 候选断点: 标点后
+        cuts = [m.end() for m in _BREAK_AFTER.finditer(window)]
+        # 优先用最后一个标点断点 (贪心, 但 ≤ max_chars)
+        cut = next((c for c in reversed(cuts) if c <= max_chars), -1)
+        if cut <= 0:
+            # 无标点: 用 max_chars, 但检查是否切开双字词
+            cut = max_chars
+            # 若 cut-1 与 cut 构成双字词后半, 倒退
+            for w in _TWO_CHAR_WORDS:
+                idx = t.find(w)
+                if 0 <= idx < cut <= idx + len(w):
+                    cut = idx  # 倒退到词首
+                    break
+        lines.append(t[:cut])
+        t = t[cut:].strip()
+    return lines
+
+
+def _pick_red_words(text: str) -> list[str]:
+    """从开场台词中识别关键冲击词 (渲染警示红).
+
+    命中词: 骗/攻击/危险/失控/崩溃/造假/掀翻/屠杀/绝路/黑箱 等强冲击词.
+    """
+    _RED = ("骗", "攻击", "危险", "失控", "崩溃", "造假", "掀翻", "屠杀",
+            "绝路", "黑箱", "砸", "血", "崩", "危", "撕", "斩")
+    found = []
+    for w in _RED:
+        if w in text and w not in found:
+            found.append(w)
+    return found[:3]  # 最多 3 个, 避免满屏红
+
+
+def build_opening_lines(text: str, max_chars: int = 12) -> dict:
+    """构建 hf_opening 需要的多行台词 + 红词.
+
+    Args:
+        text: 开场口播 (Pass1 冲击句, 可能含 || 停顿)
+        max_chars: 每行最大字数 (手机屏视觉重心居中, 默认 12)
+
+    Returns:
+        {"lines": [...], "red_words": [...]}
+    """
+    lines = _split_lines_semantic(text, max_chars)
+    red_words = _pick_red_words(text)
+    # 至少 2 行 (第一行冲击词, 后续兑现), 最多 4 行
+    if len(lines) > 4:
+        lines = lines[:4]
+    return {"lines": lines, "red_words": red_words}

@@ -155,11 +155,14 @@ def build_director_prompt(
     video_format: str | None = None,
     script_title: str | None = None,
     enabled_pipelines: set[str] | None = None,
+    visual_intent: list[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble user prompt for the director LLM.
 
     Args:
         enabled_pipelines: 启用的管线集合 (e.g. {"c","p","h"}). None=全部启用.
+        visual_intent: 可选, 稿件结构意图 (钩子/预埋/回收/呼吸点/金句 → 建议画面情绪).
+            从爆品改造稿的结构标记提取, 让导演按"观众实际听到的新稿 + 结构意图"配画面, 而非盲配.
     """
     prompt = load_director_prompt()
     # 无出镜模式: C 线禁用 (用户只开 P/H 或全关) 时, 直接在系统提示词层移除 host 规则
@@ -215,5 +218,26 @@ def build_director_prompt(
     constraint = _build_pipeline_constraint_block(enabled_pipelines)
     if constraint:
         prompt += constraint
+
+    # 视觉意图注入 (2026-08-11): 把爆品改造稿的结构意图传给导演, 让它按
+    # "观众实际听到的新稿 + 每段意图"配画面, 而非盲配. 这是视觉层"导演盲盒"的解法.
+    if visual_intent:
+        intent_lines = [
+            "\n\n## 补充输入4：每段的视觉意图（稿件结构标记 → 建议画面情绪）",
+            "这是对口播稿的结构分析。请你配画面时严格呼应这些意图：",
+            "- 钩子/冲击段 → 画面要硬、有冲击力/悬念感，禁止蓝天白云/风景空镜",
+            "- 争议/预埋段 → 画面要有张力/暗调/暗示，配合埋伏笔的悬念感",
+            "- 回收/升华段 → 画面要收束/提升/光明",
+            "- 呼吸点 → 画面要放松/留白，让观众缓口气",
+            "- 金句/结论 → 画面要突出/定格，可配大字",
+            "",
+            "各段意图（按时间顺序）：",
+        ]
+        for item in visual_intent:
+            start = item.get("start_sec", "?")
+            intent = item.get("intent", "body")
+            desc = item.get("desc", "")
+            intent_lines.append(f"- [{start}s] {intent}: {desc}")
+        prompt += "\n".join(intent_lines)
 
     return prompt
