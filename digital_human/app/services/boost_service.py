@@ -123,12 +123,58 @@ P3_PROMPT = """你是{persona}的【节奏调节师】。你深谙人类大脑�
 - 禁止 AI 腔引导：严禁"让我们来看看"、"接下来我们要讨论的是"等元叙述。
 - 禁止过度密集：每 90 秒至多一个呼吸点，总数不得超过 3 个。
 
+# 📐 结尾结构硬约束（必须遵守，防止结构错乱）
+结尾必须按以下顺序排列，回收句整体放在赞块之前，赞是连续整体：
+```
+…正文结尾
+【争议回收句】…【关注回收句】…   ← 回收句整体（放在赞前）
+[confident] 点赞给…点赞给…点赞给…  ← 赞块（连续整体，不拆散）
+听懂逻辑，少走弯路。||我是{persona}，||下期见。  ← 固定结尾
+```
+- 若输入稿中【争议回收】【关注回收】出现在赞块之后，**必须把它们整体移到赞块之前**（这是结构修正，不是重写）。
+- 禁止出现"赞1/预埋/赞2"这种赞被拆散的结构。赞块必须连续。
+- 固定结尾（听懂逻辑…下期见）必须在最后，不得在它之后再接任何内容。
+
 # 📋 输出格式（严格执行）
 [呼吸点审计清单]
 呼吸点 1：[识别到的高密度区 → 插入的呼吸点句子] → [选择的模版 A/B/C]
 呼吸点 2：...
 [最终全稿]
-(输出完整文案，呼吸点请用【加粗】标出。除呼吸点外，其余文字必须与原稿 1:1 一致。预埋标注保留原样)"""
+(输出完整文案，呼吸点请用【加粗】标出。除呼吸点外，其余文字必须与原稿 1:1 一致。预埋标注保留原样。结尾严格按【结尾结构硬约束】排列)"""
+
+
+DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】。你的工作不是写作，而是精确复刻一个普通用户看完这篇新闻后，心里真实冒出来的所有反应。
+
+# 核心原理（最重要）
+一个真实用户看新闻，不是"带着问题找答案"，也不是"句句吐槽"，而是三种反应混在一起：
+1. **看明白的**：某个点他懂了，会产生共鸣或联想（"这个我懂，就是…"）
+2. **完全盲区的**：某个点他看不懂、没概念、信息量太小对不上（"这啥意思？""这跟我有啥关系？"）
+3. **看得累的**：新闻太长、太绕、太专业，他想划走但又好奇（"说半天到底想说啥？"）
+
+这三种反应，每一种都是钩子的来源。你的任务是把一个普通用户（无专业背景、平时刷短视频）看完这篇新闻后，这三种反应全都挖出来。
+
+# 任务：输出三块
+
+## 第一块：用户反应清单（4-8 条）
+每条是"一个普通人看完新闻后心里的话"，三类都要有：
+- 懂的/共鸣的（"这个我懂…"）
+- 盲区的（"这啥意思？这跟我有啥关系？"）
+- 嫌累的（"说半天想表达啥？"）
+要求：口语、真实、像普通人心里话，不是专业分析。
+
+## 第二块：层层递进叙事线
+把用户最想知道、最困惑的点编排成"先讲什么再讲什么"，层层揭开。
+每层解答一个"用户的反应/疑问"，下一层更深。
+
+## 第三块：资料清单
+要讲清楚这些，需要备足哪些料（3-8条）。
+
+# 输出格式（严格 JSON）
+{
+  "reactions": ["用户心里话1（标注类型：懂/盲区/嫌累）", "..."],
+  "narrative": [{"layer": 1, "answers": "对应反应", "content": "这层讲什么"}, ...],
+  "research": ["资料需求1", "..."]
+}"""
 
 
 # ── LLM 调用助手 ─────────────────────────────────────────────────────────────
@@ -187,6 +233,48 @@ def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retri
     return ""
 
 
+def deconstruct_article(raw_text: str, *, emit=None) -> dict[str, Any] | None:
+    """解构层：复刻普通用户看完新闻的真实反应（懂/盲区/嫌累）→ 伪用户评论.
+
+    产出:
+      reactions  用户反应清单 (4-8条)
+      narrative  层层递进叙事线
+      research   资料清单
+    供 laotan 洗稿时注入 (伪装成"真实用户评论", 让老谭从观众疑问出发成稿).
+    失败时返回 None, 调用方回退到无解构的普通洗稿.
+    """
+    try:
+        raw = _call(
+            f"{DECONSTRUCT_PROMPT}\n\n【输入新闻稿】\n{raw_text}",
+            json_mode=True,
+            max_tokens=4000,
+        )
+        data = _extract_json(raw)
+        if not data or not data.get("reactions"):
+            logger.warning("[boost] deconstruct parse failed: %s", raw[:100])
+            return None
+        return {
+            "reactions": [str(r) for r in data.get("reactions", [])],
+            "narrative": data.get("narrative", []),
+            "research": [str(r) for r in data.get("research", [])],
+        }
+    except Exception as exc:
+        logger.warning("[boost] deconstruct failed: %s", exc)
+        return None
+
+
+def format_pseudo_comments(decon: dict[str, Any]) -> str:
+    """把解构产出的用户反应，格式化为"伪用户评论"块，供 laotan 输入."""
+    reactions = decon.get("reactions", [])
+    if not reactions:
+        return ""
+    lines = "\n".join(f'{i+1}. "{r}"' for i, r in enumerate(reactions))
+    return f"""【以下是这篇新闻的真实用户评论，请在改写稿件时充分考虑这些言论】
+（这些评论来自真实用户，反映了普通观众看到这条新闻时的真实反应、疑问和盲区）
+
+{lines}"""
+
+
 def _extract_json(text: str) -> dict[str, Any] | None:
     """从 LLM 输出中提取 JSON (容忍前后缀)."""
     text = text.strip()
@@ -221,22 +309,34 @@ def _parse_opening(text: str) -> dict[str, Any] | None:
     }
 
 
+# laotan 稿的稳定引导词 (身份段结尾 → 正文开始). 用它们做拼接锚点.
+_LAOTAN_ANCHORS = (
+    "这事儿咱们得剥开看",
+    "这事儿咱们得看透背后的算盘",
+    "咱们得剥开看",
+    "咱们得看透背后的算盘",
+)
+
+
 def _find_end(script_text: str) -> str:
     """返回 P2 需要的"去掉开头钩子"的正文.
 
-    洗稿稿结构通常为: [钩子段] + [身份段(大家好/我是XX)] + [正文...].
-    P1 负责重写钩子段, P2 负责在纯正文上做预埋, 所以这里去掉钩子段和身份段,
-    只留正文 (从第三条分段起). 这样 P2 输出是"纯正文+预埋", 与 P1 新开头拼接后不冲突.
+    洗稿稿结构通常为: [钩子段] + [身份段(大家好/我是XX)] + [引导词] + [正文...].
+    用 laotan 稳定引导词做锚点, 从锚点之后开始保留正文 (含锚点句本身,
+    让 P1 新开头 → 引导词 → 正文 的衔接自然). 比按段落位置跳过更可靠.
     """
+    for anchor in _LAOTAN_ANCHORS:
+        idx = script_text.find(anchor)
+        if idx != -1:
+            # 从锚点所在行首开始 (保留引导词那整句)
+            line_start = script_text.rfind("\n", 0, idx) + 1
+            return script_text[line_start:]
+    # 无锚点 fallback: 去掉钩子段 + 身份段
     lines = [ln for ln in script_text.splitlines() if ln.strip()]
-    # 去掉钩子段 + 身份段. 身份段特征: 含"大家好"或"我是XX"且带 [calm] 情绪标记.
-    drop = 0
-    if len(lines) > 1:
-        drop = 1  # 钩子段
-        if len(lines) > 2 and ("大家好" in lines[1] or "我是" in lines[1]):
-            drop = 2  # 身份段
-    body = "\n".join(lines[drop:]) if drop < len(lines) else script_text
-    return body
+    drop = 1
+    if len(lines) > 2 and ("大家好" in lines[1] or "我是" in lines[1]):
+        drop = 2
+    return "\n".join(lines[drop:]) if drop < len(lines) else script_text
 
 
 def _splice_boosted(p1: dict[str, Any] | None, p2_text: str | None, original: str) -> str:

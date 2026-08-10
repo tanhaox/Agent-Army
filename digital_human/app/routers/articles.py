@@ -282,8 +282,26 @@ def rewrite_article(
                     article.perspective_1 = perspective.strip()
                     db2.commit()
 
+                # 解构层 (2026-08-11): 洗稿前先解构新闻, 产出"伪用户评论"注入,
+                # 让 laotan 从观众疑问出发成稿 (而非裸洗原文). 失败回退普通洗稿.
+                decon_result = None
+                raw_for_rewrite = article.raw_text
+                try:
+                    from ..services.boost_service import deconstruct_article, format_pseudo_comments
+
+                    _publish(job_id, {"type": "deconstruct_start", "script_id": script.id, "msg": "解构层：复刻观众反应"})
+                    decon_result = deconstruct_article(article.raw_text)
+                    if decon_result:
+                        pseudo = format_pseudo_comments(decon_result)
+                        if pseudo:
+                            # 伪用户评论追加到原文后, 作为 laotan 输入的一部分
+                            raw_for_rewrite = article.raw_text + "\n\n" + pseudo
+                            _publish(job_id, {"type": "deconstruct_done", "script_id": script.id, "msg": f"解构完成：{len(decon_result['reactions'])} 条观众反应"})
+                except Exception as decon_exc:
+                    logger.warning("[deconstruct] failed, fallback to normal rewrite: %s", decon_exc)
+
                 script_text = llm.rewrite_article(
-                    article.raw_text,
+                    raw_for_rewrite,
                     prompt_template=prompt_template,
                     model=model_alias,
                     stream=True,
