@@ -126,6 +126,7 @@
 | `hf_chart` | `hf_chart` | HyperFrames 动态图表渲染 | 数据类动态渲染（规则4.2）：口播含具体数据/百分比时 |
 | `hf_title` | `hf_title` | HyperFrames 标题卡渲染 | 仅用于参考来源卡(尾部) |
 | `hf_opening` | `hf_opening` | HyperFrames 开场字幕卡渲染 | **仅用于第 1 个 slot（前 5 秒）**：把开场台词贴成大字（禁忌警告风），视觉兜听觉。禁止用于其他位置 |
+| `hf_quote` | `hf_quote` | HyperFrames 引用卡渲染 | 花边/金句/名人言（"马斯克说X""圈内有个梗"），把一句话做成引用卡。与 broll/hf_title 交替，禁止连用 |
 
 ## params 字段约定(按 workflow)
 
@@ -157,10 +158,30 @@
 
 **hf_title**: `{"render_config": {"title": "...", "subtitle": "..."}, "intensity": "...", "emotion": "..."}`
 
-**hf_opening**: `{"render_config": {"lines": ["第一行冲击词", "第二行兑现爆点"], "red_words": ["骗", "攻击"]}, "intensity": "high", "emotion": "opening"}`
-- `lines` 必须是**开场口播的分行**（每行 ≤12 字，优先标点/语气停顿处断），不是完整长句。
-- `red_words` 是关键冲击词（如 骗/攻击/失控），渲染为警示红，其余纯白。
+**hf_opening**: `{"render_config": {"style": "v1|v2|v3", "lines": ["第一行冲击词", "第二行兑现爆点"], "red_words": ["骗", "攻击"], "hero": "主句", "hot": "金词", "sub": "副句"}, "intensity": "high", "emotion": "opening"}`
+- `style` 选片头风格：`v1`=禁忌警告风(黑底白字+警示红, 顿挫硬切) / `v2`=Apple官网审美(浅灰+深蓝, 细腻缓入) / `v3`=财经片头(深炭+暖金chrome-text, 多层时间轴)。**财经/时政内容推荐 v3**。
+- `lines` 必须是**开场口播的分行**（每行 ≤12 字，优先标点/语气停顿处断），不是完整长句。`red_words` 是关键冲击词（渲染警示红/金）。
+- v3 风格用 `hero`(主句) + `hot`(金词) + `sub`(副句) 替代 lines/red_words。
 - **硬约束**：只允许出现在第 1 个 slot，时长 5-8 秒，禁止用于正文。
+
+**hf_quote**: `{"render_config": {"quote": "引用语", "hot": "金词", "name": "人物", "role": "身份", "portrait": "人像base64(可选)"}, "intensity": "medium", "emotion": "falling"}`
+- 用于**花边/金句/名人言**：稿子里出现"马斯克说X""圈内有个梗""有句话这么说"时，把这句话做成引用卡。
+- `quote` 是完整引用语，`name` 是说话人（马斯克），`role` 是身份（OpenAI联合创始人）。
+- `portrait` 可选——有人像素材就带，无人像只显示文字+占位。
+- 时长 4-10 秒，**禁止连用**（与 broll/hf_title 交替）。
+
+### ⚠️ hf_quote 使用强化（重要，务必区分）
+当口播出现**"直接引语"**时，必须用 `hf_quote`，**不要用 hf_title 或 broll**：
+
+| 口播内容 | 正确用 hf_quote | 错误（用别的） |
+|---|---|---|
+| "马斯克说过：干脆改名叫 CloseAI 算了" | ✅ hf_quote, quote=干脆改名叫CloseAI算了, name=马斯克 | ❌ hf_title/broll |
+| "圈内有个梗：班加罗尔劳动密集型产业" | ✅ hf_quote, quote=班加罗尔的劳动密集型产业, name=硅谷投资人 | ❌ broll 配风景 |
+| "有句话这么说：良心在财报面前不值钱" | ✅ hf_quote, quote=良心在财报面前不值钱, name=老谭 | ❌ hf_title |
+
+**判据**：这段口播如果**去掉画面只留这句话**仍成立（这句话本身就是内容），就用 hf_quote。hf_title 是章节标题（短、概括），hf_quote 是完整一句话（长、带说话人）。
+
+**信号词**：出现"XX说""XX表示""圈内有""有句话""据XX" + 完整引语 → hf_quote。
 
 
 # 决策规则
@@ -172,6 +193,7 @@
 | 包含"大家好"/"我是老陈"/"下期见"等开场结尾词 | `host` | 建立人格连接 |
 | 包含"评论区聊聊"/"您觉得呢"等互动提问 | `host` | 需要人格面对观众 |
 | 包含金句/结论/观点性陈述 | `host` | 人格传递观点更有说服力 |
+| 包含"XX说/XX表示/引用X的话"或花边梗、名人言 | `hf_quote` | 把一句话做成引用卡(带人物), 视觉聚焦那句话 |
 | 包含具体数字、百分比、金额、年份 | `broll_pexels` | 用真实画面做数据背景 |
 | 引用外部事件、历史案例、他国情况 | `broll_pexels` | 需要画面建立场景 |
 | 核心结论 + 关键数据同时出现 | `mixed_host_broll` | 双重传递,信息密度最大 |

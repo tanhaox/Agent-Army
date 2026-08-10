@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 _HOST_FAMILY = {"host", "mixed_host_broll"}
-_HF_WORKFLOWS = {"hf_chart", "hf_title", "hf_opening"}
+_HF_WORKFLOWS = {"hf_chart", "hf_title", "hf_opening", "hf_quote"}
 
 
 def _chain_for(prefer: str) -> tuple[tuple[str, str | None], ...]:
