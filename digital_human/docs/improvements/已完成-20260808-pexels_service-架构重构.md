@@ -1,6 +1,6 @@
 # 已完成 · 2026-08-08 · pexels_service 架构重构
 
-> 原 `app/services/pexels_service.py`(552 行,类 `PexelsService` 466 行)拆分为 9 模块包,外部导入零改动。诊断报告见 [进行中-20260808-pexels_service-诊断报告](进行中-20260808-pexels_service-诊断报告.md)。
+> 原 `app/services/pexels_service.py`(552 行,类 `PexelsService` 466 行)拆分为 9 模块包,外部导入零改动。
 
 ## 变更摘要
 

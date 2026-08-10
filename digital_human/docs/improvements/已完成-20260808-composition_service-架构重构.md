@@ -2,7 +2,6 @@
 
 **日期**: 2026-08-08
 **原文件**: `app/services/composition_service.py` (593 行 → 已回收站删除)
-**诊断报告**: [进行中-20260808-composition_service-诊断报告.md](进行中-20260808-composition_service-诊断报告.md)
 
 ## 变更摘要
 

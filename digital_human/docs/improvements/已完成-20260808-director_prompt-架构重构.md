@@ -3,7 +3,6 @@
 **原文件**: `app/services/director_prompt.py`(783 行,无类,纯函数模块)
 **重构为**: `app/services/director_prompt/` 包(6 模块)
 **日期**: 2026-08-08
-**诊断**: [进行中-20260808-director_prompt-诊断报告.md](进行中-20260808-director_prompt-诊断报告.md)(阶段已标 ✅ 已完成)
 
 ## 变更摘要
 

@@ -1,7 +1,6 @@
 # alignment_service 架构重构 — 变更摘要
 
 > 日期：2026-08-08 ｜ 模块：`app/services/alignment_service.py` (460 行) → 包化 5 模块
-> 依据诊断：`docs/improvements/进行中-20260808-alignment_service-诊断报告.md`
 > 方法：行为逐字迁移（字节级 diff 验证）＋ AST 硬约束 + 外部引用面零破坏
 
 ## 变更摘要
