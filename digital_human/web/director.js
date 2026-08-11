@@ -252,6 +252,8 @@ async function selectJob(jobId) {
   try {
     const job = await api(`/jobs/${jobId}`);
     renderJobDetail(job);
+    // 错别字替换面板: 有 job 就显示 (合成后发现错字时用)
+    toggleReplaceCharPanel(true);
     // ID-022: 手动点选活跃任务(规划/执行中)时重连 SSE 日志流, 与刷新恢复行为一致。
     // 注意: 不含 reviewing——plan_done/exec_done terminal 事件后任务进入 reviewing,
     //       selectJob 会被自动调用, 此时不应重连(合成场景由 restoreLastDirectorJob 处理)。
@@ -1224,3 +1226,45 @@ refreshJobs();
     toast('已带入流水线的脚本与音频，点击"创建并规划"继续', 'info');
   }
 })();
+
+// ── 错别字音频替换 (2026-08-11) ──────────────────────────────────────────────
+// 生僻字(indextts 读错) → 替换字 → 重做含该字段 → 替换 wav → 重合成
+function toggleReplaceCharPanel(show) {
+  const panel = document.getElementById('replace-char-panel');
+  if (panel) panel.style.display = show ? 'block' : 'none';
+}
+
+async function replaceCharAudio(btn) {
+  if (!currentJobId) { toast('请先选择导演任务', 'error'); return; }
+  const fromChar = document.getElementById('replace-from').value.trim();
+  const toChar = document.getElementById('replace-to').value.trim();
+  if (!fromChar || !toChar) { toast('请输入原字和替换字', 'error'); return; }
+
+  // 取当前 job 的 script_id (从 job 详情或 URL)
+  const scriptId = document.getElementById('input-script-id')?.value || '';
+  if (!scriptId) { toast('未找到脚本', 'error'); return; }
+
+  btn.disabled = true;
+  const statusEl = document.getElementById('replace-status');
+  if (statusEl) statusEl.textContent = '执行中…';
+  try {
+    const resp = await fetch(`/api/audio/scripts/${scriptId}/replace-char`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_char: fromChar, to_char: toChar }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      if (statusEl) statusEl.textContent = `✅ ${data.msg}`;
+      toast(data.msg || '替换完成', 'success');
+    } else {
+      if (statusEl) statusEl.textContent = `❌ ${data.msg || data.detail || '失败'}`;
+      toast(data.msg || data.detail || '替换失败', 'error');
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = `❌ ${e.message}`;
+    toast('替换失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}

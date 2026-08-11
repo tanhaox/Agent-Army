@@ -255,3 +255,121 @@ def download_manifest(job_id: str, db: Session = Depends(get_db)):
     if not manifest_path.exists():
         raise HTTPException(status_code=404, detail="Manifest not found")
     return FileResponse(manifest_path, media_type="application/json", filename="manifest.json")
+
+
+@router.post("/scripts/{script_id}/replace-char")
+def replace_char(
+    script_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """错别字音频替换 (2026-08-11): 把含生僻字的段改字后重做 TTS.
+
+    背景: indextts 不认识生僻字(如"昇"), 遇到就读错/乱读, 污染整段音频.
+    方案: 找到含原字的 segments → text 替换 → 单段重做 TTS → 替换 wav → 重合成.
+
+    payload: {"from_char": "昇", "to_char": "升"}
+    """
+    from ..services.tts_service import TTSService
+
+    from_char = (payload.get("from_char") or "").strip()
+    to_char = (payload.get("to_char") or "").strip()
+    if not from_char or not to_char:
+        raise HTTPException(status_code=400, detail="from_char/to_char 必填")
+
+    script = db.query(Script).filter(Script.id == script_id).first()
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    # 1. 找含原字的 segments
+    segments = db.query(Segment).filter(
+        Segment.script_id == script_id,
+        Segment.text.contains(from_char),
+    ).all()
+    if not segments:
+        return {"ok": True, "replaced": 0, "msg": f"未找到含'{from_char}'的段"}
+
+    # 2. 找到该 script 的 audio_job (最新 completed)
+    job = (
+        db.query(AudioJob)
+        .filter(AudioJob.script_id == script_id, AudioJob.status == "completed")
+        .order_by(AudioJob.created_at.desc())
+        .first()
+    )
+    if not job:
+        return {"ok": False, "msg": "未找到已完成音频任务"}
+
+    voice = db.query(Voice).filter(Voice.id == job.voice_id).first()
+    output_dir = Path(job.output_dir)
+
+    # 3. 对每段: 改 text + 重做 TTS + 替换 wav
+    replaced = 0
+    for seg in segments:
+        new_text = seg.text.replace(from_char, to_char)
+        # 更新 DB text
+        seg.text = new_text
+        db.commit()
+
+        # 单段重做 TTS
+        temp_dir = output_dir / f"replace_{seg.id[:8]}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            manifest = tts_client.synthesize_lines(
+                text=new_text,
+                output_dir=temp_dir,
+                backend=voice.backend if voice else "auto",
+                voice_id=voice.name if voice else "default",
+                reference_audio=Path(voice.reference_audio_path) if voice and voice.reference_audio_path else None,
+                reference_text=voice.reference_text or "" if voice else "",
+                base_url_fish=voice.base_url_fish if voice else None,
+                base_url_f5=voice.base_url_f5 if voice else None,
+                base_url_indextts=voice.base_url_indextts if voice else None,
+                master_audio=Path(voice.master_audio_path) if voice and voice.master_audio_path else None,
+                master_text=voice.master_text or "" if voice else "",
+                params=json.loads(voice.config_json).get("params") if voice and voice.config_json else None,
+            )
+            # 取生成的 wav
+            new_wavs = sorted(temp_dir.glob("*.wav"))
+            if not new_wavs:
+                continue
+            new_wav = new_wavs[0]
+
+            # 替换 audio_files 里该段的 wav
+            af = (
+                db.query(AudioFile)
+                .filter(AudioFile.audio_job_id == job.id, AudioFile.segment_id == seg.id)
+                .first()
+            )
+            if af:
+                old_path = Path(af.file_path)
+                if old_path.exists():
+                    old_path.unlink()
+                new_dest = old_path if old_path.parent.exists() else temp_dir / new_wav.name
+                import shutil
+                shutil.copy2(new_wav, new_dest)
+                af.file_path = str(new_dest)
+                af.duration = new_wav.stat().st_size / 32000.0 if False else None  # duration 由合成更新
+                db.commit()
+            replaced += 1
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"段 {seg.id[:8]} 重做失败: {exc}")
+
+    # 4. 重合成 full_paragraph.wav (concat 所有段)
+    try:
+        from scripts.tts_client import _concat_wavs_with_ffmpeg
+
+        all_afs = (
+            db.query(AudioFile)
+            .filter(AudioFile.audio_job_id == job.id, AudioFile.segment_id.isnot(None))
+            .order_by(AudioFile.filename)
+            .all()
+        )
+        wavs = [Path(af.file_path) for af in all_afs if Path(af.file_path).exists()]
+        if wavs:
+            combined = output_dir / "full_paragraph.wav"
+            _concat_wavs_with_ffmpeg(wavs, combined)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"重合成失败: {exc}")
+
+    return {"ok": True, "replaced": replaced, "msg": f"替换完成, 重做 {replaced} 段"}
