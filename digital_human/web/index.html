@@ -64,6 +64,15 @@
     <!-- Step 2: AI Rewrite -->
     <div class="card" id="step-2-card">
       <h3><span class="icon">🤖</span> AI 洗稿</h3>
+      <div class="form-row" style="margin-bottom:1rem;align-items:center;">
+        <div style="flex:0 0 200px;">
+          <label>调取已有脚本</label>
+          <select id="script-select" onchange="selectExistingScript(this)" style="width:100%;padding:0.4rem 0.6rem;font-size:0.82rem;">
+            <option value="">— 选择已有脚本（可选）—</option>
+          </select>
+        </div>
+        <div style="flex:1;font-size:0.72rem;color:var(--text-muted);">洗稿后或已保存的脚本可从这里重新调取，继续编辑/改造/生成音频</div>
+      </div>
       <div class="form-row" style="margin-bottom:1rem;">
         <div style="flex:0 0 200px;">
           <label>数字人（人物）</label>

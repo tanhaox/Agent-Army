@@ -895,3 +895,50 @@ async function boostScript() {
     toggle('btn-boost', true);
   }
 }
+
+// ── 脚本选择下拉 (2026-08-11: 调取已有脚本, 补"流水线不能调取已生成文章") ──
+async function loadScriptList() {
+  try {
+    const scripts = await api('GET', '/scripts?limit=30');
+    const select = document.getElementById('script-select');
+    if (!select) return;
+    // 保留占位选项
+    select.innerHTML = '<option value="">— 选择已有脚本（可选）—</option>';
+    scripts.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.id;
+      // 显示: 标题 + 底稿/改造状态
+      const title = (s.article && s.article.title) ? s.article.title.slice(0, 20) : s.id.slice(0, 8);
+      const boosted = s.boosted_text ? '✅改造' : '📝洗稿';
+      opt.textContent = `${title} (${boosted})`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn('loadScriptList failed:', e.message);
+  }
+}
+
+async function selectExistingScript(select) {
+  const scriptId = select.value;
+  if (!scriptId) return;
+  try {
+    await fetchScript(scriptId);
+    // 显示修正/爆品改造入口 (已有脚本可能处于不同阶段)
+    const p2 = document.getElementById('perspective-2-section');
+    if (p2) p2.style.display = 'block';
+    const boost = document.getElementById('boost-section');
+    if (boost) boost.style.display = 'block';
+    toggle('btn-save-script', true);
+    toggle('btn-boost', true);
+    setStatus('status-rewrite', '已调取脚本，可编辑/改观点/爆品改造', false, true);
+  } catch (e) {
+    setStatus('status-rewrite', '调取脚本失败: ' + e.message, true);
+  }
+}
+
+// 页面加载时填充脚本列表
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', loadScriptList);
+} else {
+  loadScriptList();
+}
