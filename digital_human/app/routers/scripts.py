@@ -314,8 +314,11 @@ def correct_script(
                     chunks.append(chunk)
                     _publish(job_id, {"type": "correct_chunk", "chunk": chunk})
 
+                # 修正目标: 有爆品改造稿(boosted_text)则修正最终稿, 否则修正底稿
+                # (2026-08-11: 洗稿后编辑器显示 boosted_text, 修正应改它, 用户才看到改动)
+                target_text = script2.boosted_text or script2.script_text
                 corrected_text = llm.correct_article(
-                    script2.script_text,
+                    target_text,
                     perspective=request.perspective,
                     prompt_template=script2.prompt_template,
                     model=request.model,
@@ -325,7 +328,10 @@ def correct_script(
 
                 # 保存修正观点
                 script2.perspective_2 = request.perspective.strip()
-                script2.script_text = corrected_text
+                if script2.boosted_text:
+                    script2.boosted_text = corrected_text
+                else:
+                    script2.script_text = corrected_text
 
                 # 重新分段: 开结尾取人物(persona)显式值, 其次 host 兼容老数据 (2026-08-08)
                 host = db2.query(Host).filter(Host.id == script2.host_id).first()
