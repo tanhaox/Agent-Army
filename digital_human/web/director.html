@@ -165,19 +165,6 @@
             <div class="field"><div class="field-label">产物路径</div><div class="field-value mono" id="slot-output">—</div></div>
             <div class="field"><div class="field-label">错误信息</div><div class="field-value" id="slot-error" style="color:var(--danger)">—</div></div>
           </div>
-          <div class="slot-detail" id="replace-char-panel" style="margin-top:0.75rem;display:none;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-              <span style="font-weight:600;font-size:0.9rem;">错别字音频替换</span>
-            </div>
-            <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
-              <span class="field-label" style="font-size:0.8rem;">把</span>
-              <input type="text" id="replace-from" style="width:60px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--ink);" maxlength="4" />
-              <span class="field-label" style="font-size:0.8rem;">换成</span>
-              <input type="text" id="replace-to" style="width:60px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--ink);" maxlength="4" />
-              <button class="btn btn-warning btn-sm" id="btn-replace-char" onclick="replaceCharAudio(this)">执行替换</button>
-              <span id="replace-status" style="font-size:0.8rem;color:var(--dim);"></span>
-            </div>
-          </div>
           <div class="btn-group" style="margin-top:1.25rem;">
             <button class="btn btn-primary" id="btn-execute" onclick="executeJob()">执行 Slots</button>
             <button class="btn btn-danger hidden" id="btn-cancel" onclick="cancelJob()">■ 停止</button>
@@ -187,6 +174,20 @@
             <button class="btn btn-success" id="btn-download" onclick="downloadJob()">下载 MP4</button>
             <button class="btn btn-secondary btn-sm" id="btn-open-folder" onclick="openOutputFolder()" title="在资源管理器中打开产物文件夹">📂 打开文件夹</button>
             <button class="btn btn-secondary" id="btn-toggle-log" onclick="toggleExecLog()">📡 日志</button>
+          </div>
+          <div class="replace-char-module" style="margin-top:1.25rem;padding:0.75rem;border:1px solid var(--border);border-radius:8px;">
+            <div style="display:flex;align-items:center;margin-bottom:0.6rem;">
+              <span style="font-weight:600;font-size:0.85rem;">错别字音频替换</span>
+              <span style="font-size:0.7rem;color:var(--dim);margin-left:0.5rem;">生僻字(TTS读错) → 重做含该字段 → 替换wav</span>
+            </div>
+            <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
+              <span class="field-label" style="font-size:0.8rem;">把</span>
+              <input type="text" id="replace-from" style="width:60px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--ink);" maxlength="4" />
+              <span class="field-label" style="font-size:0.8rem;">换成</span>
+              <input type="text" id="replace-to" style="width:60px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--ink);" maxlength="4" />
+              <button class="btn btn-warning btn-sm" id="btn-replace-char" onclick="replaceCharAudio(this)">执行替换</button>
+              <span id="replace-status" style="font-size:0.8rem;color:var(--dim);"></span>
+            </div>
           </div>
           <div class="video-preview hidden" id="video-preview">
             <video controls id="video-player"></video>

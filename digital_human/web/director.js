@@ -252,8 +252,7 @@ async function selectJob(jobId) {
   try {
     const job = await api(`/jobs/${jobId}`);
     renderJobDetail(job);
-    // 错别字替换面板: 有 job 就显示 (合成后发现错字时用)
-    toggleReplaceCharPanel(true);
+    // 错别字替换模块是固定可见的独立模块, 无需 toggle
     // ID-022: 手动点选活跃任务(规划/执行中)时重连 SSE 日志流, 与刷新恢复行为一致。
     // 注意: 不含 reviewing——plan_done/exec_done terminal 事件后任务进入 reviewing,
     //       selectJob 会被自动调用, 此时不应重连(合成场景由 restoreLastDirectorJob 处理)。
