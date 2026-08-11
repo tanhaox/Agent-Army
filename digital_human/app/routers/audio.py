@@ -303,61 +303,61 @@ def replace_char(
     voice = db.query(Voice).filter(Voice.id == job.voice_id).first()
     output_dir = Path(job.output_dir)
 
-    # 3. 对每段: 改 text + 重做 TTS + 替换 wav
+    # 3. 确保 TTS 引擎 (indextts) 在线, 逐段重做 + 替换 wav
+    from ..services.gpu_service_manager import get_gpu_service_manager
+
+    manager = get_gpu_service_manager()
     replaced = 0
-    for seg in segments:
-        new_text = seg.text.replace(from_char, to_char)
-        # 更新 DB text
-        seg.text = new_text
-        db.commit()
+    with manager.session(voice.backend if voice else "auto"):
+        for seg in segments:
+            new_text = seg.text.replace(from_char, to_char)
+            seg.text = new_text
+            db.commit()
 
-        # 单段重做 TTS
-        temp_dir = output_dir / f"replace_{seg.id[:8]}"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            manifest = tts_client.synthesize_lines(
-                text=new_text,
-                output_dir=temp_dir,
-                backend=voice.backend if voice else "auto",
-                voice_id=voice.name if voice else "default",
-                reference_audio=Path(voice.reference_audio_path) if voice and voice.reference_audio_path else None,
-                reference_text=voice.reference_text or "" if voice else "",
-                base_url_fish=voice.base_url_fish if voice else None,
-                base_url_f5=voice.base_url_f5 if voice else None,
-                base_url_indextts=voice.base_url_indextts if voice else None,
-                master_audio=Path(voice.master_audio_path) if voice and voice.master_audio_path else None,
-                master_text=voice.master_text or "" if voice else "",
-                params=(
-                    json.loads(voice.config_json) if isinstance(voice.config_json, str)
-                    else (voice.config_json or {}).get("params")
-                ) if voice and voice.config_json else None,
-            )
-            # 取生成的 wav
-            new_wavs = sorted(temp_dir.glob("*.wav"))
-            if not new_wavs:
-                continue
-            new_wav = new_wavs[0]
+            temp_dir = output_dir / f"replace_{seg.id[:8]}"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                tts_client.synthesize_lines(
+                    text=new_text,
+                    output_dir=temp_dir,
+                    backend=voice.backend if voice else "auto",
+                    voice_id=voice.name if voice else "default",
+                    reference_audio=Path(voice.reference_audio_path) if voice and voice.reference_audio_path else None,
+                    reference_text=voice.reference_text or "" if voice else "",
+                    base_url_fish=voice.base_url_fish if voice else None,
+                    base_url_f5=voice.base_url_f5 if voice else None,
+                    base_url_indextts=voice.base_url_indextts if voice else None,
+                    master_audio=Path(voice.master_audio_path) if voice and voice.master_audio_path else None,
+                    master_text=voice.master_text or "" if voice else "",
+                    params=(
+                        json.loads(voice.config_json) if isinstance(voice.config_json, str)
+                        else (voice.config_json or {}).get("params")
+                    ) if voice and voice.config_json else None,
+                )
+                new_wavs = sorted(temp_dir.glob("*.wav"))
+                if not new_wavs:
+                    continue
+                new_wav = new_wavs[0]
 
-            # 替换 audio_files 里该段的 wav
-            af = (
-                db.query(AudioFile)
-                .filter(AudioFile.audio_job_id == job.id, AudioFile.segment_id == seg.id)
-                .first()
-            )
-            if af:
-                old_path = Path(af.file_path)
-                if old_path.exists():
-                    old_path.unlink()
-                new_dest = old_path if old_path.parent.exists() else temp_dir / new_wav.name
-                import shutil
-                shutil.copy2(new_wav, new_dest)
-                af.file_path = str(new_dest)
-                af.duration = new_wav.stat().st_size / 32000.0 if False else None  # duration 由合成更新
-                db.commit()
-            replaced += 1
-        except Exception as exc:
-            db.rollback()
-            raise HTTPException(status_code=500, detail=f"段 {seg.id[:8]} 重做失败: {exc}")
+                af = (
+                    db.query(AudioFile)
+                    .filter(AudioFile.audio_job_id == job.id, AudioFile.segment_id == seg.id)
+                    .first()
+                )
+                if af:
+                    old_path = Path(af.file_path)
+                    if old_path.exists():
+                        old_path.unlink()
+                    new_dest = old_path if old_path.parent.exists() else temp_dir / new_wav.name
+                    import shutil
+                    shutil.copy2(new_wav, new_dest)
+                    af.file_path = str(new_dest)
+                    af.duration = None
+                    db.commit()
+                replaced += 1
+            except Exception as exc:
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"段 {seg.id[:8]} 重做失败: {exc}")
 
     # 4. 重合成 full_paragraph.wav (concat 所有段)
     try:
