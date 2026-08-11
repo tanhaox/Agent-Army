@@ -270,6 +270,7 @@ def replace_char(
 
     payload: {"from_char": "昇", "to_char": "升"}
     """
+    from scripts import tts_client  # noqa: F401
     from ..services.tts_service import TTSService
 
     from_char = (payload.get("from_char") or "").strip()
