@@ -289,6 +289,15 @@ def boost_script(
     job_id = str(uuid.uuid4())
 
     def _do_boost():
+        # 文件日志: 确认 _do_boost 是否被执行 (background task 问题排查 2026-08-11)
+        try:
+            from pathlib import Path
+            Path("/tmp/boost_debug.log").write_text(
+                f"[{__import__('time').time()}] _do_boost STARTED script={script_id}\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
         with db_session() as db2:
             try:
                 script2 = db2.query(Script).filter(Script.id == script_id).first()
@@ -341,7 +350,9 @@ def boost_script(
                 except Exception:
                     pass
 
-    background_tasks.add_task(_do_boost)
+    import threading
+
+    threading.Thread(target=_do_boost, daemon=True).start()
     return {"job_id": job_id, "status": "started"}
 
 
