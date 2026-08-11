@@ -271,7 +271,6 @@ def _get_llm() -> LLMService:
     return LLMService(cfg.deepseek)
 
 
-@router.post("/{script_id}/boost")
 def _run_boost_background(script_id: str, job_id: str) -> None:
     """爆品改造后台线程 (模块级, 显式传参 — 照抄 director._plan_in_background 模式)."""
     import logging
