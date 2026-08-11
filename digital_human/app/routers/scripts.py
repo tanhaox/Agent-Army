@@ -272,9 +272,66 @@ def _get_llm() -> LLMService:
 
 
 @router.post("/{script_id}/boost")
+def _run_boost_background(script_id: str, job_id: str) -> None:
+    """爆品改造后台线程 (模块级, 显式传参 — 照抄 director._plan_in_background 模式)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("[boost] _run_boost_background STARTED script=%s job=%s", script_id, job_id)
+    with db_session() as db2:
+        try:
+            script2 = db2.query(Script).filter(Script.id == script_id).first()
+            if not script2:
+                _publish(job_id, {"type": "boost_error", "error": "Script not found"})
+                return
+
+            def _emit(evt: str, msg: str) -> None:
+                _publish(job_id, {"type": evt, "script_id": script2.id, "msg": msg})
+
+            from ..services.boost_service import run_boost
+
+            boost = run_boost(
+                db2, script2.id,
+                title=script2.article.title if script2.article else None,
+                emit=_emit,
+            )
+            script2.boosted_text = boost["boosted_text"]
+            script2.boost_titles = boost["boost_titles"] or None
+            db2.commit()
+
+            # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
+            host = db2.query(Host).filter(Host.id == script2.host_id).first() if script2.host_id else None
+            persona = (
+                db2.query(Persona).filter(Persona.host_id == script2.host_id).first()
+                if script2.host_id else None
+            )
+            fixed_opening = (persona.fixed_opening if persona else None) or (host.fixed_opening if host else None)
+            fixed_ending = (persona.fixed_ending if persona else None) or (host.fixed_ending if host else None)
+            for seg in list(script2.segments):
+                db2.delete(seg)
+            db2.flush()
+            boosted_segments = parse_script(boost["boosted_text"], fixed_opening, fixed_ending)
+            for seg_data in boosted_segments:
+                db2.add(Segment(script_id=script2.id, **seg_data))
+            db2.commit()
+            _publish(job_id, {
+                "type": "boost_done",
+                "script_id": script2.id,
+                "boosted": True,
+                "p1_ok": boost["p1_ok"],
+                "p2_ok": boost["p2_ok"],
+                "p3_ok": boost["p3_ok"],
+            })
+        except Exception as exc:
+            logger.exception("[boost] background failed for %s: %s", script_id, exc)
+            try:
+                _publish(job_id, {"type": "boost_error", "error": str(exc)})
+            except Exception:
+                pass
+
+
+@router.post("/{script_id}/boost")
 def boost_script(
     script_id: str,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """爆品改造 (2026-08-11 手动触发): P1开场→P2预埋→P3节奏.
@@ -287,72 +344,15 @@ def boost_script(
         raise HTTPException(status_code=404, detail="Script not found")
 
     job_id = str(uuid.uuid4())
-
-    def _do_boost():
-        # 文件日志: 确认 _do_boost 是否被执行 (background task 问题排查 2026-08-11)
-        try:
-            from pathlib import Path
-            Path("/tmp/boost_debug.log").write_text(
-                f"[{__import__('time').time()}] _do_boost STARTED script={script_id}\n",
-                encoding="utf-8",
-            )
-        except Exception:
-            pass
-        with db_session() as db2:
-            try:
-                script2 = db2.query(Script).filter(Script.id == script_id).first()
-                if not script2:
-                    _publish(job_id, {"type": "boost_error", "error": "Script not found"})
-                    return
-
-                def _emit(evt: str, msg: str) -> None:
-                    _publish(job_id, {"type": evt, "script_id": script2.id, "msg": msg})
-
-                from ..services.boost_service import run_boost
-
-                boost = run_boost(
-                    db2, script2.id,
-                    title=script2.article.title if script2.article else None,
-                    emit=_emit,
-                )
-                script2.boosted_text = boost["boosted_text"]
-                script2.boost_titles = boost["boost_titles"] or None
-                db2.commit()
-
-                # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
-                host = db2.query(Host).filter(Host.id == script2.host_id).first() if script2.host_id else None
-                persona = (
-                    db2.query(Persona).filter(Persona.host_id == script2.host_id).first()
-                    if script2.host_id else None
-                )
-                fixed_opening = (persona.fixed_opening if persona else None) or (host.fixed_opening if host else None)
-                fixed_ending = (persona.fixed_ending if persona else None) or (host.fixed_ending if host else None)
-                for seg in list(script2.segments):
-                    db2.delete(seg)
-                db2.flush()
-                boosted_segments = parse_script(boost["boosted_text"], fixed_opening, fixed_ending)
-                for seg_data in boosted_segments:
-                    db2.add(Segment(script_id=script2.id, **seg_data))
-                db2.commit()
-                _publish(job_id, {
-                    "type": "boost_done",
-                    "script_id": script2.id,
-                    "boosted": True,
-                    "p1_ok": boost["p1_ok"],
-                    "p2_ok": boost["p2_ok"],
-                    "p3_ok": boost["p3_ok"],
-                })
-            except Exception as exc:
-                import logging
-                logging.getLogger(__name__).exception("[boost] _do_boost failed for %s: %s", script_id, exc)
-                try:
-                    _publish(job_id, {"type": "boost_error", "error": str(exc)})
-                except Exception:
-                    pass
-
     import threading
 
-    threading.Thread(target=_do_boost, daemon=True).start()
+    t = threading.Thread(
+        target=_run_boost_background,
+        args=(script_id, job_id),
+        daemon=True,
+        name=f"boost-{job_id[:8]}",
+    )
+    t.start()
     return {"job_id": job_id, "status": "started"}
 
 
