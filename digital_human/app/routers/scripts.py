@@ -334,7 +334,12 @@ def boost_script(
                     "p3_ok": boost["p3_ok"],
                 })
             except Exception as exc:
-                _publish(job_id, {"type": "boost_error", "error": str(exc)})
+                import logging
+                logging.getLogger(__name__).exception("[boost] _do_boost failed for %s: %s", script_id, exc)
+                try:
+                    _publish(job_id, {"type": "boost_error", "error": str(exc)})
+                except Exception:
+                    pass
 
     background_tasks.add_task(_do_boost)
     return {"job_id": job_id, "status": "started"}
