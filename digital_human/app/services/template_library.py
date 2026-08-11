@@ -306,6 +306,45 @@ TEMPLATES: dict[str, dict] = {
             "additionalProperties": True,
         },
     },
+    "hf-title-v2": {
+        "version": "1.0.0",
+        "composition_id": "hf_title_v2",
+        "source_dir": "hf_title_v2",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [3, 10],
+        "required_input": ["title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "kicker": {"type": "string", "maxLength": 32},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 3, "maximum": 10},
+            },
+            "required": ["title"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-chart-v2": {
+        "version": "1.0.0",
+        "composition_id": "hf_chart_v2",
+        "source_dir": "hf_chart_v2",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 12],
+        "required_input": ["chart"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "chart": {"type": "object"},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 12},
+            },
+            "required": ["chart"],
+            "additionalProperties": True,
+        },
+    },
 }
 
 

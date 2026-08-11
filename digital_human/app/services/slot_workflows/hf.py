@@ -106,6 +106,15 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     # 按 video_format 选模板: 横屏→news-magazine-v1-ls, 竖屏/方屏→news-magazine-v1
     template_id = _pick_hf_template(slot.director_job)
 
+    # 财经质感模板 (2026-08-11): hf_title/hf_chart 优先用 v2 财经版 (深炭+暖金, 同 v3 片头体系)
+    if workflow in ("hf_title", "hf_chart"):
+        spec = get_video_format_spec(slot.director_job.video_format)
+        if spec["width"] > spec["height"]:
+            # 横屏 v2 模板当前未做 -ls, 用基础 v2 (1920x1080 已横屏)
+            template_id = "hf-title-v2" if workflow == "hf_title" else "hf-chart-v2"
+        else:
+            template_id = "hf-title-v2" if workflow == "hf_title" else "hf-chart-v2"
+
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
     input_data = _extract_hf_content(slot.text_context or "")
