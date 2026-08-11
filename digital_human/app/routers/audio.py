@@ -327,7 +327,10 @@ def replace_char(
                 base_url_indextts=voice.base_url_indextts if voice else None,
                 master_audio=Path(voice.master_audio_path) if voice and voice.master_audio_path else None,
                 master_text=voice.master_text or "" if voice else "",
-                params=json.loads(voice.config_json).get("params") if voice and voice.config_json else None,
+                params=(
+                    json.loads(voice.config_json) if isinstance(voice.config_json, str)
+                    else (voice.config_json or {}).get("params")
+                ) if voice and voice.config_json else None,
             )
             # 取生成的 wav
             new_wavs = sorted(temp_dir.glob("*.wav"))
