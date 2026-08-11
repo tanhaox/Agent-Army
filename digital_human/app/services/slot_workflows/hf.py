@@ -122,6 +122,11 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     # render_config 里的真实数据(如 title/metrics/chart)优先,覆盖从口播提取的结果
     _merge_render_config(input_data, render_config)
 
+    # 财经标题卡 v2: kicker 用 subtitle (章节副标) — 空则模板隐藏
+    if workflow == "hf_title":
+        kicker = input_data.get("subtitle") or input_data.get("kicker") or ""
+        input_data["kicker"] = kicker
+
     # 品牌字段 (brand_name/stamp_name/brand_tag): 从 script → persona → host 闭环注入,
     # 模板共享, 不再硬编码"老陈聊财经"等账号名 (2026-08-08)
     _merge_brand(input_data, slot, db)

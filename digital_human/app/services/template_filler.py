@@ -24,6 +24,7 @@ _SAFE_KEYS = frozenset(
     {
         "title",
         "subtitle",
+        "kicker",
         "metric_label_1",
         "metric_value_1",
         "metric_label_2",
@@ -75,6 +76,7 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs: dict[str, str] = {}
     subs["title"] = str(input_data.get("title", ""))
     subs["subtitle"] = str(input_data.get("subtitle", ""))
+    subs["kicker"] = str(input_data.get("kicker", ""))
     metrics = input_data.get("metrics") or []
     for i in range(4):
         if i < len(metrics):
