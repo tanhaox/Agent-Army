@@ -153,7 +153,8 @@ def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
     if style not in ("v1", "v2", "v3"):
         style = "v1"
     is_landscape = spec["width"] > spec["height"]
-    template_id = f"hf-opening-v{style}-ls" if is_landscape and style != "v3" else f"hf-opening-v{style}"
+    # style 已是 "v1/v2/v3" (含 v), 直接拼; 横屏 v1/v2 用 -ls 模板, v3 当前仅横屏设计用基础模板
+    template_id = f"hf-opening-{style}-ls" if is_landscape and style != "v3" else f"hf-opening-{style}"
     duration = round(slot.end_sec - slot.start_sec, 3)
 
     # v3 财经片头: hero/hot/sub/scatter 参数
