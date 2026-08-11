@@ -248,6 +248,10 @@ def rewrite_article(
                         _publish(job_id, {"type": "rewrite_error", "error": "Persona not found"})
                         return
                     host = db2.query(Host).filter(Host.id == persona.host_id).first() if persona.host_id else None
+                    # 人物即账号: persona 自带提示词模板, 覆盖请求里的 prompt_template
+                    # (选"老谭聊科技" → 用 laotan-tech, 而不是前端模板下拉的独立值)
+                    if persona.prompt_template:
+                        prompt_template = persona.prompt_template
                 if host is None and request.host_id:
                     host = db2.query(Host).filter(Host.id == request.host_id).first()
                     if not host:
