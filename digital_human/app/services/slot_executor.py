@@ -100,7 +100,7 @@ def execute_slot(db: Session, slot: DirectorSlot) -> DirectorSlot:
             return slot
 
         try:
-            if slot.workflow in ("hf_chart", "hf_title"):
+            if slot.workflow in ("hf_chart", "hf_title", "hf_opening", "hf_quote"):
                 output_path = handler(db, slot, slot.workflow)
             else:
                 output_path = handler(db, slot)
