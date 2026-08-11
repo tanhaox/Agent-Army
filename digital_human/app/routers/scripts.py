@@ -75,6 +75,29 @@ def update_script(script_id: str, payload: ScriptUpdate, db: Session = Depends(g
                 db.delete(seg)
         db.add_all(new_segments)
 
+    # 爆品改造最终稿编辑 (2026-08-11): 更新 boosted_text + 重 parse segments
+    # (TTS 读 segments, 编辑最终稿后需重建)
+    if payload.boosted_text is not None:
+        script.boosted_text = payload.boosted_text
+        from ..services.script_parser import parse_script
+
+        existing = {seg.line_index: seg for seg in script.segments}
+        parsed = parse_script(payload.boosted_text)
+        new_segments = []
+        for p in parsed:
+            old = existing.get(p["line_index"])
+            if old:
+                old.text = p["text"]
+                old.control_chars = p["control_chars"]
+                old.segment_type = p["segment_type"]
+            else:
+                new_segments.append(Segment(script_id=script.id, **p))
+        new_line_indices = {p["line_index"] for p in parsed}
+        for seg in script.segments:
+            if seg.line_index not in new_line_indices:
+                db.delete(seg)
+        db.add_all(new_segments)
+
     if payload.status is not None:
         script.status = payload.status
 

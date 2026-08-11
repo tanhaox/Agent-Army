@@ -179,6 +179,73 @@ DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】�
 
 # ── LLM 调用助手 ─────────────────────────────────────────────────────────────
 
+# laotan 模块标题标注 (应剥离, 不属于口播内容)
+_MODULE_MARKERS = {
+    "花边小新闻", "横向对照", "背景纵深", "极速钩子", "身份接管",
+    "现象反差", "深度拆解", "价值观收割", "回收讨论", "预埋逻辑清单",
+    "最终全稿", "呼吸点审计清单", "争议预埋点", "关注预埋点", "结尾回收点",
+    "认知偏差分析", "改造后开头", "标题候选",
+}
+
+
+def clean_boosted_text(text: str) -> str:
+    """剥离爆品改造稿里的内部标注，得到干净口播文本.
+
+    需剥离:
+      - 模块标题 【花边小新闻】【横向对照】 → 整段删
+      - 结构清单 [预埋逻辑清单] 及跟随内容 → 删
+      - 加粗内容句 **【xxx】** → 去 ** 和 【】, 保留文字
+      - 裸内容句 【xxx】 → 去 【】, 保留文字
+      - 空行整理
+    """
+    import re
+
+    if not text:
+        return text
+
+    lines = text.splitlines()
+    out: list[str] = []
+    in_listing = False  # 是否在 [预埋逻辑清单] 结构内
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+
+        # 结构清单头: [预埋逻辑清单] 开头的结构, 跳过直到空行/最终全稿
+        m = re.match(r"^\[(预埋逻辑清单|最终全稿|呼吸点审计清单|认知偏差分析|标题候选|改造后开头)\]", s)
+        if m:
+            in_listing = True
+            if m.group(1) == "最终全稿":
+                in_listing = False  # 最终全稿后是正文
+            continue
+        if in_listing:
+            # 清单内: 跳过 [xxx] 和 :: 结构行
+            if re.match(r"^[\[\[]", s) or "→" in s or "：" in s[:20]:
+                continue
+            if s.endswith(("】", "]")) and len(s) < 100:
+                continue
+            in_listing = False  # 脱离清单
+
+        # 模块标题整段删
+        mm = re.match(r"^【([^】]{1,10})】", s)
+        if mm and mm.group(1) in _MODULE_MARKERS:
+            continue
+
+        # 加粗内容句 **【xxx】** → 去 ** 和 【】
+        s = re.sub(r"\*\*", "", s)  # 去掉所有 ** (可能在句首/句中/句尾)
+        # 去内容句的【】括号 (保留文字)
+        s = re.sub(r"^【([^】]+)】", r"\1", s)
+        s = re.sub(r"【([^】]+)】", r"\1", s)
+        # 清理孤立单 | (保留 || 停顿符)
+        s = re.sub(r"(?<!\|)\|(?!\|)", "", s)
+        s = s.strip()
+        if s:
+            out.append(s)
+
+    return "\n".join(out)
+
+
 def _deepseek_cfg():
     """获取 DeepSeek 配置. 生产走 lifespan 单例, 独立脚本/后台线程 fallback 到 load_config."""
     try:
@@ -392,8 +459,11 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
         raise ValueError(f"Script {script_id} not found")
     original = script.script_text
     original_title = title or (script.article.title if script.article else None)
-    # 人物名: 从 script.host 取 (老谭/老陈/老李...), 用于提示词内人设引用 (P1/P2 对多人物不通用, 故动态注入)
-    persona_name = (script.host.name if script.host else None) or "老谭"
+    # 人物 IP 名: 优先 stamp_name (老谭), 其次 host.name (老谭聊科技).
+    # 用于提示词人设 + 固定结尾"我是XX" — 必须是 IP 简称 (老谭), 不是账号全名.
+    persona_name = "老谭"
+    if script.host:
+        persona_name = (script.host.stamp_name if getattr(script.host, "stamp_name", None) else script.host.name) or "老谭"
 
     def _emit(evt: str, msg: str) -> None:
         if emit:
@@ -476,6 +546,9 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
                 boosted = _splice_boosted(p1_result, boosted, original)
     if not boosted.strip():
         boosted = original
+
+    # 剥离内部标注 (模块标题/清单/括号), 得到干净口播文本 (2026-08-11)
+    boosted = clean_boosted_text(boosted)
 
     titles = (p1_result or {}).get("titles", []) if p1_result else []
     return {

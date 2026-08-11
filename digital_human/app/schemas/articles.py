@@ -107,6 +107,7 @@ class ScriptOut(BaseModel):
     host_id: str | None
     version: int
     script_text: str
+    boosted_text: str | None = None  # 爆品改造后最终稿 (2026-08-11), 无则为 None
     project_dir: str | None
     video_format: str = "portrait"
     perspective_2: str | None = None
@@ -126,6 +127,7 @@ class ScriptOut(BaseModel):
 
 class ScriptUpdate(BaseModel):
     script_text: str | None = Field(default=None, min_length=1)
+    boosted_text: str | None = Field(default=None, min_length=1)  # 爆品改造最终稿编辑 (2026-08-11)
     status: str | None = None
     project_dir: str | None = None
     video_format: str | None = None

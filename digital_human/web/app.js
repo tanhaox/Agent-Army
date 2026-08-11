@@ -226,7 +226,8 @@ function onPipelineToggle() {
 
 async function fetchScript(scriptId) {
   currentScript = await api('GET', `/scripts/${scriptId}`);
-  document.getElementById('script-text').value = currentScript.script_text;
+  // 优先显示爆品改造最终稿 (boosted_text), 无则显示洗稿原稿
+  document.getElementById('script-text').value = currentScript.boosted_text || currentScript.script_text;
   renderProjectDir(currentScript.project_dir);
   renderSegments(currentScript.segments);
   loadVoices();
@@ -351,7 +352,11 @@ async function saveScript() {
   if (!currentScript) return;
   const text = document.getElementById('script-text').value.trim();
   try {
-    currentScript = await api('PUT', `/scripts/${currentScript.id}`, { script_text: text });
+    // 编辑的是最终稿 (有 boosted_text) → 更新 boosted_text; 否则更新 script_text
+    const payload = currentScript.boosted_text
+      ? { boosted_text: text }
+      : { script_text: text };
+    currentScript = await api('PUT', `/scripts/${currentScript.id}`, payload);
     setStatus('status-rewrite', '脚本已保存并重新分段', false, true);
     renderSegments(currentScript.segments);
     toggle('btn-audio', true);
