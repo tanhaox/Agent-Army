@@ -866,8 +866,8 @@ async function boostScript() {
   setStatus('status-boost', '爆品改造中（P1开场→P2预埋→P3节奏）…');
   try {
     const { job_id } = await api('POST', `/scripts/${currentScript.id}/boost`);
-    // SSE 监听改造进度
-    const source = new EventSource(`/api/jobs/${job_id}/stream`);
+    // SSE 监听改造进度 (用通用 /events 端点, 非 director 的 /stream)
+    const source = new EventSource(`${API}/jobs/${job_id}/events`);
     source.onmessage = (ev) => {
       const data = JSON.parse(ev.data);
       if (data.type === 'boost_done') {
