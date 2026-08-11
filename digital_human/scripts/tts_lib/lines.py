@@ -188,6 +188,9 @@ def _rename_to_final(
 ) -> Path:
     """Rename a split file to {{line_idx:03d}}.wav; pad with silence when missing."""
     final_path = output_dir / f"{line_idx:03d}.wav"
+    # 目标已存在时先删 (重跑生成音频时旧 wav 残留, Windows rename 目标存在抛 WinError 183)
+    if final_path.exists():
+        final_path.unlink(missing_ok=True)
     if offset < len(split_paths):
         split_paths[offset].rename(final_path)
     else:
