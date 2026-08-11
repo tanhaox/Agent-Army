@@ -156,6 +156,7 @@ def build_director_prompt(
     script_title: str | None = None,
     enabled_pipelines: set[str] | None = None,
     visual_intent: list[dict[str, Any]] | None = None,
+    visual_theme: str | None = None,
 ) -> str:
     """Assemble user prompt for the director LLM.
 
@@ -163,6 +164,8 @@ def build_director_prompt(
         enabled_pipelines: 启用的管线集合 (e.g. {"c","p","h"}). None=全部启用.
         visual_intent: 可选, 稿件结构意图 (钩子/预埋/回收/呼吸点/金句 → 建议画面情绪).
             从爆品改造稿的结构标记提取, 让导演按"观众实际听到的新稿 + 结构意图"配画面, 而非盲配.
+        visual_theme: 可选, 人物级视觉主题 (persona.visual_theme, 如科技/地缘场景词).
+            导演按此选全局主体关键词, 替代默认地域词.
     """
     prompt = load_director_prompt()
     # 无出镜模式: C 线禁用 (用户只开 P/H 或全关) 时, 直接在系统提示词层移除 host 规则
@@ -239,5 +242,14 @@ def build_director_prompt(
             desc = item.get("desc", "")
             intent_lines.append(f"- [{start}s] {intent}: {desc}")
         prompt += "\n".join(intent_lines)
+
+    # 人物级视觉主题注入 (2026-08-11): persona.visual_theme 决定全局主体关键词方向
+    # (老谭聊科技 → server room/datacenter; 老谭聊地缘 → world map/geopolitics)
+    if visual_theme:
+        prompt += (
+            "\n\n## 补充输入5：人物视觉主题（全局主体关键词方向）\n"
+            f"当前账号的视觉主题是：**{visual_theme}**\n"
+            "全局主体关键词（规则5.1）必须从该主题取场景词，禁止用地域/城市词替代。"
+        )
 
     return prompt

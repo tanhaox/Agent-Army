@@ -11,7 +11,7 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from app.config import get_config
-from app.models import DirectorJob
+from app.models import DirectorJob, Persona
 from app.services.director_events import PlanCancelled, publish as _evt
 from app.services.director_parser import parse_llm_plan
 from app.services.director_prompt import build_director_prompt
@@ -52,6 +52,16 @@ def _llm_plan_phase(
                 logger.info("[director] visual_intent: %s", summarize_intent(visual_intent))
         except Exception as exc:
             logger.warning("[director] extract_visual_intent failed: %s", exc)
+    # 人物级视觉主题 (2026-08-11): script.host → persona.visual_theme (科技/地缘场景词)
+    visual_theme = None
+    try:
+        if script.host:
+            persona = db.query(Persona).filter(Persona.host_id == script.host.id).first()
+            if persona and getattr(persona, "visual_theme", None):
+                visual_theme = persona.visual_theme
+                logger.info("[director] visual_theme: %s", visual_theme)
+    except Exception as exc:
+        logger.warning("[director] visual_theme resolve failed: %s", exc)
     prompt = build_director_prompt(
         script_text=director_script,
         segment_timings=alignment["segment_timings"],
@@ -60,6 +70,7 @@ def _llm_plan_phase(
         script_title=script_title,
         enabled_pipelines=enabled_pipelines,
         visual_intent=visual_intent,
+        visual_theme=visual_theme,
     )
 
     try:
