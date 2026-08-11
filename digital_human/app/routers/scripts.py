@@ -271,6 +271,75 @@ def _get_llm() -> LLMService:
     return LLMService(cfg.deepseek)
 
 
+@router.post("/{script_id}/boost")
+def boost_script(
+    script_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """爆品改造 (2026-08-11 手动触发): P1开场→P2预埋→P3节奏.
+
+    洗稿后用户看稿/改观点, 再点此端点触发爆品改造.
+    基于当前 script_text (可能被 correct 修正过) 生成 boosted_text.
+    """
+    script = db.query(Script).filter(Script.id == script_id).first()
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    job_id = str(uuid.uuid4())
+
+    def _do_boost():
+        with db_session() as db2:
+            try:
+                script2 = db2.query(Script).filter(Script.id == script_id).first()
+                if not script2:
+                    _publish(job_id, {"type": "boost_error", "error": "Script not found"})
+                    return
+
+                def _emit(evt: str, msg: str) -> None:
+                    _publish(job_id, {"type": evt, "script_id": script2.id, "msg": msg})
+
+                from ..services.boost_service import run_boost
+
+                boost = run_boost(
+                    db2, script2.id,
+                    title=script2.article.title if script2.article else None,
+                    emit=_emit,
+                )
+                script2.boosted_text = boost["boosted_text"]
+                script2.boost_titles = boost["boost_titles"] or None
+                db2.commit()
+
+                # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
+                host = db2.query(Host).filter(Host.id == script2.host_id).first() if script2.host_id else None
+                persona = (
+                    db2.query(Persona).filter(Persona.host_id == script2.host_id).first()
+                    if script2.host_id else None
+                )
+                fixed_opening = (persona.fixed_opening if persona else None) or (host.fixed_opening if host else None)
+                fixed_ending = (persona.fixed_ending if persona else None) or (host.fixed_ending if host else None)
+                for seg in list(script2.segments):
+                    db2.delete(seg)
+                db2.flush()
+                boosted_segments = parse_script(boost["boosted_text"], fixed_opening, fixed_ending)
+                for seg_data in boosted_segments:
+                    db2.add(Segment(script_id=script2.id, **seg_data))
+                db2.commit()
+                _publish(job_id, {
+                    "type": "boost_done",
+                    "script_id": script2.id,
+                    "boosted": True,
+                    "p1_ok": boost["p1_ok"],
+                    "p2_ok": boost["p2_ok"],
+                    "p3_ok": boost["p3_ok"],
+                })
+            except Exception as exc:
+                _publish(job_id, {"type": "boost_error", "error": str(exc)})
+
+    background_tasks.add_task(_do_boost)
+    return {"job_id": job_id, "status": "started"}
+
+
 @router.post("/{script_id}/correct")
 def correct_script(
     script_id: str,
@@ -314,9 +383,9 @@ def correct_script(
                     chunks.append(chunk)
                     _publish(job_id, {"type": "correct_chunk", "chunk": chunk})
 
-                # 修正目标: 有爆品改造稿(boosted_text)则修正最终稿, 否则修正底稿
-                # (2026-08-11: 洗稿后编辑器显示 boosted_text, 修正应改它, 用户才看到改动)
-                target_text = script2.boosted_text or script2.script_text
+                # 修正目标: 洗稿稿(script_text)。(2026-08-11 改回: 半自动流程下,
+                # correct 在 boost 之前, 改的是洗稿稿; 之后 boost 基于改好的稿改造)
+                target_text = script2.script_text
                 corrected_text = llm.correct_article(
                     target_text,
                     perspective=request.perspective,
@@ -328,10 +397,7 @@ def correct_script(
 
                 # 保存修正观点
                 script2.perspective_2 = request.perspective.strip()
-                if script2.boosted_text:
-                    script2.boosted_text = corrected_text
-                else:
-                    script2.script_text = corrected_text
+                script2.script_text = corrected_text
 
                 # 重新分段: 开结尾取人物(persona)显式值, 其次 host 兼容老数据 (2026-08-08)
                 host = db2.query(Host).filter(Host.id == script2.host_id).first()

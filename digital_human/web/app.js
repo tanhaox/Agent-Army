@@ -122,6 +122,10 @@ async function rewriteArticle() {
         // 显示修正观点区域
         const p2section = document.getElementById('perspective-2-section');
         if (p2section) p2section.style.display = 'block';
+        // 半自动流程: 洗稿后显示爆品改造入口 (手动触发)
+        const boostSection = document.getElementById('boost-section');
+        if (boostSection) boostSection.style.display = 'block';
+        toggle('btn-boost', true);
       } else if (data.type === 'rewrite_error') {
         source.close();
         setStatus('status-rewrite', data.error, true);
@@ -226,8 +230,9 @@ function onPipelineToggle() {
 
 async function fetchScript(scriptId) {
   currentScript = await api('GET', `/scripts/${scriptId}`);
-  // 优先显示爆品改造最终稿 (boosted_text), 无则显示洗稿原稿
-  document.getElementById('script-text').value = currentScript.boosted_text || currentScript.script_text;
+  // 半自动流程 (2026-08-11): 默认显示洗稿稿(script_text), 用户看稿/改观点后
+  // 手动触发爆品改造, 改造完成后脚本 reload 再显示 boosted_text
+  document.getElementById('script-text').value = currentScript.script_text;
   renderProjectDir(currentScript.project_dir);
   renderSegments(currentScript.segments);
   loadVoices();
@@ -352,11 +357,9 @@ async function saveScript() {
   if (!currentScript) return;
   const text = document.getElementById('script-text').value.trim();
   try {
-    // 编辑的是最终稿 (有 boosted_text) → 更新 boosted_text; 否则更新 script_text
-    const payload = currentScript.boosted_text
-      ? { boosted_text: text }
-      : { script_text: text };
-    currentScript = await api('PUT', `/scripts/${currentScript.id}`, payload);
+    // 半自动流程 (2026-08-11): 编辑器显示/保存 script_text(洗稿稿),
+    // 爆品改造是独立按钮手动触发, 改造后刷新显示 boosted_text
+    currentScript = await api('PUT', `/scripts/${currentScript.id}`, { script_text: text });
     setStatus('status-rewrite', '脚本已保存并重新分段', false, true);
     renderSegments(currentScript.segments);
     toggle('btn-audio', true);
@@ -854,3 +857,41 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cnt) cnt.textContent = p2.value.length;
   });
 });
+
+// ── 爆品改造 (2026-08-11 手动触发) ───────────────────────────────────────────
+// 洗稿后看稿/改观点, 用户手动触发 P1开场→P2预埋→P3节奏
+async function boostScript() {
+  if (!currentScript) return;
+  toggle('btn-boost', false);
+  setStatus('status-boost', '爆品改造中（P1开场→P2预埋→P3节奏）…');
+  try {
+    const { job_id } = await api('POST', `/scripts/${currentScript.id}/boost`);
+    // SSE 监听改造进度
+    const source = new EventSource(`/api/jobs/${job_id}/stream`);
+    source.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type === 'boost_done') {
+        source.close();
+        if (data.boosted) {
+          setStatus('status-boost', '✅ 爆品改造完成', false, true);
+          fetchScript(currentScript.id);  // 刷新显示改造稿
+        } else {
+          setStatus('status-boost', '改造未执行', true);
+        }
+        toggle('btn-boost', true);
+      } else if (data.type === 'boost_error') {
+        source.close();
+        setStatus('status-boost', '爆品改造失败: ' + (data.error || ''), true);
+        toggle('btn-boost', true);
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      setStatus('status-boost', 'SSE 连接错误', true);
+      toggle('btn-boost', true);
+    };
+  } catch (e) {
+    setStatus('status-boost', e.message, true);
+    toggle('btn-boost', true);
+  }
+}

@@ -342,51 +342,15 @@ def rewrite_article(
                     db2.add(Segment(script_id=script.id, **seg_data))
                 db2.commit()
 
-                # 爆品改造 (2026-08-10): 洗稿后自动跑 P1开场→P2预埋→P3节奏.
-                # 并入洗稿后台任务, 改造完成才 publish; 失败自动回退原稿不卡死.
-                def _emit_boost(evt: str, msg: str) -> None:
-                    _publish(job_id, {"type": evt, "script_id": script.id, "msg": msg})
-
-                try:
-                    from ..services.boost_service import run_boost
-
-                    boost = run_boost(
-                        db2, script.id,
-                        title=article.title,
-                        emit=_emit_boost,
-                    )
-                    script.boosted_text = boost["boosted_text"]
-                    script.boost_titles = boost["boost_titles"] or None
-                    db2.commit()
-
-                    # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
-                    # 删旧段 → 按改造后全文重新 parse → 重建
-                    for seg in list(script.segments):
-                        db2.delete(seg)
-                    db2.flush()
-                    boosted_segments = parse_script(boost["boosted_text"], fixed_opening, fixed_ending)
-                    for seg_data in boosted_segments:
-                        from ..models import Segment
-
-                        db2.add(Segment(script_id=script.id, **seg_data))
-                    db2.commit()
-                    _publish(job_id, {
-                        "type": "boost_done",
-                        "script_id": script.id,
-                        "boosted": True,
-                        "p1_ok": boost["p1_ok"],
-                        "p2_ok": boost["p2_ok"],
-                        "p3_ok": boost["p3_ok"],
-                    })
-                except Exception as boost_exc:
-                    # 改造失败 → 保留原稿 (segments 已按原稿建好), 仅记日志, 不阻断
-                    logger.exception("[boost] boost pipeline failed for script %s: %s", script.id, boost_exc)
-                    _publish(job_id, {
-                        "type": "boost_done",
-                        "script_id": script.id,
-                        "boosted": False,
-                        "error": str(boost_exc)[:200],
-                    })
+                # 爆品改造改为手动触发 (2026-08-11): 洗稿只产出底稿, 用户看稿/改观点后
+                # 再点独立"爆品改造"端点 (POST /scripts/{id}/boost) 触发 P1-P3.
+                # 不再洗稿后自动跑, 给人工控制点.
+                _publish(job_id, {
+                    "type": "boost_done",
+                    "script_id": script.id,
+                    "boosted": False,
+                    "msg": "洗稿完成, 可手动触发爆品改造",
+                })
 
                 article.status = "rewritten"
                 db2.commit()

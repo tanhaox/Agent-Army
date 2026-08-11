@@ -116,6 +116,14 @@
         </div>
         <div class="status" id="status-correct"></div>
       </div>
+      <div id="boost-section" style="display:none;margin-top:1rem;padding:0.75rem;border:1px solid var(--border);border-radius:var(--radius-sm);">
+        <label>🚀 爆品改造（看稿/改观点后手动触发，P1开场→P2预埋→P3节奏）</label>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:0.5rem;">
+          <span style="font-size:0.72rem;color:var(--text-muted);">基于当前洗稿稿改造，改造后刷新显示最终稿</span>
+          <button class="btn btn-warning btn-sm" id="btn-boost" onclick="boostScript()" disabled>爆品改造</button>
+        </div>
+        <div class="status" id="status-boost"></div>
+      </div>
       <div class="btn-group" style="margin-top:1rem;">
         <button class="btn btn-success btn-sm" id="btn-save-script" onclick="saveScript()" disabled>保存编辑</button>
       </div>
