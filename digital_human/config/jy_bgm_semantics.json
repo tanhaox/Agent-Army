@@ -33,6 +33,13 @@
       "user_note": "一种积极的成长，类似于创业到上市历程介绍之类",
       "used_in": ["50-法律"],
       "pipeline_signal": "成长叙事/企业历程/从低谷到成功段（L4 硬实力底牌/L6 商业降维打击的历程讲述适配）"
+    },
+    "Abel_Korzeniowski_-_Dance_For_Me_Wallis": {
+      "file": "Abel Korzeniowski - Dance For Me Wallis.mp3",
+      "semantics": "片头抛问题/钩子的万能底",
+      "user_note": "太常用了，抖音 10 条有 8 条用；一般用在片头抛出问题、钩子，用它再加上一堆综艺音效",
+      "used_in": ["25-法律", "37-银行贷款", "31-知识付费", "48-金融"],
+      "pipeline_signal": "★默认钩子 BGM（R7 开场钩子段标准配乐）; 组合公式 = Wallis 底 + 综艺音效群（悬疑不对劲/沙锤/咚）叠打; 全行业通用（法律/金融/知识付费均实战）"
     }
   }
 }
