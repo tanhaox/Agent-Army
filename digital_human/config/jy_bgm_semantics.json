@@ -19,6 +19,13 @@
       "used_in": ["39-知识付费", "56-律师"],
       "pipeline_signal": "事件升级/严重性陈述段; 与 R4 冲击/R14 否定等重段落适配",
       "note": "文件本体待收割（权限拦截本地复制，可手动拷入 data/jy_bgm/）"
+    },
+    "Veil of Darkness - 黑暗之幕": {
+      "file": "Veil of Darkness",
+      "semantics": "慢慢发展、层层推进",
+      "user_note": "有慢慢发展、层层推进的感觉",
+      "used_in": ["54-家庭教育"],
+      "pipeline_signal": "叙事推进/层层递进段落（七层洗稿的中段展开正好适配）; 悬念铺垫"
     }
   }
 }
