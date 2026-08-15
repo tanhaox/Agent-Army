@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "source": "用户标注 + 模板实战使用统计 (2026-08-16 起)",
+    "usage": "J线远期'推荐BGM轨(预挂不预混)'的选型依据; 音量/循环/淡出参数见设计方案 §4.2",
+    "harvest": "data/jy_bgm/ (从草稿 materials/audio 收割)"
+  },
+  "bgms": {
+    "Judgment Day": {
+      "file": "Judgment Day.m4a",
+      "semantics": "理性分析、背景陈述",
+      "user_note": "一般表示理性分析，背景陈述",
+      "used_in": ["10-女性情感", "17-二手车"],
+      "pipeline_signal": "财经/科技认知类口播的默认底噪 BGM; 纠错/论证段适配"
+    }
+  }
+}

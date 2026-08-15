@@ -59,3 +59,6 @@ data/jy_template_snapshot/
 data/jy_expA_bg.png
 scripts/_tmp_*.py
 data/jy_sounds/
+
+# 剪映 BGM 音频文件本体（语义库在 config/jy_bgm_semantics.json 跟踪）
+data/jy_bgm/
