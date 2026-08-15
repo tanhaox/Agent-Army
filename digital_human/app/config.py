@@ -117,6 +117,9 @@ class DefaultsConfig:
     # J 线剪映草稿目录 (2026-08-15): 导出的草稿直接落剪映草稿文件夹,
     # 打开剪映即可在列表顶部看到 (注册+时间戳由剪映自身扫描完成)。
     jianying_drafts_dir: str
+    # P 线本地碰撞策略 (2026-08-16 用户反馈烂素材反复用): normal=原75%门槛 /
+    # strict=仅强命中(85%)才用本地(默认) / off=全走 Pexels 新下载
+    p_line_local_collision: str
 
 
 @dataclass(frozen=True)
@@ -281,6 +284,7 @@ def load_config(path: Path | str | None = None) -> Config:
                 "JianyingPro", "User Data", "Projects", "com.lveditor.draft",
             ),
         ),
+        p_line_local_collision=defaults_raw.get("p_line_local_collision", "strict"),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),

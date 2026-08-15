@@ -104,6 +104,14 @@ def _try_local_collision(
     命中返回 (本地路径, 描述); 未命中返回 None 走 Pexels 在线降维搜索。
     """
     params = slot.params_json or {}
+    # P 线本地碰撞策略 (2026-08-16 用户反馈: 本地权重太高, 烂素材反复用):
+    #   off    = 完全跳过本地碰撞, 全走 Pexels 新下载
+    #   strict = 仅强命中才用本地 (hit_ratio ≥ 0.85, 远高于默认 75%)
+    #   normal = 原行为 (≥ MIN_HIT_RATIO)
+    cfg = get_config()
+    collision_mode = getattr(cfg.defaults, "p_line_local_collision", "strict")
+    if collision_mode == "off":
+        return None
     # 无门槛维约束 (scenes/shot_types/tone) → 碰撞标准不成立, 直接跳过。
     # 仅 keywords/加分维(motion/content/time) 不足以支撑精准碰撞, 宁可直接下载
     # (宁可错过, 不摆烂)。 (2026-08-12 门槛重构)
@@ -133,10 +141,13 @@ def _try_local_collision(
         return None
     best = results[0]
     hit_ratio = best.get("hit_ratio")
-    if hit_ratio is not None and hit_ratio < MIN_HIT_RATIO:
+    min_ratio = MIN_HIT_RATIO
+    if collision_mode == "strict":
+        min_ratio = max(MIN_HIT_RATIO, 0.85)
+    if hit_ratio is not None and hit_ratio < min_ratio:
         logger.info(
-            "[broll_pexels] slot %d: local collision hit_ratio=%.2f < %.0f%%, fall through to pexels",
-            slot.slot_index, hit_ratio, MIN_HIT_RATIO * 100,
+            "[broll_pexels] slot %d: local collision hit_ratio=%.2f < %.0f%% (%s), fall through to pexels",
+            slot.slot_index, hit_ratio, min_ratio * 100, collision_mode,
         )
         return None
     src = Path(best["file_path"])
