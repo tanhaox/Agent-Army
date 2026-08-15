@@ -190,6 +190,7 @@
             <button class="btn btn-danger hidden" id="btn-force-stop" onclick="forceStopJob()" title="杀掉该任务全部子进程(ffmpeg/ComfyUI/HF)并立即终止, 已完成的 slot 保留, 可稍后重试">⚠ 强制停止</button>
             <button class="btn btn-secondary btn-sm" id="btn-purge-replaced" onclick="purgeReplaced()" title="清理 fallback 链产生的旧 replaced 条目">🧹 清理已替换</button>
             <button class="btn btn-violet" id="btn-compose" onclick="composeJob()">合成视频</button>
+            <button class="btn btn-violet" id="btn-jy-export" onclick="exportJyDraft()" title="J线: 导出剪映草稿到剪映草稿文件夹(音画不合成, 打开剪映即可审片/调BGM/导出)">🎬 导出剪映草稿</button>
             <button class="btn btn-success" id="btn-download" onclick="downloadJob()">下载 MP4</button>
             <button class="btn btn-secondary btn-sm" id="btn-open-folder" onclick="openOutputFolder()" title="在资源管理器中打开产物文件夹">📂 打开文件夹</button>
             <button class="btn btn-secondary" id="btn-toggle-log" onclick="toggleExecLog()">📡 日志</button>

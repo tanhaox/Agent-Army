@@ -1,0 +1,381 @@
+# -*- coding: utf-8 -*-
+"""J 线草稿导出服务 — 导演 job → 剪映明文草稿 (J1, 2026-08-15).
+
+设计: docs/剪映草稿产线-设计方案.md §4
+- slot 时间轴直接映射草稿 video 轨 (微秒制, source/target 双坐标系)
+- TTS 分段 wav 逐段进 audio 轨 (不聚合, 段落级可在剪映再调)
+- manifest 逐段文本进 text 轨 (字幕层)
+- 音画不预合成; 渲染出口交给剪映 (人工审 + 调 BGM + 导出)
+
+写入路径结论 (实验 A 验证): 新版剪映"打开时接受明文、保存时才加密",
+pyJianYingDraft 生成的明文 draft_content.json 可直接被剪映打开。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+import pyJianYingDraft as draft_mod
+from pyJianYingDraft import ClipSettings, TextSegment, Timerange, trange
+
+from app.config import get_config
+from app.models.director import DirectorJob
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["export_job_draft", "wash_subtitle_text", "split_subtitle"]
+
+_US = 1_000_000  # 秒 → 微秒
+
+# ── 字幕样式 (2026-08-15 用户口径: 美观字号 5, 非 pyJYD 默认 8) ──
+_SUBTITLE_SIZE = 5.0
+# 划重点高亮: 大一号 + 黄色 (取自剪映"智能划重点"实测 schema: size 6 / [1, 0.87, 0])
+_HL_COLOR = (1.0, 0.87, 0.0)
+_HL_SIZE_DELTA = 1.0
+
+# ── 字幕洗涤 (TTS 读法 → 阅读文本) ──────────────────────────────
+# 仅做确定性转换 (保守, 避免 LLM 成本/幻觉); 转换记录进日志供人工抽查。
+_CN_DIGIT = {"零": 0, "〇": 0, "一": 1, "二": 2, "三": 3, "四": 4,
+             "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_NUM_WORD = "一二三四五六七八九十百"
+_BREAK_PUNCT = "，。！？；：、—…,"
+
+
+def _cn_to_int(s: str) -> int | None:
+    """中文数字(≤999, 十/百 级) → 整数. 解析失败返回 None."""
+    try:
+        total, num = 0, 0
+        for ch in s:
+            if ch in _CN_DIGIT:
+                num = num * 10 + _CN_DIGIT[ch]
+            elif ch == "十":
+                total += (num or 1) * 10
+                num = 0
+            elif ch == "百":
+                total += (num or 1) * 100
+                num = 0
+            else:
+                return None
+        return total + num
+    except Exception:
+        return None
+
+
+def _num_to_cn_pattern(text: str) -> str:
+    """'X点Y' (两侧均为中文数字) → 'X.Y': 四点六→4.6, 二十八点三→28.3.
+
+    右侧必须也是数字词, 排除'有点吓人'/'一点心意'这类真中文。
+    """
+    import re
+
+    pat = re.compile(r"([一二三四五六七八九十百零〇]+)点([一二三四五六七八九十百零〇]+)")
+
+    def repl(m: "re.Match[str]") -> str:
+        a, b = _cn_to_int(m.group(1)), _cn_to_int(m.group(2))
+        if a is None or b is None:
+            return m.group(0)
+        # 小数部分去掉无效前导零语义: 二十八点三 → 28.3 (b=3)
+        return f"{a}.{b}"
+
+    return pat.sub(repl, text)
+
+
+def wash_subtitle_text(text: str) -> str:
+    """TTS 读法 → 字幕阅读文本 (确定性规则).
+
+    1. 'X点Y' 数字读法 → 'X.Y' (四点六 → 4.6)
+    2. 拉丁字母后紧跟的中文数字 → 阿拉伯 + 空格 (Grok四点六/Grok4.6 → Grok 4.6;
+       Mythos五 → Mythos 5)
+    3. 折叠重复标点 (，，→ ，)、去首尾空白
+    """
+    import re
+
+    t = text.strip()
+    t = _num_to_cn_pattern(t)
+    # latin + 中文数字 → latin + 空格 + 阿拉伯
+    def _latin_num(m):
+        v = _cn_to_int(m.group(2))
+        return f"{m.group(1)} {v}" if v is not None else m.group(0)
+    t = re.sub(r"([A-Za-z])([一二三四五六七八九])", _latin_num, t)
+    # latin + 小数 (X点Y 转换产物如 GLM5.3) → 补空格; 纯整数版本号 (V4) 不动
+    t = re.sub(r"([A-Za-z])(\d+\.\d+)", r"\1 \2", t)
+    # 折叠重复标点
+    t = re.sub(r"([，。！？；、…—])\1+", r"\1", t)
+    return t.strip()
+
+
+def split_subtitle(text: str, limit: int) -> list[str]:
+    """超长字幕断句: 优先在标点处断, 无标点则硬断 (CJK 安全)."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        # 在 limit 窗口内找最后一个断点标点 (留 6 字下限防碎片)
+        window = rest[: limit + 1]
+        cut = -1
+        for i in range(min(len(window) - 1, limit), 5, -1):
+            if window[i] in _BREAK_PUNCT:
+                cut = i + 1
+                break
+        if cut <= 0:
+            cut = limit
+        chunk = rest[:cut].strip(_BREAK_PUNCT + " ")
+        if chunk:
+            chunks.append(chunk)
+        rest = rest[cut:].lstrip(_BREAK_PUNCT + " ")
+    if rest.strip(_BREAK_PUNCT + " "):
+        chunks.append(rest.strip(_BREAK_PUNCT + " "))
+    return chunks
+
+
+def find_highlight_ranges(text: str) -> list[tuple[int, int]]:
+    """自动划重点: 数字与拉丁专有名词的字符区间 (0-based, 左闭右开).
+
+    洗涤后的字幕里, 阿拉伯数字 (4.6 / 28.3%) 与模型名 (GLM / DeepSeek)
+    天然是重点词 — schema 已在剪映"智能划重点"实测确认 (styles 多段 range)。
+    """
+    import re
+
+    pat = re.compile(r"[0-9][0-9.,]*%?|[A-Za-z][A-Za-z0-9.+-]*")
+    return [(m.start(), m.end()) for m in pat.finditer(text)]
+
+
+class _StyledTextSegment(TextSegment):
+    """字幕 + 自动划重点: 高亮区间大一号 + 黄色, 其余基础样式.
+
+    pyJYD 原生只输出单一 style (覆盖全文); 本子类在导出时改写 content 的
+    styles 数组为多段 range — 与剪映划重点的数据形态一致。
+    """
+
+    def __init__(self, text: str, timerange: Timerange, *,
+                 highlight_ranges: list[tuple[int, int]] | None = None, **kwargs):
+        kwargs.setdefault("style", draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0)))
+        super().__init__(text, timerange, **kwargs)
+        self._hl_ranges = sorted(highlight_ranges or [])
+
+    def export_material(self) -> dict:
+        ret = super().export_material()
+        if not self._hl_ranges:
+            return ret
+        content = json.loads(ret["content"])
+        base = dict(content["styles"][0])
+        hl = dict(base)
+        hl["size"] = _SUBTITLE_SIZE + _HL_SIZE_DELTA
+        fill = json.loads(json.dumps(base.get("fill") or {}))
+        if "content" in fill and "solid" in fill["content"]:
+            fill["content"]["solid"]["color"] = list(_HL_COLOR)
+        hl["fill"] = fill
+
+        styles: list[dict] = []
+        pos = 0
+        for s, e in self._hl_ranges:
+            s = max(s, pos)
+            if s >= e:
+                continue
+            if s > pos:
+                styles.append({**base, "range": [pos, s]})
+            styles.append({**hl, "range": [s, e]})
+            pos = e
+        if pos < len(self.text):
+            styles.append({**base, "range": [pos, len(self.text)]})
+        if styles:
+            content["styles"] = styles
+            ret["content"] = json.dumps(content, ensure_ascii=False)
+        return ret
+
+
+def _drafts_dir() -> Path:
+    cfg = get_config()
+    return Path(cfg.defaults.jianying_drafts_dir)
+
+
+def _load_manifest(audio_path: str | Path) -> dict[str, Any] | None:
+    """TTS manifest 与整段 wav 同目录 (projects/*/audio/manifest.json)."""
+    p = Path(audio_path).parent / "manifest.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("[jy_export] manifest 解析失败 %s: %s", p, exc)
+        return None
+
+
+def _trange_sec(start_sec: float, dur_sec: float) -> draft_mod.Timerange:
+    return trange(int(round(start_sec * _US)), int(round(dur_sec * _US)))
+
+
+def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
+    """导演 job → 剪映草稿文件夹. 同步执行 (纯 JSON 写盘, <1s).
+
+    Returns: {draft_name, draft_dir, video_segments, audio_segments,
+              text_segments, canvas, skipped_slots}
+    Raises: ValueError (job 不存在 / 无可导出 slot / 无音频)
+    """
+    job = db.query(DirectorJob).filter(DirectorJob.id == job_id).first()
+    if not job:
+        raise ValueError(f"任务不存在: {job_id}")
+
+    slots = [s for s in job.slots if s.status == "completed" and s.output_path]
+    slots.sort(key=lambda s: s.slot_index)
+    if not slots:
+        raise ValueError("没有已完成的 slot, 先执行任务再导出")
+
+    audio_file = job.audio_file
+    if not audio_file or not Path(audio_file.file_path).exists():
+        raise ValueError("任务没有已合成的音频 (audio_file 缺失)")
+
+    width, height = (1080, 1920) if job.video_format != "landscape" else (1920, 1080)
+    name = f"DH_{datetime.now().strftime('%Y%m%d_%H%M')}_{job.script_id[:8]}"
+    folder = draft_mod.DraftFolder(str(_drafts_dir()))
+    script = folder.create_draft(name, width, height, allow_replace=True)
+
+    # 轨道: 后来居上 — text 最上, video 中, audio 底
+    script.append_tracks([
+        draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
+        draft_mod.TrackSpec(draft_mod.TrackType.video, "main"),
+        draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"),
+    ])
+
+    # ── audio 轨: TTS 分段逐段进轨 (时间轴 = 累计时长), 无 manifest 回退整段 ──
+    manifest = _load_manifest(audio_file.file_path)
+    n_audio = 0
+    if manifest and manifest.get("segments"):
+        cum = 0.0
+        for seg in manifest["segments"]:
+            dur = float(seg.get("duration") or 0)
+            wav = Path(audio_file.file_path).parent / seg["file"]
+            if dur > 0 and wav.exists():
+                script.add_segment(
+                    draft_mod.AudioSegment(str(wav), _trange_sec(cum, dur), volume=1.0),
+                    "voice",
+                )
+                n_audio += 1
+            cum += dur
+        audio_mode = f"manifest 分段 ×{n_audio}"
+    else:
+        dur = float(audio_file.duration or _probe_duration(audio_file.file_path) or 0)
+        if dur <= 0:
+            raise ValueError("音频时长未知且无 manifest, 无法导出")
+        script.add_segment(
+            draft_mod.AudioSegment(str(audio_file.file_path), _trange_sec(0, dur)),
+            "voice",
+        )
+        n_audio = 1
+        audio_mode = "整段 (无 manifest)"
+
+    # ── video 轨: slot 产物按分配时间窗放轨, 静音 (声音归 TTS 轨) ──
+    # 音画同步 (2026-08-15): 素材实际时长普遍略短于分配窗口 (毫秒级漂移累积
+    # 曾致画面比音轨短 ~1.9s)。素材短 → 微降速拉满分配窗口 (≤15%, 不可感知);
+    # 素材长 → 截取前段。素材实例缓存避免同素材多 slot 重复探测。
+    skipped: list[int] = []
+    mat_cache: dict[str, draft_mod.VideoMaterial] = {}
+    for s in slots:
+        if not Path(s.output_path).exists():
+            skipped.append(s.slot_index)
+            continue
+        mat = mat_cache.get(s.output_path)
+        if mat is None:
+            mat = draft_mod.VideoMaterial(s.output_path)
+            mat_cache[s.output_path] = mat
+        alloc_us = int(round(s.duration_sec * _US))
+        mat_us = int(mat.duration)
+        seg: draft_mod.VideoSegment
+        if mat_us < alloc_us and mat_us > 0:
+            speed = mat_us / alloc_us
+            if speed >= 0.85:
+                seg = draft_mod.VideoSegment(
+                    mat,
+                    trange(int(round(s.start_sec * _US)), alloc_us),
+                    source_timerange=Timerange(0, mat_us),
+                    speed=speed,
+                    volume=0,
+                )
+            else:  # 缺口过大不硬拉, 钳制并记录
+                logger.warning("[jy_export] slot %d 素材缺口过大 (%.2fs/%.2fs), 保持钳制",
+                               s.slot_index, mat_us / _US, alloc_us / _US)
+                seg = draft_mod.VideoSegment(
+                    mat, trange(int(round(s.start_sec * _US)), mat_us), volume=0)
+        else:
+            seg = draft_mod.VideoSegment(
+                mat,
+                trange(int(round(s.start_sec * _US)), min(alloc_us, mat_us)),
+                volume=0,
+            )
+        script.add_segment(seg, "main")
+
+    # ── text 轨: 逐段字幕 (洗 TTS 读法 + 超长断句, 时长按字数比例分配) ──
+    # 横屏每屏上限 30 字 (2026-08-15 用户实测超出横屏); 竖屏画面窄取 18。
+    max_chars = 18 if height > width else 30
+    n_text = 0
+    if manifest and manifest.get("segments"):
+        cum = 0.0
+        for seg in manifest["segments"]:
+            dur = float(seg.get("duration") or 0)
+            text = (seg.get("text") or "").strip()
+            if dur > 0 and text:
+                washed = wash_subtitle_text(text)
+                if washed != text:
+                    logger.info("[jy_export] 字幕洗涤: %r → %r", text, washed)
+                total_len = max(len(washed), 1)
+                chunks = split_subtitle(washed, max_chars)
+                seg_start_us = int(round(cum * _US))
+                seg_dur_us = int(round(dur * _US))
+                # 整数微秒按字数分配, 末条吃余数 — 保证 Σchunk ≤ seg_dur, 不与下段重叠
+                alloc = [seg_dur_us * len(c) // total_len for c in chunks]
+                alloc[-1] = seg_dur_us - sum(alloc[:-1])
+                for chunk, chunk_us in zip(chunks, alloc):
+                    try:
+                        script.add_segment(
+                            _StyledTextSegment(
+                                chunk,
+                                trange(seg_start_us, max(chunk_us, 1000)),
+                                highlight_ranges=find_highlight_ranges(chunk),
+                                clip_settings=ClipSettings(transform_y=-0.75),
+                            ),
+                            "caption",
+                        )
+                        n_text += 1
+                    except Exception as exc:  # 单条字幕失败不阻塞
+                        logger.warning("[jy_export] 字幕段失败: %s | %s", chunk[:20], exc)
+                    seg_start_us += chunk_us
+                cum += dur
+            else:
+                cum += dur
+
+    script.save()
+    draft_dir = _drafts_dir() / name
+    result = {
+        "draft_name": name,
+        "draft_dir": str(draft_dir),
+        "canvas": f"{width}x{height}",
+        "video_segments": len(slots) - len(skipped),
+        "audio_segments": n_audio,
+        "audio_mode": audio_mode,
+        "text_segments": n_text,
+        "skipped_slots": skipped,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    logger.info("[jy_export] %s -> %s (%s)", job_id, name, result)
+    return result
+
+
+def _probe_duration(path: str | Path) -> float | None:
+    """pymediainfo 兜底探测时长 (AudioFile.duration 为空时)."""
+    try:
+        import pymediainfo
+
+        mi = pymediainfo.MediaInfo.parse(str(path))
+        track = mi.tracks[0] if mi.tracks else None
+        if track and track.duration:
+            return float(track.duration) / 1000.0
+    except Exception as exc:
+        logger.warning("[jy_export] 时长探测失败 %s: %s", path, exc)
+    return None

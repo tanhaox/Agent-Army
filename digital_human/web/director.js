@@ -359,6 +359,8 @@ function renderJobDetail(job) {
   }
 
   document.getElementById('btn-compose').disabled = !hasCompleted && !isDone;
+  const btnJy = document.getElementById('btn-jy-export');
+  if (btnJy) btnJy.disabled = !hasCompleted && !isDone;
   document.getElementById('btn-download').disabled = !isDone;
 
   if (!isDone) {
@@ -824,6 +826,22 @@ function downloadJob() {
   a.click();
   document.body.removeChild(a);
   toast('开始下载...', 'success');
+}
+
+// ── J 线: 导出剪映草稿 (同步端点, 纯写盘 <1s; 音画不合成, 渲染交给剪映) ──
+async function exportJyDraft() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('btn-jy-export');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 生成草稿...'; }
+  try {
+    const res = await api(`/jobs/${currentJobId}/export-jy-draft`, { method: 'POST' });
+    const skipped = res.skipped_slots?.length ? ` (⚠ ${res.skipped_slots.length} 个 slot 产物缺失已跳过)` : '';
+    toast(`🎬 草稿「${res.draft_name}」已放入剪映 (${res.video_segments}画面 + ${res.audio_segments}音频段 + ${res.text_segments}字幕)${skipped} — 打开剪映在列表顶部查看`, 'success');
+  } catch (e) {
+    toast('导出剪映草稿失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🎬 导出剪映草稿'; }
+  }
 }
 
 // ── Open Output Folder ──

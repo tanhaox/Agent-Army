@@ -22,6 +22,7 @@ from app.routers.director_routes.cleanup import cleanup_router
 from app.routers.director_routes.compose import compose_router
 from app.routers.director_routes.download import download_router
 from app.routers.director_routes.execution import execution_router
+from app.routers.director_routes.jy_export import jy_router
 from app.routers.director_routes.list import list_router
 from app.routers.director_routes.planning import planning_router
 from app.routers.director_routes.retry import retry_router
@@ -36,6 +37,7 @@ for _sub in (
     retry_router,
     compose_router,
     download_router,
+    jy_router,
     stream_router,
     cleanup_router,
 ):

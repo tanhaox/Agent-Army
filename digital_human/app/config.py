@@ -114,6 +114,9 @@ class DefaultsConfig:
     # 本地素材成片复用上限 (2026-08-15): 同一素材最多进入 N 个成片 (used_count
     # 硬过滤, 防一批"万能素材"每个视频都被选中)。0 = 关闭限制。
     local_asset_max_uses: int
+    # J 线剪映草稿目录 (2026-08-15): 导出的草稿直接落剪映草稿文件夹,
+    # 打开剪映即可在列表顶部看到 (注册+时间戳由剪映自身扫描完成)。
+    jianying_drafts_dir: str
 
 
 @dataclass(frozen=True)
@@ -270,6 +273,14 @@ def load_config(path: Path | str | None = None) -> Config:
         slot_retention_days=int(defaults_raw.get("slot_retention_days", 7)),
         director_catalog_mode=defaults_raw.get("director_catalog_mode", "vocabulary"),
         local_asset_max_uses=int(defaults_raw.get("local_asset_max_uses", 2)),
+        # J 线: 默认落在当前用户的新版剪映草稿目录
+        jianying_drafts_dir=defaults_raw.get(
+            "jianying_drafts_dir",
+            os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "JianyingPro", "User Data", "Projects", "com.lveditor.draft",
+            ),
+        ),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),
