@@ -836,7 +836,8 @@ async function exportJyDraft() {
   try {
     const res = await api(`/jobs/${currentJobId}/export-jy-draft`, { method: 'POST' });
     const skipped = res.skipped_slots?.length ? ` (⚠ ${res.skipped_slots.length} 个 slot 产物缺失已跳过)` : '';
-    toast(`🎬 草稿「${res.draft_name}」已放入剪映 (${res.video_segments}画面 + ${res.audio_segments}音频段 + ${res.text_segments}字幕)${skipped} — 打开剪映在列表顶部查看`, 'success');
+    const r9 = res.emphasis_words != null ? ` + R9编排: ${res.emphasis_words}强调字/${res.sfx_attached}音效` : '';
+    toast(`🎬 草稿「${res.draft_name}」已放入剪映 (${res.video_segments}画面 + ${res.audio_segments}音频段 + ${res.text_segments}字幕)${r9}${skipped} — 打开剪映在列表顶部查看`, 'success');
   } catch (e) {
     toast('导出剪映草稿失败: ' + e.message, 'error');
   } finally {

@@ -237,12 +237,16 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     folder = draft_mod.DraftFolder(str(_drafts_dir()))
     script = folder.create_draft(name, width, height, allow_replace=True)
 
-    # 轨道: 后来居上 — text 最上, video 中, audio 底; sfx 为音效轨(J2 配方挂载点)
+    # 轨道: 后来居上 — 强调/字幕最上, video 中, audio 底
+    # emph1~3 = R9 强调大字轨(多轨轮换, 45期协同三件套); sfx = 同帧音效轨
     script.append_tracks([
         draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
         draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
         draft_mod.TrackSpec(draft_mod.TrackType.video, "main"),
         draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"),
+        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph1"),
+        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph2"),
+        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph3"),
     ])
 
     # ── audio 轨: TTS 分段逐段进轨 (时间轴 = 累计时长), 无 manifest 回退整段 ──
@@ -316,6 +320,9 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     # 横屏每屏上限 30 字 (2026-08-15 用户实测超出横屏); 竖屏画面窄取 18。
     max_chars = 18 if height > width else 30
     n_text = 0
+    r9_stats = {"emphasis": 0, "sfx": 0, "sfx_missing": 0, "sfx_density_skip": 0}
+    _emph_slot = [0]
+    _last_sfx = [None]
     if manifest and manifest.get("segments"):
         cum = 0.0
         for seg in manifest["segments"]:
@@ -346,6 +353,9 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                         n_text += 1
                     except Exception as exc:  # 单条字幕失败不阻塞
                         logger.warning("[jy_export] 字幕段失败: %s | %s", chunk[:20], exc)
+                    # R9 自动编排: 强调大字 + 同帧音效 (密度闸门在内部)
+                    _auto_choreograph(script, chunk, seg_start_us, max(chunk_us, 1000),
+                                      _emph_slot, r9_stats, _last_sfx)
                     seg_start_us += chunk_us
                 cum += dur
             else:
@@ -361,11 +371,113 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
         "audio_segments": n_audio,
         "audio_mode": audio_mode,
         "text_segments": n_text,
+        "emphasis_words": r9_stats["emphasis"],
+        "sfx_attached": r9_stats["sfx"],
+        "sfx_missing": r9_stats["sfx_missing"],
+        "sfx_density_skip": r9_stats["sfx_density_skip"],
         "skipped_slots": skipped,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
     }
     logger.info("[jy_export] %s -> %s (%s)", job_id, name, result)
     return result
+
+
+# ── R9 自动编排 (2026-08-16): 划重点词→强调轨大字→同帧语义音效 + 密度规则 ──
+# 知识来源: 45期协同三件套 / 音效语义库(用户标注) / 密度规则(用户口径) — 全确定性, 无 LLM
+_EMPH_COLOR = (1.0, 0.96, 0.54)   # 引文金: 数字/金额大字 (45期 T6 实测值)
+_EMPH_COLOR_RED = (0.72, 0.11, 0.11)  # 冲击红: 疑问/设问 (16/28/45期四证)
+_EMPH_SIZE = _SUBTITLE_SIZE + 3.0
+_EMPH_ANIMS = ("放大", "跃进", "向右滑动")  # 轮换 (45期/高频动画池)
+
+# 金额语境词 (数字+语境 → money 族; 纯数字/专名 → punchline 叮族; 问句 → 悬疑族)
+_MONEY_CTX = ("万", "亿", "元", "美元", "收入", "赚", "营收", "薪", "融资", "估值",
+              "利润", "市值", "ARR", "GMV", "价格", "涨价", "降价", "关税", "成本")
+_SFX_FAMILY = {
+    "money": ("金币到账叮咚声", "叮", "综艺叮~~"),
+    "punchline": ("叮", "综艺叮~~"),
+    "suspense": ("诡异的滴水声", "紧张转场音效"),
+}
+
+
+def _classify_chunk(chunk: str) -> tuple[str, str | None]:
+    """字幕块语义分类: (类别, 强调词). 类别 ∈ money/punchline/suspense/plain."""
+    import re
+
+    ranges = find_highlight_ranges(chunk)
+    kw = None
+    for s, e in ranges:
+        cand = chunk[s:e]
+        if len(cand) >= 2 or cand.isdigit():
+            kw = cand
+            break
+    if re.search(r"[?？]$", chunk.strip()):
+        return "suspense", None  # 问句: 音效即可, 不升大字 (R12 的 ? 由字幕承载)
+    if kw and re.search(r"\d", kw) and any(w in chunk for w in _MONEY_CTX):
+        return "money", kw
+    if kw:
+        return "punchline", kw
+    return "plain", None
+
+
+def _auto_choreograph(script: Any, chunk: str, start_us: int, dur_us: int,
+                      emph_slot: list[int], stats: dict[str, int],
+                      last_sound_us: list[int]) -> None:
+    """R9: 每个字幕块 → 强调大字(金/红) + 同帧语义音效 + 密度闸门."""
+    cat, kw = _classify_chunk(chunk)
+
+    # ① 强调大字轨 (多轨轮换防重叠) — 关键词占比过大时跳过(字幕已承载)
+    if kw and len(kw) <= max(int(len(chunk) * 0.7), 4):
+        color = _EMPH_COLOR if cat in ("money", "punchline") else _EMPH_COLOR_RED
+        track = f"emph{(emph_slot[0] % 3) + 1}"
+        emph_slot[0] += 1
+        anim = _EMPH_ANIMS[emph_slot[0] % len(_EMPH_ANIMS)]
+        try:
+            seg = _EmphTextSegment(
+                kw, trange(start_us, max(dur_us, 500_000)),
+                color=color,
+                clip_settings=ClipSettings(transform_y=0.42, scale_x=1.25, scale_y=1.25),
+            )
+            seg.add_animation(getattr(draft_mod.TextIntro, anim))
+            seg.add_animation(draft_mod.TextOutro.渐隐)
+            script.add_segment(seg, track)
+            stats["emphasis"] += 1
+        except Exception as exc:
+            logger.warning("[jy_export] 强调字失败 %r: %s", kw, exc)
+
+    # ② 同帧音效 + 密度闸门: 前 30s 全类别高密度; 之后只留 money/punchline/suspense
+    #    且间隔 ≥4s (用户口径: 长篇前 30 秒之外降档, 再多烦人)
+    if cat == "plain":
+        return
+    if last_sound_us[0] is not None and start_us - last_sound_us[0] < 4_000_000 and start_us > 30_000_000:
+        stats["sfx_density_skip"] += 1
+        return
+    fam = _SFX_FAMILY[cat]
+    name = fam[stats.get(f"_rot_{cat}", 0) % len(fam)]  # 族内轮换防腻 (A/B 变奏规则)
+    stats[f"_rot_{cat}"] = stats.get(f"_rot_{cat}", 0) + 1
+    if attach_sound(script, "sfx", name, start_us / _US, volume=0.9):
+        stats["sfx"] += 1
+        last_sound_us[0] = start_us
+    else:
+        stats["sfx_missing"] += 1
+
+
+class _EmphTextSegment(_StyledTextSegment):
+    """强调大字: 固定大号金色样式 (R9)."""
+
+    def __init__(self, text: str, timerange: Timerange, *, color=_EMPH_COLOR, **kw):
+        super().__init__(text, timerange, highlight_ranges=[], **kw)
+        self._emph_color = color
+
+    def export_material(self) -> dict:
+        ret = super().export_material()
+        content = json.loads(ret["content"])
+        for st in content.get("styles", []):
+            st["size"] = _EMPH_SIZE
+            fill = st.get("fill") or {}
+            if "content" in fill and "solid" in fill["content"]:
+                fill["content"]["solid"]["color"] = list(self._emph_color)
+        ret["content"] = json.dumps(content, ensure_ascii=False)
+        return ret
 
 
 def _probe_duration(path: str | Path) -> float | None:
