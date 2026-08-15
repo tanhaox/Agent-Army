@@ -103,7 +103,7 @@ def find_main(draft_dir: str) -> str | None:
 
 
 results = {}
-for d in sorted(glob.glob(os.path.join(SNAP, "学习*"))):
+for d in sorted(glob.glob(os.path.join(SNAP, "*"))):
     main = find_main(d)
     if not main:
         continue
