@@ -30,6 +30,7 @@ class TTSService:
         segments: list[Segment],
         voice: Voice | None,
         progress_callback: Callable[[int, int, str | None, AudioFile], None] | None = None,
+        emotion_annotations: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Generate per-line WAV files and manifest.
 
@@ -97,6 +98,29 @@ class TTSService:
             audio_files.append(audio_file)
             progress_callback(completed, total, text, audio_file)
 
+        # P5 情绪标注 (2026-08-13): 段落情绪 → 已解析段参数 (text/vector/alpha),
+        # 传给 synthesize_lines 按段合成. 缺省 → 现状 (整篇 calm).
+        emotion_segments: list[dict[str, Any]] | None = None
+        # 2026-08-14: P5 产的 emotion_annotations 是 "[情绪/强度] 文本\n..." 字符串 (DB 存储),
+        # TTS 需 list[dict]. 入口解析兼容 (str → list[dict]); 解析失败回退 None (整篇 calm).
+        if emotion_annotations and isinstance(emotion_annotations, str):
+            from .boost_service import _parse_emotion_annotations
+            emotion_annotations = _parse_emotion_annotations(emotion_annotations)
+        if emotion_annotations:
+            from .emotion_dict import resolve_emotion
+
+            emotion_segments = []
+            for ann in emotion_annotations:
+                try:
+                    r = resolve_emotion(ann.get("emotion", "calm"), ann.get("strength", "中"))
+                except KeyError:
+                    continue
+                emotion_segments.append({
+                    "text": ann.get("text", ""),
+                    "vector": r["vector"],
+                    "alpha": r["alpha"],
+                })
+
         manifest = tts_client.synthesize_lines(
             text=text,
             output_dir=output_dir,
@@ -112,6 +136,7 @@ class TTSService:
             progress_callback=_manifest_callback,
             params=voice_params,
             batch_max_chars=150,
+            emotion_segments=emotion_segments,
         )
 
         # ── Concatenate all segment WAVs into one paragraph-level file ──
@@ -119,9 +144,12 @@ class TTSService:
         existing_wavs = [af.file_path for af in audio_files if Path(af.file_path).exists()]
         if existing_wavs and len(existing_wavs) >= 1:
             try:
-                from scripts.tts_client import _concat_wavs_with_ffmpeg
-                _concat_wavs_with_ffmpeg(
-                    [Path(p) for p in existing_wavs], combined_path
+                # 2026-08-13: 段落拼接用 fade(无静音gap), 消除段尾音+段首起音紧贴的破音("噗"),
+                # 且停顿自然(用户验证 gap=0 最舒服).
+                from scripts.tts_lib.audio import _concat_wavs_with_fade
+                _concat_wavs_with_fade(
+                    [Path(p) for p in existing_wavs], combined_path,
+                    gap_sec=0.0, fade_out_sec=0.15, fade_in_sec=0.06,
                 )
                 try:
                     info = sf.info(str(combined_path))

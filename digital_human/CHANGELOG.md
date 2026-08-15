@@ -4,6 +4,77 @@
 
 ---
 
+## 2026-08-15｜素材聚合（七层喂饱）+ 流水线三页拆分 + 智谱补搜
+
+### 背景
+7 层洗稿模板要求 1370~1550 字、每层特定信息类型（背景/参数/实测/商业），单篇原文喂不饱 L3~L6（占字数 75%），叠加真实性红线 → 模型只能少写，字数塌（实测无包 827 字）。用户拍板：洗稿前加「素材聚合层」——多源抓取 → 素材包 → 七层覆盖审计 → 缺口定向补搜（智谱 web-search）→ 整包注入洗稿（实测带包 **1843 字**，钩子/身份段/锚点全对）。同时把流水线页拆成三页：**新闻线索（文章+素材包）→ 文字加工中心（洗稿/修正/爆改）→ 音频加工中心（段落/TTS）**。
+
+### 后端（6 新 8 改）
+- **模型**：`MaterialPackage`（audit_json 七层审计产物）+ `MaterialItem`（url/manual/search 三来源，layer_tags 回填）；`Script.material_package_id` 迁移加列
+- **`app/services/zhipu_search.py`**：智谱独立 `/api/paas/v4/web_search` 端点（非旧 tools 形态）；query 70 字符硬截断；**`ZhipuUnavailableError`（key 未配置/免费额度 2026-09-12 到期/耗尽）→ material_error 明确中文提示**（用户特别要求：到期不能静默）；调用前比对 `zhipu.free_quota_expires` 日期拦截；双形态解析防御
+- **`app/services/material_service.py`**：七层清单常量 + 审计 prompt（LLM JSON 输出 per-layer {covered, evidence, gaps, search_queries}）+ `collect_gap_queries` + `build_material_context_block`（按层分桶 L3~L6，cap 12K，尾部审计缺口提示「未覆盖的层不要编造」）+ `batch_fetch_urls`（ThreadPool×4）+ `search_and_ingest`（link 去重）
+- **`app/routers/materials.py`**：8 端点（packages CRUD / items / audit / supplement-search），daemon-thread job 照抄 boost 模式；SSE：`material_fetch_progress / search_start / audit_start / done / error`（jobs.py close-list 已加）
+- **rewrite 集成**：`RewriteRequest.material_package_id` → `_do_rewrite` 注入素材块（原文→伪评论→素材包），无包路径 byte-identical；`ScriptOut` 加 `material_package_id` + `prompt_template`
+- **顺手修死代码**：articles.py deconstruct 层 `_publish` 引用未定义 `script.id` → NameError 被吞 → 解构层从未生效（已修）
+- **配置**：`config/app.yaml` zhipu 节（search_pro/high/count 5/到期日）；`.env` 加 `ZHIPU_API_KEY=`（**待用户填 key**）
+
+### 前端（4 新 9 改 1 删）
+- **index.html → 新闻线索**：文章输入（DOM 不动）+ 素材包面板（多 URL 批量抓取/手动贴素材/单条 URL 快加/素材清单/七层红绿审计 chip+证据+缺口/补搜词 checkbox 默认勾选/补搜缺口/去洗稿带参跳转）+ **常显「智谱免费搜索额度至 2026-09-12」提示**
+- **writing.html + writing.js**（新）：洗稿全流程 + 素材包徽章（N 条素材 · 覆盖 x/7）+ **字数实时统计**（目标 1400~1550，不足时提示回新闻线索补素材）+ URL 参数 init（article_id/package_id）+ 去生成音频
+- **audio.html + audio.js**（新）：段落全家（勾选/拖拽/即时落库）+ 音色 + C/P/H 管线开关 + 一键成片 + 导演台 handoff（不变）+ **persona 音色锁按 script.prompt_template**（拆页后模板/音色分居两页的解法）+ 本页脚本下拉（回调 `selectScriptForAudio` 与 writing 不同名）
+- **app.js v6→v7**：只留共享层（api/setStatus/toggle/toast/管线开关/fetchScript 硬化/loadScriptList/loadVoices 守卫）；单页函数全部迁出；`?v=7`
+- **nav**：全站 9 页「流水线」→「新闻线索/文字加工/音频加工」三链接；删 index.js（回收站）
+
+### 验证
+- 后端 E2E（python requests 实跑）：建文章→建包→手动素材→审计 SSE（material_done 5/7）→补搜（key 未配置 → material_error 明确提示 ✓）→ 7 层模板+包洗稿 **1843 字**（目标 1370~1550）+ material_package_id 回填 + 锚点/情绪标签正确；坏包 ID → rewrite_error；无包回归正常
+- 前端 Playwright：三页 0 console 错误；news 面板/7 chip/到期提示 ✓；writing 徽章「2 条素材 · 覆盖 5/7 层」✓；audio 57 段落+5 音色+音色锁 ✓；跳转链 news→writing（带参）→audio（带 script_id）✓
+- 待办：用户填 `ZHIPU_API_KEY` 后实测真补搜；到期日 2026-09-12 后客户端会拦截提示
+
+---
+
+## 2026-08-14｜boost 7层适配 + 情绪链路全线打通 + 提速 (enable_thinking)
+
+### 背景
+洗稿提示词升级到 7 层（`config/laotan-tech_7layer.txt`），但爆款改造 boost 的 P1-P5 仍为旧六模块设计，跑 7 层稿全面破坏结构；P5 情绪标注链路多处断裂（IndexTTS 永走 calm 兜底）；reasoning 模型失控思考导致 boost 单步 110s+。
+
+### 改动（5 块）
+
+**① boost 提速**（`app/services/boost_service.py` `_call`）
+- payload 加 `"enable_thinking": False`（siliconflow DeepSeek-V4-Flash）。实测复杂 prompt 单步 **110s+ → 15s**——根因是 reasoning 思考链失控，`max_tokens` 限不住思考（只限 content）。
+- 降 max_tokens：P2 8k→3k / P3 10k→3.5k / P4 10k→4k / P1 4k→1.5k / P5 12k→4k。
+
+**② boost 7层适配**（核心）
+- 实证 A/B 对照（`_test_7layer_ab.py`）：7层+P5 vs 锚点版+P1-P5。结论 **P1-P4 对7层纯破坏**（覆盖钩子/身份段/结尾、清单残留、重复句），A 完胜。
+- **砍 P1/P2/P3**（电击开场/预埋/呼吸点——7层已有等价结构，它们只覆盖）。
+- **P4_PROMPT 重写**：1:1 锁定 7层结构/身份段(`我是XX专盯`)/结尾(三件套)/钩子，只精修表达；去硬编码旧身份段(`大家好我是老谭…不确定的时代`)/旧结尾(`听懂逻辑…下期见`)/行内`[calm]`注入。
+- `run_boost` 编排简化：`原稿 → P4 → clean → P5`。
+- `clean_boosted_text` 加剥 markdown 标题（`## 第X层` / `# 精修清单`，防残留进 boosted_text）。
+
+**③ P5 情绪链路修复**（3 处连环 bug，修通后 IndexTTS 才拿到情绪）
+- `app/routers/scripts.py:321`：`boost.get("emotion_annotations")` → `"p5_annotated"`（run_boost 返回 key 不匹配，**P5 情绪标注恒 None，IndexTTS 永走 calm**）。
+- `app/services/emotion_dict.py`：加 `confident`（P4/P5 白名单含 confident 但字典无 → KeyError 被吞）。
+- `app/services/tts_service.py` generate 入口：emotion_annotations **str → list[dict] 解析**（DB 存 P5 产的 `"[情绪/强度]文本"` 字符串，TTS 当 list[dict] 遍历 → `'str' object has no attribute 'get'`）。
+
+**④ TTS `||` 停顿修复**（`scripts/tts_lib/text.py` `_tts_text`）
+- indextts 也 `||`→逗号。原 `keep_breaks` 保留 `||`（误以为 IndexTTS 认），实测 **IndexTTS 不认 `||` 读成"炸"**（本地源码 `_split_test.py:15` PUNCT = `，。！？；…`，无 `||`）。
+
+**⑤ 前端**（`web/app.js` `fetchScript`）
+- 加 `toggle('btn-audio', true)`——调取已有脚本后生成音频按钮恒灰（漏 toggle）。
+
+### 新文件
+- `config/laotan-tech_7layer_anchored.txt`（锚点恢复版7层，对照实验B用，阶段5未采用——保留备查）
+- `_test_7layer_ab.py`（A/B 对照实验脚本）
+
+### 涉及模块
+`app/services/boost_service.py` / `app/routers/scripts.py` / `app/services/emotion_dict.py` / `app/services/tts_service.py` / `scripts/tts_lib/text.py` / `web/app.js`
+
+### 验证
+- boost 实测 **21s 跑完**（原 5-15 分钟），身份段 7层格式（`我是老谭‖专盯…`，无旧版），emotion_annotations 8400字落库（P5 标 8 段：surprised×5 + serious×2 + happy×1）。
+- IndexTTS 日志铁证情绪传导：`Use the specified emotion vector` ×1204 + `scaled emotion vectors to 0.4x [..0.2799(surprised),0.04]`（P5 `[surprised/3]` → resolve_emotion vector[0.7]+alpha0.4 → IndexTTS 消费）。
+- 完整链路：`P5标注 → emotion_annotations落库 → tts_service解析 → resolve_emotion转vector → synthesize_lines按段分组 → _synth_single(emo_vector) → IndexTTS`，第一次全程跑通。
+
+---
+
 ## 2026-08-08｜Slot「重试」按钮无反应修复 — 僵尸 running 放行 + retry 事件流打通
 
 ### 背景

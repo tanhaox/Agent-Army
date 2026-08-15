@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from ..services.tts_service import TTSService
 from .jobs import _publish
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
+
+logger = logging.getLogger(__name__)
 
 
 def get_tts() -> TTSService:
@@ -75,6 +78,36 @@ def generate_audio(
         voice_id_short = voice.id[:8] if voice else "default"
         output_dir = Path(r"E:\数字人计划\outputs\audio") / today / voice_label / f"{voice_id_short}_{int(time.time())}"
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 过期音频清理 (方案A, 2026-08-12) ──
+    # 文稿改动 (update_script) 已把旧 completed AudioJob 标记为 stale。
+    # 点"生成音频"时: 清空 stale job 的磁盘 wav + 删除 DB 记录 → 强制重新合成,
+    # 杜绝 `_skip_batch` 断点续传误复用旧音频。
+    stale_jobs = (
+        db.query(AudioJob)
+        .filter(AudioJob.script_id == script_id, AudioJob.status == "stale")
+        .all()
+    )
+    for stale_job in stale_jobs:
+        stale_dir = Path(stale_job.output_dir)
+        if stale_dir.exists():
+            # 只清 wav/manifest, 不误删目录 (目录可能被其他 job 共享)
+            for pat in ("*.wav", "manifest.json", "full_paragraph.wav"):
+                try:
+                    for p in stale_dir.glob(pat):
+                        p.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "generate_audio: 清理 stale job %s 的 %s 失败", stale_job.id[:8], pat,
+                        exc_info=True,
+                    )
+        db.delete(stale_job)  # 连带 audio_files (cascade delete-orphan)
+    if stale_jobs:
+        logger.info(
+            "generate_audio: script %s 清理 %d 个 stale AudioJob, 强制重新生成音频",
+            script_id[:8], len(stale_jobs),
+        )
+        db.commit()
 
     job = AudioJob(
         script_id=script_id,
@@ -156,7 +189,10 @@ def _do_tts(job_id: str):
 
             manager = get_gpu_service_manager()
             with manager.session(backend, status_callback=_svc_notify):
-                result = tts.generate(job, segments, voice, progress_callback=_progress)
+                result = tts.generate(
+                    job, segments, voice, progress_callback=_progress,
+                    emotion_annotations=getattr(script, "emotion_annotations", None),
+                )
             # audio_files rows are already committed one-by-one inside _progress,
             # so no add_all here — a second add would double-insert (P0-1 related).
 

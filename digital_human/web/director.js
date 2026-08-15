@@ -96,7 +96,9 @@ async function loadScripts() {
       opt.value = s.id;
       const title = (s.title || '').trim();
       const preview = (s.script_text || '').slice(0, 40).replace(/\n/g, ' ');
-      opt.textContent = title ? `${title}（${preview}）` : preview || s.id.slice(0, 8);
+      // 标题重复时靠保存时间区分 (2026-08-12)
+      const time = s.updated_at ? ' ' + formatTime(s.updated_at) : '';
+      opt.textContent = title ? `${title}（${preview}）${time}` : (preview || s.id.slice(0, 8)) + time;
       sel.appendChild(opt);
     });
   } catch (e) { console.error(e); }
@@ -414,6 +416,42 @@ function showSlotDetail(idx) {
   }
   document.getElementById('slot-output').textContent = slot.output_path || '—';
   document.getElementById('slot-error').textContent = slot.error_message || '无';
+  // ── Slot 视频预览 (2026-08-12): 有产物则内嵌播放, 无则隐藏 ──
+  // cache-busting 时间戳: 替换素材后 output_path 变了但 preview URL 不变,
+  // 浏览器会缓存旧视频; 加 ?t= 强制 video 重新拉取。设置后调 load() 重载。
+  const slotPrev = document.getElementById('slot-video-preview');
+  const slotPlayer = document.getElementById('slot-video-player');
+  if (slotPrev && slotPlayer) {
+    if (slot.output_path && slot.id && (slot.status === 'completed' || slot.status === 'failed' || slot.status === 'skipped')) {
+      const bust = Date.now();
+      slotPlayer.src = `${API}/jobs/${currentJobId}/slots/${slot.id}/preview?t=${bust}`;
+      slotPrev.classList.remove('hidden');
+      slotPlayer.load();
+    } else {
+      slotPlayer.removeAttribute('src');
+      slotPrev.classList.add('hidden');
+    }
+  }
+  // ── 素材替换行 (2026-08-12): 仅 broll 类 slot 显示 ──
+  const isBroll = slot.workflow === 'broll_pexels' || slot.workflow === 'broll_local';
+  const replaceRow = document.getElementById('slot-replace-row');
+  const replaceBtn = document.getElementById('btn-replace-material');
+  const disableBtn = document.getElementById('btn-disable-material');
+  if (replaceRow && replaceBtn) {
+    const canOperate = !_jobExecuting && (slot.status !== 'running' || (!_jobExecuting && slot.status === 'running'));
+    const slotReady = slot.status === 'completed' || slot.status === 'failed' || slot.status === 'skipped';
+    replaceRow.classList.toggle('hidden', !isBroll || _jobExecuting);
+    replaceBtn.disabled = !isBroll || _jobExecuting || !slotReady;
+    replaceBtn.dataset.slotId = slot.id;
+    if (disableBtn) {
+      disableBtn.disabled = !isBroll || _jobExecuting || !slotReady;
+      disableBtn.dataset.slotId = slot.id;
+    }
+    document.getElementById('slot-replace-no').value = slot.params_json?.replaced_asset_no || '';
+  }
+  // ── 强制 P 线下载勾选 (2026-08-12): 仅 broll 类 + 可重新生成时显示 ──
+  const forceRow = document.getElementById('slot-retry-force-row');
+  if (forceRow) forceRow.classList.toggle('hidden', !isBroll || _jobExecuting);
   // #5 重新生成按钮：completed/failed/skipped 可重新生成，running/queued 不可点
   // 僵尸 running: job 不在执行中 (服务重启/中断遗留) 时 running 也可重试恢复
   const zombieRunning = slot.status === 'running' && !_jobExecuting;
@@ -843,6 +881,9 @@ async function retrySlot(btn) {
     // 始终显式发送 (与 executeJob 一致): 全开 "c,p,h" / 部分 "c,p" / 全关 ""
     const enabled = getEnabledPipelines();
     let url = `/jobs/${currentJobId}/slots/${slotId}/retry?pipelines=${enabled.join(',')}`;
+    // force_pexels (2026-08-12): 勾选后强制 P 线下载新素材, 跳过本地库
+    const forcePexels = document.getElementById('retry-force-pexels')?.checked;
+    if (forcePexels) url += '&force_pexels=true';
     const resp = await api(url, { method: 'POST' });
     const statusText = resp.status === 'completed' ? '已完成' : resp.status;
     const toastLevel = resp.status === 'completed' ? 'success' : (resp.status === 'failed' ? 'error' : 'info');
@@ -853,6 +894,57 @@ async function retrySlot(btn) {
     _setRetryButtonsDisabled(false);
   } finally {
     _retrying = false;
+  }
+}
+
+// ── 替换 slot 素材 (2026-08-12): 填素材库编号 → 后端重渲染 → 即时刷新预览 ──
+async function replaceSlotMaterial(btn) {
+  if (_retrying) return;
+  const slotId = btn?.dataset?.slotId;
+  const noInput = document.getElementById('slot-replace-no');
+  const assetNo = noInput?.value?.trim();
+  if (!currentJobId || !slotId) { toast('无法替换：请先选择任务和 Slot', 'error'); return; }
+  if (!assetNo) { toast('请先填写素材库编号 (如 V20260803-0177)', 'error'); noInput?.focus(); return; }
+
+  _retrying = true;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 替换中…'; }
+  try {
+    const resp = await api(`/jobs/${currentJobId}/slots/${slotId}/replace-material`, {
+      method: 'POST',
+      body: JSON.stringify({ asset_no: assetNo }),
+    });
+    const ok = resp.status === 'completed';
+    toast(`Slot #${_selectedSlotIdx != null ? _selectedSlotIdx + 1 : '?'} 替换素材: ${resp.status}${resp.message ? ' · ' + resp.message : ''}`, ok ? 'success' : 'error');
+    // 刷新任务数据 → timeline + slot 详情 + 预览立即更新为新素材 (即时生效)
+    await selectJob(currentJobId);
+    if (_selectedSlotIdx != null) showSlotDetail(_selectedSlotIdx);
+  } catch (e) {
+    toast('替换素材失败: ' + e.message, 'error');
+  } finally {
+    _retrying = false;
+    if (btn) { btn.disabled = false; btn.textContent = '替换'; }
+  }
+}
+
+// ── 禁用 slot 素材 (2026-08-12): 当前素材不好 → 打禁用标, 后续不再选用 ──
+async function disableSlotMaterial(btn) {
+  if (_retrying) return;
+  const slotId = btn?.dataset?.slotId;
+  if (!currentJobId || !slotId) { toast('无法禁用：请先选择任务和 Slot', 'error'); return; }
+  if (!confirm('确认禁用当前 Slot 的素材？禁用后该素材在本地/在线都不会再被选用。')) return;
+
+  _retrying = true;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 禁用中…'; }
+  try {
+    const resp = await api(`/jobs/${currentJobId}/slots/${slotId}/disable-material`, { method: 'POST' });
+    toast(`已禁用素材 ${resp.asset_no || ''} (Slot #${_selectedSlotIdx != null ? _selectedSlotIdx + 1 : '?'})`, 'success');
+    await selectJob(currentJobId);
+    if (_selectedSlotIdx != null) showSlotDetail(_selectedSlotIdx);
+  } catch (e) {
+    toast('禁用素材失败: ' + e.message, 'error');
+  } finally {
+    _retrying = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🚫 禁用素材'; }
   }
 }
 

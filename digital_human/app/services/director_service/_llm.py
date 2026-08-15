@@ -47,7 +47,11 @@ def _llm_plan_phase(
         try:
             from app.services.director_prompt._intent import extract_visual_intent, summarize_intent
 
-            visual_intent = extract_visual_intent(script.boosted_text, alignment["segment_timings"])
+            visual_intent = extract_visual_intent(
+                script.boosted_text,
+                alignment["segment_timings"],
+                getattr(script, "emotion_annotations", None),
+            )
             if visual_intent:
                 logger.info("[director] visual_intent: %s", summarize_intent(visual_intent))
         except Exception as exc:

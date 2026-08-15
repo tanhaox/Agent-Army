@@ -102,6 +102,14 @@ def _apply_manual_migrations(engine) -> None:
                 except Exception as exc:
                     logger.warning("[db] personas host bind skipped: %s", exc)
 
+        # articles 评论层 (2026-08-15): 解构产物持久化, 新闻线索页展示
+        if "articles" in tables:
+            cols = {c["name"] for c in inspector.get_columns("articles")}
+            if "deconstruct_json" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN deconstruct_json TEXT"))
+                logger.info("[db] migrated: articles.deconstruct_json column added")
+
         # scripts 爆品改造列 (2026-08-10): 洗稿后自动跑 P1开场→P2预埋→P3节奏.
         # boosted_text = 改造后全文 (保留 script_text 洗稿原稿); boost_titles = 标题候选 JSON.
         if "scripts" in tables:
@@ -109,6 +117,10 @@ def _apply_manual_migrations(engine) -> None:
             script_cols = {
                 "boosted_text": "TEXT",
                 "boost_titles": "TEXT",
+                "deconstruct_json": "TEXT",
+                "emotion_annotations": "TEXT",
+                # 素材聚合 (2026-08-15): 洗稿挂的素材包回溯
+                "material_package_id": "VARCHAR(36)",
             }
             for col_name, col_type in script_cols.items():
                 if col_name not in cols:

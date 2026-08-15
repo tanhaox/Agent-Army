@@ -62,8 +62,14 @@ def synthesize_lines(
     progress_callback: ProgressCallback | None = None,
     params: dict[str, Any] | None = None,
     batch_max_chars: int = 300,
+    emotion_segments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Generate one WAV per non-empty line; writes manifest.json into output_dir."""
+    """Generate one WAV per non-empty line; writes manifest.json into output_dir.
+
+    emotion_segments (2026-08-13, P5): 已解析的段落情绪参数
+        [{"text": 段文本, "vector": 8维列表, "alpha": float}]. 提供时按段分组合成,
+        段内行合并为 batch, 每批带该段情绪参数; 缺省走现状 (整篇 master_style=calm).
+    """
     _ensure_dir(output_dir)
     syn = _SynthesisParams(
         backend=backend, voice_id=voice_id, reference_audio=reference_audio,
@@ -73,16 +79,86 @@ def synthesize_lines(
         master_style=master_style, params=params,
     )
     lines = _split_line_indices(text)
-    batch_groups = _merge_lines_for_batch(lines, max_chars=batch_max_chars)
+    if emotion_segments:
+        batch_groups, batch_emos = _group_by_emotion_segments(
+            lines, emotion_segments, max_chars=batch_max_chars,
+        )
+    else:
+        batch_groups = _merge_lines_for_batch(lines, max_chars=batch_max_chars)
+        batch_emos = None
     segment_paths, manifest_segments, _ = _process_batches(
-        output_dir, lines, batch_groups, syn, progress_callback,
+        output_dir, lines, batch_groups, syn, progress_callback, batch_emos=batch_emos,
     )
     return _finalize_manifest(output_dir, voice_id, backend, manifest_segments)
+
+
+def _group_by_emotion_segments(
+    lines: list[str],
+    emotion_segments: list[dict[str, Any]],
+    max_chars: int = 300,
+) -> tuple[list[list[int]], list[dict[str, Any] | None]]:
+    """按 P5 段落分组行: 段内行合并为 batch (≤max_chars), 每批带该段情绪参数.
+
+    行→段顺序匹配 (_map_lines_to_segments); 匹配失败的行落 calm (vector=None).
+    Returns: (batch_groups, batch_emos) — batch_emos 与 batch_groups 等长.
+    """
+    line_emos = _map_lines_to_segments(lines, emotion_segments)
+    batch_groups: list[list[int]] = []
+    batch_emos: list[dict[str, Any] | None] = []
+    current: list[int] = []
+    current_emo: dict[str, Any] | None = None
+    current_chars = 0
+    for idx, emo in enumerate(line_emos):
+        line = lines[idx]
+        if current and (emo != current_emo or current_chars + len(line) > max_chars):
+            batch_groups.append(current)
+            batch_emos.append(current_emo)
+            current = []
+            current_chars = 0
+        current.append(idx)
+        current_chars += len(line)
+        current_emo = emo
+    if current:
+        batch_groups.append(current)
+        batch_emos.append(current_emo)
+    return batch_groups, batch_emos
+
+
+def _map_lines_to_segments(
+    lines: list[str],
+    emotion_segments: list[dict[str, Any]],
+) -> list[dict[str, Any] | None]:
+    """顺序匹配行到 P5 段: 累积行文本, 段文本被消费后前进到下一段.
+
+    容错: 段文本匹配不上 → 该行落 calm (None). 纯字符串逻辑, 不感知段边界.
+    """
+    import re
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", "", s or "")
+
+    anno = [dict(s, _n=_norm(s.get("text"))) for s in emotion_segments]
+    result: list[dict[str, Any] | None] = []
+    acc = ""
+    ai = 0
+    for line in lines:
+        acc += _norm(line)
+        cur = ai  # 匹配前段号: 本行归属匹配发生时所在段
+        # 当前段文本已被累积文本消费 → 前进到下一段 (重置累积, 简单容错)
+        while ai < len(anno) and anno[ai]["_n"] and anno[ai]["_n"] in acc:
+            ai += 1
+            acc = ""
+        if cur < len(anno):
+            result.append({"vector": anno[cur].get("vector"), "alpha": anno[cur].get("alpha", 1.0)})
+        else:
+            result.append(None)
+    return result
 
 
 def _process_batches(
     output_dir: Path, lines: list[str], batch_groups: list[list[int]],
     syn: _SynthesisParams, progress_callback: ProgressCallback | None,
+    batch_emos: list[dict[str, Any] | None] | None = None,
 ) -> tuple[list[Path], list[dict[str, Any]], int]:
     """Loop batches, skipping on-disk ones; returns paths, manifest, completed."""
     segment_paths: list[Path] = []
@@ -100,9 +176,12 @@ def _process_batches(
                     completed, progress_callback, segment_paths, manifest_segments,
                 )
                 continue
+            emo = batch_emos[batch_idx] if batch_emos else None
             completed = _run_batch(
                 output_dir, batch_idx, batch_lines, lines, line_indices, completed,
                 syn, progress_callback, segment_paths, manifest_segments,
+                emo_vector=emo["vector"] if emo else None,
+                emo_alpha=emo["alpha"] if emo else 1.0,
             )
     except Exception:
         _cleanup_failed_batches(output_dir, completed, len(lines), len(segment_paths))
@@ -146,13 +225,15 @@ def _run_batch(
     lines: list[str], line_indices: list[int], completed: int,
     syn: _SynthesisParams, progress_callback: ProgressCallback | None,
     segment_paths: list[Path], manifest_segments: list[dict[str, Any]],
+    emo_vector: list[float] | None = None, emo_alpha: float = 1.0,
 ) -> int:
     """Synthesize one batch, split to per-line WAVs, record manifest entries."""
     # "||" gets replaced with "，" in _tts_text(), creating a natural pause.
     batch_text = "||".join(batch_lines)
-    inference_text = _tts_text(batch_text)
+    inference_text = _tts_text(batch_text, keep_breaks=(syn.backend == "indextts"))
     batch_path = output_dir / f"_batch_{batch_idx:03d}.wav"
-    _synth_single(syn, inference_text, batch_path)
+    _synth_single(syn, inference_text, batch_path,
+                  emo_vector=emo_vector, emo_alpha=emo_alpha)
 
     split_paths = _split_wav_by_silence(
         wav_path=batch_path, expected_count=len(batch_lines),
@@ -171,7 +252,8 @@ def _run_batch(
     return completed
 
 
-def _synth_single(syn: _SynthesisParams, text: str, output_path: Path) -> Path:
+def _synth_single(syn: _SynthesisParams, text: str, output_path: Path,
+                  emo_vector: list[float] | None = None, emo_alpha: float = 1.0) -> Path:
     """Forward one synthesis call with the bundled parameters."""
     return _synthesize_single(
         text=text, output_path=output_path, backend=syn.backend,
@@ -180,6 +262,7 @@ def _synth_single(syn: _SynthesisParams, text: str, output_path: Path) -> Path:
         base_url_f5=syn.base_url_f5, base_url_indextts=syn.base_url_indextts,
         master_audio=syn.master_audio, master_text=syn.master_text,
         master_style=syn.master_style, params=syn.params,
+        emo_vector=emo_vector, emo_alpha=emo_alpha,
     )
 
 

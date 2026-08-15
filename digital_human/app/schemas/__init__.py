@@ -67,6 +67,14 @@ from .director import (
     RetrySlotResponse,
 )
 from .format import VIDEO_FORMAT_SPECS, get_video_format_spec
+from .materials import (
+    MaterialItemAddRequest,
+    MaterialItemOut,
+    MaterialPackageBriefOut,
+    MaterialPackageOut,
+    PackageCreateRequest,
+    SupplementSearchRequest,
+)
 from .roles import (
     ApplyRoleResponse,
     ComfyUISubmitRequest,
@@ -130,4 +138,7 @@ __all__ = [
     "PersonaCreate", "PersonaUpdate", "PersonaOut",
     # format
     "VIDEO_FORMAT_SPECS", "get_video_format_spec",
+    # materials (素材聚合)
+    "MaterialItemOut", "MaterialPackageBriefOut", "MaterialPackageOut",
+    "PackageCreateRequest", "MaterialItemAddRequest", "SupplementSearchRequest",
 ]

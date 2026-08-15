@@ -34,7 +34,7 @@ def _sanitize_for_fish(text: str) -> str:
     return text.strip()
 
 
-def _tts_text(text: str) -> str:
+def _tts_text(text: str, keep_breaks: bool = False) -> str:
     """Prepare text for TTS inference.
 
     ``||`` is a pipeline pause hint, not a real phoneme. Fish Speech will not
@@ -42,11 +42,15 @@ def _tts_text(text: str) -> str:
     ``[calm]`` and paralinguistic markers such as ``(break)`` are stripped
     because many Fish Speech builds crash when CJK immediately follows an
     ASCII tag. The original line (with tags) is preserved in the manifest.
+
+    keep_breaks (2026-08-13→2026-08-14 修正): 原以为 IndexTTS 识别 ``||`` 为停顿而保留,
+    实测 IndexTTS 不认 ``||``、会把它读成"炸"音. 现统一 ``||`` → 逗号 (标点停顿),
+    indextts 亦然. keep_breaks 参数保留兼容但不再短路返回.
     """
     # Strip emotion / paralinguistic control tags.
     text = re.sub(r"\[[^\]]+\]", "", text)
     text = re.sub(r"\([^)]+\)", "", text)
-    # Pipeline pause hint -> comma.
+    # Pipeline pause hint -> comma (所有后端含 indextts; IndexTTS 不认 || 会读"炸").
     text = text.replace("||", "，")
     text = re.sub(r"[,，]{2,}", "，", text)
     text = re.sub(r"[,，]\s*([。！？])", r"\1", text)

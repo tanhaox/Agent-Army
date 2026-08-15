@@ -20,6 +20,9 @@ def render_visual(
     output_path: Path,
     hyperframes_bin: str = "npx",
     timeout_sec: int = 300,
+    workers: int = 1,
+    fast_capture: bool = True,
+    gpu_encode: bool = True,
 ) -> dict:
     """Run ``npx hyperframes render . -o <name>`` inside ``project_dir``.
 
@@ -28,6 +31,10 @@ def render_visual(
         output_path: Target mp4 path (absolute or relative to ``project_dir``).
         hyperframes_bin: Executable to invoke (default ``npx``).
         timeout_sec: Hard timeout in seconds (default 300).
+        workers: 并行渲染 worker 数. >1 时多个 Chrome 并行截帧.
+            注意: 集显 WebGL 资源受限, 多 worker 需独立 GPU 才不卡死.
+        fast_capture: 用 --experimental-fast-capture (drawElementImage API, ~2x 截帧).
+        gpu_encode: 用 --gpu (NVENC 编码, 需 NVIDIA GPU).
 
     Returns:
         Dict ``{returncode, stdout, stderr, log_path, cmd}``.
@@ -51,10 +58,9 @@ def render_visual(
         bin_name = "npx.cmd"
     # `-y` 关键: 首次运行时 npx 弹出 "Ok to proceed? (y)" 交互确认会卡死到
     # 300s 超时 (2026-08-07 hf_title 全超时根因)。`-y` 跳过下载确认。
-    # `--low-memory-mode` 关键 (2026-08-08): 本机 (Intel UHD 集显 + 32-core
-    # auto-workers) 默认 calibration 阶段 Chrome 初始化会卡死到 300s 超时
-    # (Runtime.evaluate timed out, 150 帧 0 完成)。该参数固定 1 worker + 截图
-    # 捕获 + 跳过 auto-worker calibration, 实测 39s 稳定出片。
+    # 单 worker (2026-08-08): 本机 (Intel UHD 集显 + 32-core auto-workers)
+    # 默认 calibration 阶段 Chrome 初始化会卡死到 300s 超时。单 worker 稳定。
+    # 提速 (2026-08-11): workers>1 + fast_capture + gpu_encode 需独立 GPU.
     cmd = [
         bin_name,
         "-y",
@@ -63,8 +69,13 @@ def render_visual(
         ".",
         "-o",
         output_basename,
-        "--low-memory-mode",
     ]
+    if workers > 1:
+        cmd.append(f"--workers={workers}")
+    if fast_capture:
+        cmd.append("--experimental-fast-capture")
+    if gpu_encode:
+        cmd.append("--gpu")
 
     # NOTE: 不能用 subprocess.run(timeout=...) — Windows 上 timeout 只杀主进程，
     # npx 的子进程 (node/chromium) 继承 stdout/stderr 管道导致 communicate() 死锁。

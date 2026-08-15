@@ -16,7 +16,7 @@ from .config import Config, load_config, set_config
 from .database import init_db
 from .models import AudioJob, Host, Voice, DirectorJob
 from .routers import (
-    articles, audio, comfyui, digital_human_video, hosts, jobs, library, personas, roles,
+    articles, audio, comfyui, digital_human_video, hosts, jobs, library, materials, personas, roles,
     scripts, tagging, tts_services, visual_render, voices,
 )
 from .routers.director_routes import router as director_router
@@ -357,6 +357,7 @@ def create_app() -> FastAPI:
     app.include_router(tagging.router)
     app.include_router(personas.router)
     app.include_router(tts_services.router)
+    app.include_router(materials.router)
 
     # Convenience redirect: /api/templates → /api/visual-render/templates
     @app.get("/api/templates")

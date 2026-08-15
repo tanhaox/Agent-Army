@@ -38,20 +38,53 @@ def _parse_seconds(text: str) -> int | None:
     return None
 
 
-def extract_visual_intent(boosted_text: str, segment_timings: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def extract_visual_intent(
+    boosted_text: str,
+    segment_timings: list[dict[str, Any]] | None = None,
+    emotion_annotations: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """从爆品改造稿提取每段的视觉意图.
 
     Args:
         boosted_text: 爆品改造后的全文 (含结构标记)
         segment_timings: 可选, 每段起止时间 (用于给意图定位到时间轴)
+        emotion_annotations: 可选 (2026-08-13, P5): 段落情绪标注 [{text, emotion, strength}].
+            优先用它 (情绪在统一字典查视觉意图); 缺省回退从 boosted_text 解析 [情绪] 标记.
 
     Returns:
         [{start_sec, intent, desc, keyword}, ...] — 传给 build_director_prompt 的 visual_intent
     """
+    # ── 优先 P5 情绪标注 (统一字典) ──
+    if emotion_annotations:
+        from ..emotion_dict import EMOTIONS, EMOTION_CN
+
+        intents: list[dict[str, Any]] = []
+        for ann in emotion_annotations:
+            emo = ann.get("emotion", "calm")
+            strength = ann.get("strength", "中")
+            emo_def = EMOTIONS.get(emo)
+            if not emo_def:
+                continue
+            cn = EMOTION_CN.get(emo, emo)
+            intents.append({
+                "start_sec": len(intents),
+                "intent": f"情绪:{emo_def.visual_intent}",
+                "desc": f"此段口播情绪是{cn}(强度:{strength}), 画面应配合: {emo_def.visual_intent}",
+                "keyword": emo,
+                "text": (ann.get("text") or "")[:50],
+            })
+        if segment_timings and intents:
+            try:
+                _apply_timings(intents, segment_timings)
+            except Exception:
+                pass
+        return intents
+
+    # ── 回退: 从 boosted_text 解析 (旧稿/无标注) ──
     if not boosted_text:
         return []
 
-    intents: list[dict[str, Any]] = []
+    intents = []
     lines = boosted_text.splitlines()
 
     for i, line in enumerate(lines):

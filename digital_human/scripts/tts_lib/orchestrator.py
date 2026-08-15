@@ -113,6 +113,8 @@ def _synthesize_single(
     master_text: str = "",
     master_style: str = "calm",
     params: dict[str, Any] | None = None,
+    emo_vector: list[float] | None = None,
+    emo_alpha: float = 1.0,
 ) -> Path:
     """按 backend 策略表依次尝试引擎 (含 "fish"/"f5"/"indextts"), 全败抛 RuntimeError."""
     p = _extract_engine_params(params)
@@ -121,6 +123,9 @@ def _synthesize_single(
     p["indextts_master_text"] = master_text or reference_text or ""
     p["master_style"] = master_style
     p.update(_extract_indextts_params(params))
+    # 情绪参数 (2026-08-13, P5): 仅 indextts 消费; fish/f5 无情绪维度, 传了也忽略.
+    p["emo_vector"] = emo_vector
+    p["emo_alpha"] = emo_alpha
 
     callbacks = _make_engine_callbacks(
         p, text, output_path, reference_audio, reference_text,
@@ -196,7 +201,8 @@ def _make_engine_callbacks(
             do_sample=p["do_sample"], top_p=p["indextts_top_p"],
             top_k=p["indextts_top_k"], temperature=p["indextts_temperature"],
             max_text_tokens_per_segment=p["indextts_max_text_tokens"],
-            seed=p["seed"]),
+            seed=p["seed"],
+            emo_vector=p.get("emo_vector"), emo_alpha=p.get("emo_alpha", 1.0)),
     }
 
 

@@ -63,6 +63,36 @@ def _collect_used_pexels_ids(db: Session, slot: DirectorSlot) -> set[int]:
     return used
 
 
+def _collect_used_local_files(db: Session, slot: DirectorSlot) -> list[str]:
+    """Collect local material file_paths already used in this job.
+
+    同 job 本地素材硬排除 (2026-08-12): 遍历同 job 已完成且已写回
+    ``params_json["local_file"]`` 的 broll 类 slot, 收集已用过的本地素材
+    file_path。**只按 status=completed 过滤, 不按 slot_index 收紧** ——
+    mixed_host_broll 在 phase 0、broll_pexels 在 phase 1, 跨 phase 时
+    slot_index 递增会漏掉已用素材; 按 completed + 排除自身 (当前 slot 是
+    running 自然排除) 即可全覆盖。
+    """
+    job_id = slot.director_job_id
+    rows = (
+        db.query(DirectorSlot)
+        .filter(
+            DirectorSlot.director_job_id == job_id,
+            DirectorSlot.status == "completed",
+            DirectorSlot.workflow.in_(("broll_pexels", "broll_local", "mixed_host_broll")),
+        )
+        .all()
+    )
+    used: list[str] = []
+    for r in rows:
+        if r.id == slot.id:
+            continue  # 排除自身 (防御: 当前 slot 不应是 completed)
+        lf = (r.params_json or {}).get("local_file")
+        if lf:
+            used.append(lf)
+    return used
+
+
 def _try_local_collision(
     db: Session, slot: DirectorSlot, min_dur: int, orientation: str,
 ) -> tuple[Path, str] | None:
@@ -74,11 +104,12 @@ def _try_local_collision(
     命中返回 (本地路径, 描述); 未命中返回 None 走 Pexels 在线降维搜索。
     """
     params = slot.params_json or {}
-    # 无任何维度约束 (旧 params 只有 keywords) → 碰撞标准不成立, 直接跳过
+    # 无门槛维约束 (scenes/shot_types/tone) → 碰撞标准不成立, 直接跳过。
+    # 仅 keywords/加分维(motion/content/time) 不足以支撑精准碰撞, 宁可直接下载
+    # (宁可错过, 不摆烂)。 (2026-08-12 门槛重构)
     if not any([
         params.get("scenes"), params.get("shot_types"),
-        params.get("tone"), params.get("motion_level"),
-        params.get("content_density"), params.get("time_of_day"),
+        params.get("tone"),
     ]):
         return None
     results = match_local_assets(
@@ -95,6 +126,8 @@ def _try_local_collision(
         people=params.get("people"),
         min_duration_sec=float(min_dur),
         limit=1,
+        relax_location=True,  # 地域 C 折中 (2026-08-12): strict 为空才放宽 foreign
+        exclude=_collect_used_local_files(db, slot),  # 同 job 硬排除 (2026-08-12)
     )
     if not results:
         return None
@@ -110,12 +143,35 @@ def _try_local_collision(
     if not src.exists():
         return None
     register_asset_usage(db, best["file_path"])
+    # 同 job 素材硬排除: 写回本次命中的本地素材, 供后续 slot 收集排除 (2026-08-12)
+    # params_json 是普通 JSON 列, 必须新建 dict 整体赋值才能触发落库。
+    if best["file_path"]:
+        new_params = dict(slot.params_json or {})
+        new_params["local_file"] = best["file_path"]
+        slot.params_json = new_params
+    # 地域 C 折中: 命中放宽的 foreign 素材不静默 —— 显式标记 (2026-08-12)
+    relaxed = bool(best.get("location_relaxed"))
     logger.info(
-        "[broll_pexels] slot %d: LOCAL COLLISION HIT %s (score=%d, hit_ratio=%s, dur=%.1fs >= %ds)",
+        "[broll_pexels] slot %d: LOCAL COLLISION HIT %s (score=%d, hit_ratio=%s, dur=%.1fs >= %ds%s)",
         slot.slot_index, src.name, best.get("score", 0), hit_ratio,
         best.get("duration_sec") or 0.0, min_dur,
+        ", LOCATION_RELAXED(foreign)" if relaxed else "",
     )
-    return src, f"local_collision:{src.name}"
+    desc = f"local_collision:{src.name}"
+    if relaxed:
+        desc += "?relaxed=location"
+    return src, desc
+
+
+# 方位词剥离 (2026-08-15): 旧版导演提示词教 LLM 把 vertical/portrait 写进 keywords,
+# 与 job 画幅矛盾时 Pexels 全文搜索返回反方向视频 → 方向过滤器全拒 → 素材报错。
+# 方向已由 API orientation 参数传达, 关键词里的方位词只帮倒忙, 一律剥离。
+_ORIENTATION_WORDS = {"vertical", "portrait", "horizontal", "landscape"}
+
+
+def _strip_orientation_words(keywords: list[str]) -> list[str]:
+    cleaned = [k for k in keywords if str(k).strip().lower() not in _ORIENTATION_WORDS]
+    return cleaned or keywords  # 全被滤掉(如只有方位词)时退回原词保底
 
 
 def _resolve_pexels(
@@ -129,21 +185,24 @@ def _resolve_pexels(
     """
     # 本地优先碰撞 (2026-08-09): 命中即用本地, 未命中才走 Pexels 在线搜索。
     # chosen_pexels_id=None → 调用方不写回 params, 不污染 Pexels 同片去重。
-    local = _try_local_collision(db, slot, min_dur, orientation)
-    if local is not None:
-        src, desc = local
-        return src, desc, None
+    # force_pexels (2026-08-12): 强制 P 线下载, 跳过本地碰撞 (用于本地/替换走死时)。
+    if not (slot.params_json or {}).get("force_pexels"):
+        local = _try_local_collision(db, slot, min_dur, orientation)
+        if local is not None:
+            src, desc = local
+            return src, desc, None
 
     params = slot.params_json or {}
     keywords = params.get("keywords")
     used_query: str | None = None
     if isinstance(keywords, list) and keywords:
+        clean_keywords = _strip_orientation_words([str(k) for k in keywords])
         items, used_query = pexels_service.resolve_descending(
-            [str(k) for k in keywords], max_results=1,
+            clean_keywords, max_results=1,
             min_duration_sec=min_dur, orientation=orientation,
             exclude_pexels_ids=used_ids,
         )
-        desc = f"keywords={keywords} hit_query={used_query}"
+        desc = f"keywords={clean_keywords} hit_query={used_query}"
     else:
         # 兼容旧 params: category / text_context 单次搜索
         category = params.get("category") or slot.text_context or "business"

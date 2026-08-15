@@ -53,7 +53,7 @@ def _detect_silences(wav_path: Path) -> list[tuple[float, float]]:
             "-af", "silencedetect=noise=-30dB:d=0.2",
             "-f", "null", "-",
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=30)
         cur_start: float | None = None
         for line in result.stderr.split("\n"):
             ms = re.search(r"silence_start:\s*(-?[\d.]+)", line)
@@ -155,7 +155,7 @@ def _cut_segments(
             str(seg_path),
         ]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+            subprocess.run(cmd, capture_output=True, text=True, errors="replace", check=True, timeout=30)
         except Exception:
             _write_wav(seg_path, np.zeros((1,), dtype=np.float32), 24000)
         out_paths.append(seg_path)

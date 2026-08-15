@@ -231,6 +231,11 @@ def execute_visual_render_job(
             output_path=output_path,
             hyperframes_bin=cfg.hyperframes_bin,
             timeout_sec=cfg.hf_render_timeout_sec,
+            # 提速 (2026-08-11): 2 worker 并行截帧 + fast_capture + GPU 编码
+            # (本机 RTX 4090/4060, 独立 GPU 避免集显 WebGL 资源卡死)
+            workers=2,
+            fast_capture=True,
+            gpu_encode=True,
         )
     except subprocess.TimeoutExpired:
         job.status = "failed"

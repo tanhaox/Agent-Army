@@ -31,6 +31,37 @@ class DeepSeekConfig:
 
 
 @dataclass(frozen=True)
+class QwenConfig:
+    api_key: str
+    base_url: str
+    model_flash: str
+    model_pro: str
+    default_model: str = "flash"
+
+
+@dataclass(frozen=True)
+class SiliconFlowConfig:
+    api_key: str
+    base_url: str
+    model_flash: str
+    model_pro: str
+
+
+@dataclass(frozen=True)
+class ZhipuConfig:
+    """智谱联网搜索 (2026-08-15): 素材聚合补搜专用, 独立 /web_search 端点."""
+
+    api_key: str
+    base_url: str  # https://open.bigmodel.cn/api/paas/v4
+    search_engine: str  # search_std / search_pro / search_pro_sogou / search_pro_quark
+    content_size: str  # medium(摘要) / high(详细)
+    count: int
+    recency: str  # oneDay/oneWeek/oneMonth/oneYear/noLimit
+    timeout_sec: int
+    free_quota_expires: str  # 免费额度到期日 YYYY-MM-DD, 到期提示用
+
+
+@dataclass(frozen=True)
 class LocalLLMConfig:
     base_url: str
     model: str
@@ -80,13 +111,19 @@ class DefaultsConfig:
     # 导演素材输入模式 (ID-034): "vocabulary" = 注入关键词词表包 (默认, ~3KB,
     # 解决全量 catalog ~26KB 拖慢 DeepSeek); "full" = 注入全量素材库清单 (旧行为)。
     director_catalog_mode: str
+    # 本地素材成片复用上限 (2026-08-15): 同一素材最多进入 N 个成片 (used_count
+    # 硬过滤, 防一批"万能素材"每个视频都被选中)。0 = 关闭限制。
+    local_asset_max_uses: int
 
 
 @dataclass(frozen=True)
 class Config:
     app: AppConfig
     deepseek: DeepSeekConfig
+    siliconflow: SiliconFlowConfig
+    qwen: QwenConfig
     local_llm: LocalLLMConfig
+    zhipu: ZhipuConfig
     defaults: DefaultsConfig
     raw: dict[str, Any]
 
@@ -167,6 +204,15 @@ def load_config(path: Path | str | None = None) -> Config:
         default_model=ds_raw.get("default_model", "flash"),
     )
 
+    qw_raw = raw.get("qwen", {})
+    qwen = QwenConfig(
+        api_key=_resolve_env(qw_raw.get("api_key", "")),
+        base_url=qw_raw.get("base_url", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"),
+        model_flash=qw_raw.get("model_flash", "qwen3.6-flash"),
+        model_pro=qw_raw.get("model_pro", "qwen3.8-max"),
+        default_model=qw_raw.get("default_model", "flash"),
+    )
+
     llm_raw = raw.get("local_llm", {})
     local_llm = LocalLLMConfig(
         base_url=llm_raw.get("base_url", "http://127.0.0.1:8080"),
@@ -223,6 +269,7 @@ def load_config(path: Path | str | None = None) -> Config:
         job_auto_cleanup_days=int(defaults_raw.get("job_auto_cleanup_days", 7)),
         slot_retention_days=int(defaults_raw.get("slot_retention_days", 7)),
         director_catalog_mode=defaults_raw.get("director_catalog_mode", "vocabulary"),
+        local_asset_max_uses=int(defaults_raw.get("local_asset_max_uses", 2)),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),
@@ -235,7 +282,28 @@ def load_config(path: Path | str | None = None) -> Config:
         ),
     )
 
-    return Config(app=app, deepseek=deepseek, local_llm=local_llm, defaults=defaults, raw=raw)
+    # 硅基流动 (可选, 缺失时用空值替代)
+    sf_raw = raw.get("siliconflow", {})
+    siliconflow = SiliconFlowConfig(
+        api_key=sf_raw.get("api_key", ""),
+        base_url=sf_raw.get("base_url", "https://api.siliconflow.cn/v1"),
+        model_flash=sf_raw.get("model_flash", "deepseek-ai/DeepSeek-V4-Flash"),
+        model_pro=sf_raw.get("model_pro", "deepseek-ai/DeepSeek-V4-Pro"),
+    )
+
+    # 智谱联网搜索 (2026-08-15): 素材聚合补搜, 独立 web_search 端点
+    zp_raw = raw.get("zhipu", {})
+    zhipu = ZhipuConfig(
+        api_key=_resolve_env(zp_raw.get("api_key", "")),
+        base_url=zp_raw.get("base_url", "https://open.bigmodel.cn/api/paas/v4"),
+        search_engine=zp_raw.get("search_engine", "search_pro"),
+        content_size=zp_raw.get("content_size", "high"),
+        count=int(zp_raw.get("count", 5)),
+        recency=zp_raw.get("recency", "noLimit"),
+        timeout_sec=int(zp_raw.get("timeout_sec", 30)),
+        free_quota_expires=zp_raw.get("free_quota_expires", "2026-09-12"),
+    )
+    return Config(app=app, deepseek=deepseek, siliconflow=siliconflow, qwen=qwen, local_llm=local_llm, zhipu=zhipu, defaults=defaults, raw=raw)
 
 
 # ── Lazy global accessor (loaded by app.main.lifespan) ──────────────

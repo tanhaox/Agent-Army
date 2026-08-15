@@ -20,7 +20,10 @@ from app.services.asset_matcher import (
     match_local_assets,
     register_asset_usage,
 )
-from app.services.slot_workflows.broll_pexels import execute_broll_pexels_slot
+from app.services.slot_workflows.broll_pexels import (
+    _collect_used_local_files,
+    execute_broll_pexels_slot,
+)
 from app.services.slot_workflows.common import ensure_slot_dir
 
 logger = logging.getLogger(__name__)
@@ -69,18 +72,43 @@ def _match_local(db: Session, slot: DirectorSlot, spec: dict, keywords: list[str
         people=people,
         min_duration_sec=duration,
         limit=1,
+        relax_location=True,  # 地域 C 折中 (2026-08-12): strict 为空才放宽 foreign
+        exclude=_collect_used_local_files(db, slot),  # 同 job 硬排除 (2026-08-12)
     )
 
 
-def _try_exact_file(cfg, params: dict) -> Path | None:
-    """策略 1: params.file 精确文件名直接定位; 找不到返回 None."""
+def _try_exact_file(
+    cfg, params: dict, slot: DirectorSlot | None = None, db: Session | None = None,
+) -> Path | None:
+    """策略 1: params.file 精确文件名直接定位; 找不到返回 None.
+
+    命中时写回 ``params_json["local_file"]`` (同 job 硬排除用, 2026-08-12)。
+    db 传入时校验禁用素材 (preference=dislike 不采用, 2026-08-12)。
+    """
     file_name = params.get("file")
     if not file_name:
         return None
     candidates = [Path(cfg.materials_dir) / file_name]
     src = next((p for p in candidates if p.exists()), None)
     if src is not None:
+        # 禁用素材过滤 (2026-08-12): 精确文件名命中也跳过 dislike
+        if db is not None:
+            from app.models import VideoAsset
+            asset = (
+                db.query(VideoAsset)
+                .filter(VideoAsset.file_path == str(src))
+                .first()
+            )
+            if asset is not None and asset.preference == "dislike":
+                logger.warning(
+                    "[broll_local] %s 已被禁用 (preference=dislike), 跳过", file_name,
+                )
+                return None
         logger.info("[broll_local] exact match: %s", file_name)
+        if slot is not None:
+            new_params = dict(slot.params_json or {})
+            new_params["local_file"] = str(src)
+            slot.params_json = new_params
     else:
         logger.warning("[broll_local] params.file=%s not found, falling back to keywords match", file_name)
     return src
@@ -114,9 +142,17 @@ def _strategy_semantic_match(
     # 素材不复用 (2026-08-09): 命中即登记, 后续 slot 的 used_count.asc() 排序
     # 自然降低其优先级 (与 P 线本地碰撞共用登记语义)。
     register_asset_usage(db, best.get("file_path"))
+    # 同 job 素材硬排除 (2026-08-12): 写回本次命中素材, 供后续 slot 收集排除。
+    # params_json 是普通 JSON 列, 必须新建 dict 整体赋值才能触发落库。
+    new_params = dict(slot.params_json or {})
+    new_params["local_file"] = best.get("file_path")
+    slot.params_json = new_params
+    # 地域 C 折中 (2026-08-12): 命中放宽的 foreign 素材不静默 —— 显式标记
+    relaxed = bool(best.get("location_relaxed"))
     logger.info(
-        "[broll_local] keyword match: %s (score=%d, hit_ratio=%s)",
+        "[broll_local] keyword match: %s (score=%d, hit_ratio=%s%s)",
         src.name, best.get("score", 0), hit_ratio,
+        ", LOCATION_RELAXED(foreign)" if relaxed else "",
     )
     return src
 
@@ -149,7 +185,7 @@ def execute_broll_local_slot(db: Session, slot: DirectorSlot) -> str:
     params = slot.params_json or {}
 
     # 策略 1: 精确文件名
-    src = _try_exact_file(cfg, params)
+    src = _try_exact_file(cfg, params, slot=slot, db=db)
     if src is not None:
         return _render_broll_local(src, root, slot, spec)
 

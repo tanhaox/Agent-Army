@@ -17,12 +17,91 @@ logger = logging.getLogger(__name__)
 __all__ = ["_clamp_slot_durations", "_append_references_slot", "_persist_plan"]
 
 
+# 质量钳制参数 (2026-08-15): 实测 53 slots/5min、broll 0.9s 闪切、21 张 hf_title → 硬兜底
+_MIN_DUR = {
+    "broll_pexels": 2.5,
+    "broll_local": 2.5,
+    "hf_title": 3.0,
+    "hf_chart": 3.0,
+    "hf_quote": 3.0,
+}
+_HF_TITLE_CAP = 5  # 含尾部参考卡(clamp 后追加, 不占此额度)
+_PROTECTED = {"host", "mixed_host_broll", "hf_opening"}
+
+
 def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
-    """Validate against total duration."""
-    for slot in plan.slots:
-        slot.start_sec = max(0.0, min(slot.start_sec, total_duration))
-        slot.end_sec = max(slot.start_sec + 0.1, min(slot.end_sec, total_duration))
+    """质量钳制: 重叠去重 + 最小时长 + hf_title 数量上限 + 时序重排.
+
+    LLM 规划实测三种劣化 (2026-08-15): broll 碎片闪切 (0.9~1.8s)、
+    hf_title 滥用 (单片 21 张)、同秒重叠 slot。此处为不可协商的硬底线。
+    """
+    slots = sorted(plan.slots, key=lambda s: (s.start_sec, s.slot_index))
+    kept: list[Any] = []
+    hf_title_seen = 0
+    cursor = 0.0
+    dropped = 0
+    for slot in slots:
+        dur = slot.end_sec - slot.start_sec
+        if dur <= 0.05:
+            dropped += 1
+            continue  # 空 slot
+        # hf_title 数量上限: 超限丢弃 (尾部参考卡在 clamp 之后追加, 不受影响)
+        if slot.workflow == "hf_title":
+            hf_title_seen += 1
+            if hf_title_seen > _HF_TITLE_CAP:
+                logger.info("[director] drop excess hf_title (cap %d)", _HF_TITLE_CAP)
+                dropped += 1
+                continue
+        min_dur = _MIN_DUR.get(slot.workflow, 0.0)
+        if dur < min_dur:
+            if slot.workflow in _PROTECTED or slot.workflow.startswith("hf"):
+                dur = min_dur  # hf 卡/出镜拉长到下限
+            elif kept and kept[-1].workflow == slot.workflow:
+                # broll 碎片并入前一相邻同类型 slot (顺延其 end)
+                kept[-1].end_sec = round(kept[-1].end_sec + dur, 3)
+                kept[-1].duration_sec = round(kept[-1].end_sec - kept[-1].start_sec, 3)
+                cursor = kept[-1].end_sec
+                continue
+            else:
+                dur = min_dur
+        # 重叠去重: 起点 = max(原起点, 上一 slot 结束)
+        start = max(slot.start_sec, cursor)
+        end = start + dur
+        if total_duration:
+            end = min(end, total_duration)
+        slot.start_sec = round(start, 3)
+        slot.end_sec = round(end, 3)
         slot.duration_sec = round(slot.end_sec - slot.start_sec, 3)
+        if slot.duration_sec <= 0.05 and slot.workflow not in _PROTECTED:
+            dropped += 1
+            continue
+        cursor = slot.end_sec
+        kept.append(slot)
+    for i, slot in enumerate(kept):
+        slot.slot_index = i
+    # 时间轴满铺 (2026-08-15): LLM 规划偶发漏铺中段 (实测 323s 音频在 223s 处
+    # 有 8.7s 空洞 → 成片音轨错位+截断, 观众听感"整段消失/念一半没了")。
+    # 任何 >0.5s 的 slot 间隙, 一律用前一个 slot 延伸填满; 片尾同理。
+    filled = 0
+    for cur, nxt in zip(kept, kept[1:]):
+        gap = nxt.start_sec - cur.end_sec
+        if gap > 0.5:
+            cur.end_sec = round(nxt.start_sec, 3)
+            cur.duration_sec = round(cur.end_sec - cur.start_sec, 3)
+            filled += 1
+    if kept and total_duration and kept[-1].end_sec < total_duration - 0.5:
+        gap = total_duration - kept[-1].end_sec
+        kept[-1].end_sec = round(total_duration, 3)
+        kept[-1].duration_sec = round(kept[-1].end_sec - kept[-1].start_sec, 3)
+        filled += 1
+        logger.info("[director] tail coverage: extended last slot by %.1fs to audio end (%.1fs)",
+                    gap, total_duration)
+    if filled:
+        logger.info("[director] timeline tiling: filled %d gap(s), slots now tile audio fully", filled)
+    plan.slots = kept
+    if dropped:
+        logger.info("[director] quality clamp: kept %d slots, dropped %d (碎片/超限/重叠)",
+                    len(kept), dropped)
 
 
 def _append_references_slot(plan: Any, script: Any, total_duration: float) -> None:

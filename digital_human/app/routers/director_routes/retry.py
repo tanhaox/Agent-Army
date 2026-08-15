@@ -124,9 +124,14 @@ def retry_slot(
     job_id: str,
     slot_id: str,
     pipelines: str | None = None,
+    force_pexels: bool = False,
     db: Session = Depends(get_db),
 ):
-    """手动重试一个 slot: 重置为 queued 后重新执行, 必要时降级管线/恢复原始 workflow."""
+    """手动重试一个 slot: 重置为 queued 后重新执行, 必要时降级管线/恢复原始 workflow.
+
+    force_pexels=True (2026-08-12): 强制走 Pexels 在线下载新素材 (跳过本地碰撞)。
+    用于本地碰撞/替换都走死时"重新生成新素材"。broll_local 槽位会切 broll_pexels。
+    """
     job = _job_or_404(db, job_id)
     slot = _slot_or_404(db, job_id, slot_id)
 
@@ -146,6 +151,19 @@ def retry_slot(
         pipelines = job.pipelines
     _apply_retry_pipeline_degrade(db, job_id, slot, pipelines)
     _restore_original_workflow(job_id, slot)
+
+    # ── force_pexels (2026-08-12): 强制走 P 线下载新素材, 跳过本地碰撞 ──
+    # 本地碰撞/替换都走死时, 用户点"重新生成"可强制下载新素材。
+    # broll_local 槽位切 broll_pexels (否则会先走本地策略)。
+    if force_pexels:
+        params = dict(slot.params_json or {})
+        params["force_pexels"] = True
+        slot.params_json = params
+        if slot.workflow in ("broll_local", "black_placeholder"):
+            slot.workflow = "broll_pexels"
+            slot.visual_type = "broll_pexels"
+        logger.info("[director %s] retry_slot %s force_pexels=True (强制 P 线下载)",
+                    job_id, slot.id)
 
     # 在原 slot 上重置状态，不创建新 slot
     _reset_slot_for_retry(slot)
@@ -255,3 +273,164 @@ def retry_by_workflow(
 
     logger.info("[director %s] retry-workflow %s: reset %d slots", job_id, workflow, reset_count)
     return {"status": "ok", "reset_count": reset_count, "workflow": workflow}
+
+
+@retry_router.post("/jobs/{job_id}/slots/{slot_id}/replace-material")
+def replace_slot_material(
+    job_id: str,
+    slot_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """替换 slot 素材 (2026-08-12): 填素材库编号 asset_no → 用该素材重渲染.
+
+    流程: 按 asset_no 查 VideoAsset → 取文件名 → 写 slot.params_json["file"]
+    + workflow 改 broll_local → _reset_slot_for_retry → 同步 execute_slot 重渲染。
+    broll_local 线 `_try_exact_file` 用 params["file"] 精确命中 materials_dir
+    下文件 (已验证全部素材 file_path 都在 materials_dir 下)。同步执行保证
+    替换即时生效 —— 返回时新素材已渲染, 前端刷新预览即见新内容。
+
+    payload: {"asset_no": "V20260803-0177"}
+    """
+    from app.models import VideoAsset
+
+    asset_no = (payload or {}).get("asset_no")
+    if not asset_no or not isinstance(asset_no, str):
+        raise HTTPException(status_code=400, detail="缺少 asset_no (素材库编号)")
+    asset_no = asset_no.strip()
+
+    job = _job_or_404(db, job_id)
+    slot = _slot_or_404(db, job_id, slot_id)
+
+    # 仅 broll 类 slot 可替换素材 (HF 图表/标题卡/host 出镜无素材可换)
+    if slot.workflow not in ("broll_pexels", "broll_local"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"workflow={slot.workflow} 非 broll 类, 不支持素材替换",
+        )
+    if slot.status == "running":
+        raise HTTPException(status_code=409, detail="slot 正在执行中, 请等待完成后再替换")
+
+    asset = db.query(VideoAsset).filter(VideoAsset.asset_no == asset_no).first()
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"素材库无编号 {asset_no}")
+    fp = Path(asset.file_path)
+    if not fp.exists():
+        raise HTTPException(status_code=410, detail=f"素材文件缺失: {fp}")
+
+    # ── 替换去重校验 (2026-08-12): 一素材一视频只用一次 ──
+    # 遍历同 job 所有 broll 类 slot (排除自身), 检查该素材是否已被用过。
+    # 四种标识任一命中即视为重复: pexels_id / local_file / file / replaced_asset_no。
+    used_by: DirectorSlot | None = None
+    for other in job.slots:
+        if other.id == slot.id:
+            continue
+        op = other.params_json or {}
+        if asset.pexels_id is not None and op.get("pexels_id") == asset.pexels_id:
+            used_by = other
+            break
+        if asset.file_path and op.get("local_file") == asset.file_path:
+            used_by = other
+            break
+        if op.get("file") == fp.name:
+            used_by = other
+            break
+        if op.get("replaced_asset_no") == asset_no:
+            used_by = other
+            break
+    if used_by is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"素材 {asset_no} 已用于 Slot #{used_by.slot_index} (workflow={used_by.workflow})，"
+                   f"一视频一素材，不能重复替换",
+        )
+
+    # 写入替换参数 + 切到 broll_local 线 (精确文件名命中)
+    params = dict(slot.params_json or {})
+    params["file"] = fp.name
+    params["replaced_asset_no"] = asset_no
+    slot.params_json = params
+    slot.workflow = "broll_local"
+    slot.visual_type = "broll_local"
+
+    _reset_slot_for_retry(slot)
+    db.commit()
+    logger.info(
+        "[director %s] replace-material slot %s → %s (%s), re-rendering",
+        job_id, slot.id, asset_no, fp.name,
+    )
+    _evt(job_id, {"type": "slot_start", "slot_index": slot.slot_index,
+                  "workflow": slot.workflow, "msg": f"Slot #{slot.slot_index} 替换素材 {asset_no} 开始"})
+
+    from app.services.slot_executor import clear_force_stopped
+    clear_force_stopped(job_id)
+
+    slot = _execute_slot_retry(db, slot)
+    if slot.status == "completed":
+        logger.info("[director %s] replace-material slot %s done, output=%s",
+                    job_id, slot.id, slot.output_path)
+        _evt(job_id, {"type": "slot_done", "slot_index": slot.slot_index,
+                      "workflow": slot.workflow, "msg": f"Slot #{slot.slot_index} 替换素材完成"})
+    else:
+        logger.warning("[director %s] replace-material slot %s failed: %s",
+                       job_id, slot.id, slot.error_message)
+        _evt(job_id, {"type": "slot_fail", "slot_index": slot.slot_index,
+                      "workflow": slot.workflow, "error": slot.error_message or "",
+                      "msg": f"Slot #{slot.slot_index} 替换素材失败"})
+
+    return RetrySlotResponse(
+        slot_id=slot.id,
+        status=slot.status,
+        message=(
+            f"replaced material {asset_no} (workflow=broll_local), status={slot.status}"
+            + (f", output={slot.output_path}" if slot.output_path else "")
+            + (f", error={slot.error_message}" if slot.error_message else "")
+        ),
+    )
+
+
+@retry_router.post("/jobs/{job_id}/slots/{slot_id}/disable-material")
+def disable_slot_material(job_id: str, slot_id: str, db: Session = Depends(get_db)):
+    """禁用 slot 当前素材 (2026-08-12): 设 VideoAsset.preference=dislike.
+
+    从 slot 反查素材 (三种途径: pexels_id / local_file / replaced_asset_no)。
+    禁用后: Pexels 在线 resolve 与本地碰撞线都会排除该素材 (本地线过滤
+    2026-08-12 已补齐)。返回 asset_no + preference 供前端提示。
+    """
+    from app.models import VideoAsset
+
+    job = _job_or_404(db, job_id)
+    slot = _slot_or_404(db, job_id, slot_id)
+    params = slot.params_json or {}
+
+    # 反查 VideoAsset: pexels_id → local_file → replaced_asset_no
+    asset: VideoAsset | None = None
+    pid = params.get("pexels_id")
+    if pid is not None:
+        asset = db.query(VideoAsset).filter(VideoAsset.pexels_id == pid).first()
+    if asset is None and params.get("local_file"):
+        asset = (
+            db.query(VideoAsset)
+            .filter(VideoAsset.file_path == params["local_file"])
+            .first()
+        )
+    if asset is None and params.get("file"):
+        from app.config import get_config
+        full = Path(get_config().defaults.materials_dir) / params["file"]
+        asset = (
+            db.query(VideoAsset)
+            .filter(VideoAsset.file_path == str(full))
+            .first()
+        )
+    if asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"slot #{slot.slot_index} 素材未入库，无法打禁用标 "
+                   f"(params: pexels_id={pid}, file={params.get('file')})",
+        )
+
+    asset.preference = "dislike"
+    db.commit()
+    logger.info("[director %s] disable-material slot %s → %s (dislike)",
+                job_id, slot.id, asset.asset_no)
+    return {"asset_no": asset.asset_no, "preference": "dislike", "slot_index": slot.slot_index}

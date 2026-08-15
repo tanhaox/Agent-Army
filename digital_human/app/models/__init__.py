@@ -14,6 +14,8 @@ from .content import (
     AudioJob,
     CrawlTask,
     Host,
+    MaterialItem,
+    MaterialPackage,
     Script,
     Segment,
     Voice,
@@ -27,6 +29,7 @@ __all__ = [
     # 内容流水线
     "Host", "Voice", "Article", "Script", "Segment",
     "AudioJob", "AudioFile", "CrawlTask",
+    "MaterialPackage", "MaterialItem",
     # 角色 / 数字人
     "Role", "WorkflowSync", "DigitalHumanVideo", "Persona",
     # 导演台

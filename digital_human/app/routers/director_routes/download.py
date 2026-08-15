@@ -10,13 +10,31 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.routers.director_routes.common import _find_composition_mp4, _job_or_404
+from app.routers.director_routes.common import _find_composition_mp4, _job_or_404, _slot_or_404
 
 logger = logging.getLogger(__name__)
 
 download_router = APIRouter(tags=["director"])
 
 __all__ = ["download_router"]
+
+
+@download_router.get("/jobs/{job_id}/slots/{slot_id}/preview")
+def preview_slot(job_id: str, slot_id: str, db: Session = Depends(get_db)):
+    """单个 slot 的视频预览 (2026-08-12): 返回该 slot 的渲染产物.
+
+    slot.output_path 是本地绝对路径, 前端无法直接访问 → 经此端点以
+    FileResponse 服务。文件缺失 → 404。
+    """
+    job = _job_or_404(db, job_id)
+    slot = _slot_or_404(db, job_id, slot_id)
+    if not slot.output_path:
+        raise HTTPException(status_code=404, detail=f"slot {slot_id} 尚无产物 (status={slot.status})")
+    p = Path(slot.output_path)
+    if not p.exists():
+        raise HTTPException(status_code=410, detail=f"产物文件丢失: {p}")
+    media_type = "video/mp4"
+    return FileResponse(str(p), media_type=media_type, filename=p.name)
 
 
 @download_router.get("/jobs/{job_id}/download")

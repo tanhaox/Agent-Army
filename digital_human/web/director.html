@@ -9,7 +9,9 @@
 <body>
   <nav>
     <div class="logo">Director<span>Agent</span></div>
-    <a href="/web/index.html">流水线</a>
+    <a href="/web/index.html">新闻线索</a>
+    <a href="/web/writing.html">文字加工</a>
+    <a href="/web/audio.html">音频加工</a>
     <a href="/web/director.html" class="active">导演控制台</a>
     <a href="/web/library.html">视频库</a>
     <a href="/web/templates.html">模板管理</a>
@@ -164,6 +166,23 @@
             <div class="field"><div class="field-label">机位</div><div class="field-value" id="slot-camera">—</div></div>
             <div class="field"><div class="field-label">产物路径</div><div class="field-value mono" id="slot-output">—</div></div>
             <div class="field"><div class="field-label">错误信息</div><div class="field-value" id="slot-error" style="color:var(--danger)">—</div></div>
+            <!-- Slot 视频预览 + 素材替换 (2026-08-12) -->
+            <div class="video-preview hidden" id="slot-video-preview">
+              <video controls id="slot-video-player"></video>
+            </div>
+            <div class="field hidden" id="slot-replace-row" style="margin-top:0.5rem;">
+              <div class="field-label">替换素材 (素材库编号)</div>
+              <div class="field-value" style="display:flex;gap:0.4rem;align-items:center;">
+                <input type="text" id="slot-replace-no" placeholder="如 V20260803-0177" style="flex:1;padding:0.35rem 0.5rem;font-size:0.8rem;border:1px solid var(--border);border-radius:4px;background:var(--bg-card);color:var(--ink);" />
+                <button class="btn btn-warning btn-sm" id="btn-replace-material" onclick="replaceSlotMaterial(this)">替换</button>
+                <button class="btn btn-danger btn-sm" id="btn-disable-material" onclick="disableSlotMaterial(this)" title="当前素材不好 → 打禁用标, 后续不再选用">🚫 禁用素材</button>
+              </div>
+            </div>
+            <div class="field hidden" id="slot-retry-force-row" style="margin-top:0.4rem;">
+              <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.78rem;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" id="retry-force-pexels" /> 重新生成时强制 P 线下载新素材（跳过本地素材库）
+              </label>
+            </div>
           </div>
           <div class="btn-group" style="margin-top:1.25rem;">
             <button class="btn btn-primary" id="btn-execute" onclick="executeJob()">执行 Slots</button>

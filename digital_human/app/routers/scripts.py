@@ -23,11 +23,15 @@ router = APIRouter(prefix="/api/scripts", tags=["scripts"])
 
 @router.get("", response_model=list[ScriptOut])
 def list_scripts(limit: int = 50, db: Session = Depends(get_db)):
-    """List scripts ordered by creation time (newest first)."""
+    """List scripts ordered by last-save time (newest first).
+
+    2026-08-12: 由 created_at 改为 updated_at —— 标题大量重复时, 用户
+    需要按"最后保存时间"找最新那篇, 而非按首次创建时间。
+    """
     return (
         db.query(Script)
         .options(selectinload(Script.article))
-        .order_by(Script.created_at.desc())
+        .order_by(Script.updated_at.desc())
         .limit(limit)
         .all()
     )
@@ -46,6 +50,21 @@ def get_script(script_id: str, db: Session = Depends(get_db)):
     return script
 
 
+def _reparse_segments(db, script, text):
+    """删旧 segments + 全新建 (2026-08-14, 替代 line_index 增量匹配).
+
+    旧增量匹配在编辑改句数/标点时 line_index 错位 → segments.text 不更新 → 音频老稿 bug.
+    删旧建新保证 segments.text = 新稿; parse_script 默认 selected_for_host=True (全选).
+    编辑后勾选重置为全选 (内容已变, 重勾选合理).
+    """
+    from ..services.script_parser import parse_script
+    for seg in list(script.segments):
+        db.delete(seg)
+    db.flush()
+    for p in parse_script(text):
+        db.add(Segment(script_id=script.id, **p))
+
+
 @router.put("/{script_id}", response_model=ScriptOut)
 def update_script(script_id: str, payload: ScriptUpdate, db: Session = Depends(get_db)):
     script = db.query(Script).filter(Script.id == script_id).first()
@@ -54,54 +73,63 @@ def update_script(script_id: str, payload: ScriptUpdate, db: Session = Depends(g
 
     if payload.script_text is not None:
         script.script_text = payload.script_text
-        # Re-parse segments preserving director selections.
-        from ..services.script_parser import parse_script
+        _reparse_segments(db, script, script.script_text)
 
-        existing = {seg.line_index: seg for seg in script.segments}
-        parsed = parse_script(script.script_text)
-        new_segments = []
-        for p in parsed:
-            old = existing.get(p["line_index"])
-            if old:
-                old.text = p["text"]
-                old.control_chars = p["control_chars"]
-                old.segment_type = p["segment_type"]
-            else:
-                new_segments.append(Segment(script_id=script.id, **p))
-        # Remove segments whose line_index no longer exists.
-        new_line_indices = {p["line_index"] for p in parsed}
-        for seg in script.segments:
-            if seg.line_index not in new_line_indices:
-                db.delete(seg)
-        db.add_all(new_segments)
-
-    # 爆品改造最终稿编辑 (2026-08-11): 更新 boosted_text + 重 parse segments
-    # (TTS 读 segments, 编辑最终稿后需重建)
+    # 爆品改造最终稿编辑 (2026-08-11→2026-08-14): 更新 boosted_text + 删旧建新 segments
     if payload.boosted_text is not None:
         script.boosted_text = payload.boosted_text
-        from ..services.script_parser import parse_script
-
-        existing = {seg.line_index: seg for seg in script.segments}
-        parsed = parse_script(payload.boosted_text)
-        new_segments = []
-        for p in parsed:
-            old = existing.get(p["line_index"])
-            if old:
-                old.text = p["text"]
-                old.control_chars = p["control_chars"]
-                old.segment_type = p["segment_type"]
-            else:
-                new_segments.append(Segment(script_id=script.id, **p))
-        new_line_indices = {p["line_index"] for p in parsed}
-        for seg in script.segments:
-            if seg.line_index not in new_line_indices:
-                db.delete(seg)
-        db.add_all(new_segments)
+        _reparse_segments(db, script, payload.boosted_text)
 
     if payload.status is not None:
         script.status = payload.status
 
+    # ── 音频过期标记 (方案A, 2026-08-12) ──
+    # 文稿/最终稿改动 → 旧 completed AudioJob 标记 stale (不删磁盘, 保留历史)。
+    # 下次点"生成音频"时 (generate_audio 端点) 会清空 stale job 的磁盘 wav
+    # 并删除记录 → 强制重新合成, 杜绝 `_skip_batch` 断点续传误复用旧音频。
+    if payload.script_text is not None or payload.boosted_text is not None:
+        from ..models import AudioJob
+
+        stale = (
+            db.query(AudioJob)
+            .filter(AudioJob.script_id == script_id, AudioJob.status == "completed")
+            .update({"status": "stale"}, synchronize_session=False)
+        )
+        if stale:
+            logger.info(
+                "script %s 文稿已改动, 标记 %d 个旧 AudioJob 为 stale (音频需重新生成)",
+                script_id[:8], stale,
+            )
+
     db.commit()
+
+    # 2026-08-14: 编辑最终稿后后台重跑 P5 情绪标注
+    # (boosted_text 改了, 旧 emotion_annotations 基于旧稿, TTS 情绪会对不上; 后台跑不阻塞保存)
+    if payload.boosted_text is not None:
+        import threading
+        _new_text = payload.boosted_text
+        _sid = script_id
+
+        def _rerun_p5() -> None:
+            import logging
+            _lg = logging.getLogger(__name__)
+            with db_session() as _db:
+                try:
+                    _s = _db.query(Script).filter(Script.id == _sid).first()
+                    _persona = "老谭"
+                    if _s and _s.host:
+                        _persona = (getattr(_s.host, "stamp_name", None) or _s.host.name) or "老谭"
+                    from ..services.boost_service import annotate_emotions
+                    _emo = annotate_emotions(_new_text, _persona)
+                    if _s:
+                        _s.emotion_annotations = _emo
+                        _db.commit()
+                    _lg.info("[p5-rerun] script %s emotion 重标注完成 (len=%d)", _sid[:8], len(_emo or ""))
+                except Exception as _e:
+                    _lg.warning("[p5-rerun] script %s failed: %s", _sid[:8], _e)
+
+        threading.Thread(target=_rerun_p5, name=f"p5-rerun-{_sid[:8]}", daemon=True).start()
+
     db.refresh(script)
     return script
 
@@ -295,6 +323,9 @@ def _run_boost_background(script_id: str, job_id: str) -> None:
             )
             script2.boosted_text = boost["boosted_text"]
             script2.boost_titles = boost["boost_titles"] or None
+            # P5 情绪标注 (2026-08-13): 紧随 P4, 存 emotion_annotations 供 TTS 情绪合成/导演配画面
+            # 2026-08-14: 修 key bug — run_boost 返回 p5_annotated, 原 emotion_annotations 恒 None
+            script2.emotion_annotations = boost.get("p5_annotated")
             db2.commit()
 
             # 重建 segments (TTS 读 segments, 改造后内容需落到 segments)
@@ -316,9 +347,11 @@ def _run_boost_background(script_id: str, job_id: str) -> None:
                 "type": "boost_done",
                 "script_id": script2.id,
                 "boosted": True,
-                "p1_ok": boost["p1_ok"],
-                "p2_ok": boost["p2_ok"],
-                "p3_ok": boost["p3_ok"],
+                "p1_ok": boost.get("p1_ok"),
+                "p2_ok": boost.get("p2_ok"),
+                "p3_ok": boost.get("p3_ok"),
+                "p4_ok": boost.get("p4_ok"),
+                "p5_ok": bool(boost.get("p5_annotated")),
             })
         except Exception as exc:
             logger.exception("[boost] background failed for %s: %s", script_id, exc)

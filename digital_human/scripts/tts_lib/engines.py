@@ -147,6 +147,11 @@ def indextts_tts(
     temperature: float = 0.8,
     max_text_tokens_per_segment: int = 120,
     seed: int | None = None,
+    use_emo_text: bool = False,
+    emo_text: str | None = None,
+    emo_vector: list[float] | None = None,
+    emo_alpha: float = 1.0,
+    emo_audio_prompt: Path | str | None = None,
 ) -> Path:
     """调 IndexTTS2 api_server (7862) /v1/tts. 响应是 wav bytes, 持久化到 output_path."""
     if master_audio is None or not master_audio.exists():
@@ -156,6 +161,7 @@ def indextts_tts(
     payload = _build_indextts_payload(
         text, master_audio, master_text, master_style, do_sample, top_p,
         top_k, temperature, max_text_tokens_per_segment, seed,
+        use_emo_text, emo_text, emo_vector, emo_alpha, emo_audio_prompt,
     )
     audio_bytes = _fetch_indextts_audio(base_url, payload)
     if not audio_bytes or len(audio_bytes) < 44:
@@ -175,8 +181,13 @@ def _build_indextts_payload(
     temperature: float,
     max_text_tokens_per_segment: int,
     seed: int | None,
+    use_emo_text: bool = False,
+    emo_text: str | None = None,
+    emo_vector: list[float] | None = None,
+    emo_alpha: float = 1.0,
+    emo_audio_prompt: Path | str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "text": text,
         "spk_audio_prompt": str(master_audio.resolve()),
         "master_text": master_text,
@@ -187,7 +198,15 @@ def _build_indextts_payload(
         "top_k": top_k,
         "temperature": temperature,
         "seed": seed,
+        "use_emo_text": use_emo_text,
+        "emo_text": emo_text,
+        "emo_alpha": emo_alpha,
     }
+    if emo_vector is not None:
+        payload["emo_vector"] = emo_vector
+    if emo_audio_prompt is not None:
+        payload["emo_audio_prompt"] = str(emo_audio_prompt)
+    return payload
 
 
 def _fetch_indextts_audio(base_url: str, payload: dict[str, Any]) -> bytes:

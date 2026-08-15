@@ -155,6 +155,7 @@ function renderAssets(items) {
           <button class="${a.preference === 'like' ? 'liked' : ''}" onclick="setPreference('${a.id}', 'like')">😍</button>
           <button class="${a.preference === 'neutral' ? 'active' : ''}" onclick="setPreference('${a.id}', 'neutral')">😐</button>
           <button class="${a.preference === 'dislike' ? 'disliked' : ''}" onclick="setPreference('${a.id}', 'dislike')">🚫</button>
+          <button onclick="copyAssetNo('${a.id}', '${escHtml(a.asset_no)}')" title="复制编号 ${escHtml(a.asset_no)}">📋 复制编号</button>
           <button onclick="openEdit('${a.id}')">✏ 编辑</button>
           <button class="del" onclick="deleteAsset('${a.id}')">🗑</button>
         </div>
@@ -324,6 +325,27 @@ function updateBatchUI() {
   document.getElementById('batch-count').textContent = `已选 ${_selectedIds.size}`;
   const allSelected = _currentAssets.length > 0 && _currentAssets.every(a => _selectedIds.has(a.id));
   document.getElementById('select-all').checked = allSelected;
+}
+
+// ── 复制素材编号 (2026-08-12) ──
+function copyAssetNo(assetId, assetNo) {
+  const done = () => toast(`已复制编号 ${assetNo}`, 'success');
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = assetNo;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); done(); }
+    catch { toast('复制失败，请手动复制', 'error'); }
+    document.body.removeChild(ta);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(assetNo).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 async function batchUpdate(body, successMsg) {

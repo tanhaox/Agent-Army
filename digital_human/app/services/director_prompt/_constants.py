@@ -12,20 +12,23 @@ VISUAL_DIRECTOR_V2_PATH = PROJECT_ROOT / "config" / "visual_director_v2.txt"
 # 选词，本地再用词碰撞本地素材库。词表不写死 —— AI 打标完成/素材导入/
 # 手动脚本都会重建本包。
 #
-# 维度分级（已确认）:
-#   - 硬维度 location/orientation/people —— 必须全中, 否则排除
-#   - 软维度 scenes/shot_types/tone/motion_level/content_density/time_of_day
-#     —— 命中率 ≥75%（6 中 ≥4）才算符合, 否则本地降级转 broll_pexels 下载
+# 维度分级 (2026-08-12 门槛重构):
+#   - 硬维度 location/orientation/people —— 必须全中, 否则排除。
+#     location 走 C 折中: strict 无候选才放宽 foreign 并标记。
+#   - 门槛维 scenes/shot_types/tone —— 命中率 ≥75% (3 中 ≥2) 才算符合,
+#     否则本地降级转 broll_pexels 下载
+#   - 加分维 motion_level/content_density/time_of_day —— 命中加分, 不排除
 VOCABULARY_PACK_REL = "data/vocabulary_pack.json"
 VOCABULARY_PACK_PATH = PROJECT_ROOT / VOCABULARY_PACK_REL
 
 # 硬维度枚举（词表包与碰撞共用）
 HARD_DIMENSIONS = ("location", "orientation", "people")
-# 软维度枚举
-SOFT_DIMENSIONS = (
-    "scenes", "shot_types", "tone",
-    "motion_level", "content_density", "time_of_day",
-)
+# 门槛维 (必须有): 画面主体 + 决定性情绪
+GATE_DIMENSIONS = ("scenes", "shot_types", "tone")
+# 加分维 (不参与门槛)
+BONUS_DIMENSIONS = ("motion_level", "content_density", "time_of_day")
+# 软维度枚举 (门槛维 + 加分维)
+SOFT_DIMENSIONS = GATE_DIMENSIONS + BONUS_DIMENSIONS
 # 维度词量上下限：每维度最少 1-2 个词（已确认）, 上限防 prompt 膨胀
 MIN_WORDS_PER_DIM = 1
 MAX_WORDS_PER_DIM = 40

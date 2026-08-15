@@ -39,6 +39,9 @@ class RewriteRequest(BaseModel):
     perspective: str | None = Field(default=None, max_length=500, description="洗稿前的补充观点（可选）")
     host_id: str | None = Field(default=None, description="绑定的数字人账号（Host）ID；缺省走 config 默认 host")
     persona_id: str | None = Field(default=None, description="绑定的数字人（Persona）ID；人物即账号，选人物自动带出 host_id 与品牌/开结尾")
+    material_package_id: str | None = Field(
+        default=None, description="素材包ID；传入时素材包内容按层注入洗稿上下文（2026-08-15）"
+    )
 
 
 class CorrectRequest(BaseModel):
@@ -73,6 +76,7 @@ class ArticleOut(BaseModel):
     source_url: str | None
     status: str
     perspective_1: str | None = None
+    deconstruct_json: dict[str, Any] | None = None  # 评论层 (2026-08-15)
     created_at: datetime
     updated_at: datetime
 
@@ -111,6 +115,9 @@ class ScriptOut(BaseModel):
     project_dir: str | None
     video_format: str = "portrait"
     perspective_2: str | None = None
+    deconstruct_json: dict | None = None  # 解构层产物 (reactions/narrative/research) (2026-08-12)
+    material_package_id: str | None = None  # 洗稿挂的素材包回溯 (2026-08-15)
+    prompt_template: str | None = None  # 音频页 persona 音色锁依赖 (2026-08-15)
     status: str
     created_at: datetime
     updated_at: datetime

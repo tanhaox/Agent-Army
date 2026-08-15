@@ -48,7 +48,7 @@ class LLMService:
     _MAX_RETRIES = 2
     _BACKOFF_SEC = 2.0
 
-    def __init__(self, cfg: DeepSeekConfig):
+    def __init__(self, cfg):
         self.cfg = cfg
 
     def _post_with_retry(self, url, *, headers, json, stream):

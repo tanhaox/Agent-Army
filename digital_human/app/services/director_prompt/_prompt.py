@@ -144,7 +144,7 @@ def _format_vocabulary_constraint_block() -> str:
         "- hard 维度只允许枚举值"
         f"（location: {'/'.join(LOCATION_VALUES)}，orientation: {'/'.join(ORIENTATION_VALUES)}，people: {'/'.join(PEOPLE_VALUES)}）。\n"
         "- 词不得互相冲突：location 为 domestic 的 slot 不得再出现 foreign 词；全片地域语义必须与口播一致（讲中国产业链绝不允许 foreign）。\n"
-        "- 本地匹配会做硬维度过滤 + 软维度 ≥75% 命中率校验；broll_local 选词不全或词不在包内会导致本地碰撞不达标，下游自动转 broll_pexels 在线下载。\n"
+        "- **本地匹配规则（硬性）**: 门槛维 scenes/shot_types/tone 命中率 ≥75%（3 中 ≥2）才算符合；加分维 motion_level/content_density/time_of_day 命中加分、不排除。location 命中不了 domestic 时才允许放宽到 foreign（系统会自动标记，不静默）。选词不全或词不在包内会导致本地碰撞不达标，下游自动转 broll_pexels 在线下载。\n"
     )
 
 

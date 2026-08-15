@@ -21,6 +21,8 @@ __all__ = [
     "Segment",
     "AudioJob",
     "AudioFile",
+    "MaterialPackage",
+    "MaterialItem",
     "CrawlTask",
 ]
 
@@ -92,6 +94,9 @@ class Article(Base):
     source_url: Mapped[str | None] = mapped_column(String(2048), default=None)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     perspective_1: Mapped[str | None] = mapped_column(Text, default=None)  # 洗稿前的补充观点
+    # 评论层 (2026-08-15): 解构层产物 (reactions/comment_archetypes/narrative/research),
+    # 洗稿时自动生成, 也可单独触发; 新闻线索页「评论层」面板展示, 供人工洞察
+    deconstruct_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending / rewritten / generated / failed
@@ -128,6 +133,17 @@ class Script(Base):
     # boost_titles = P1 输出的标题候选 JSON, 前端看稿页展示供人工选用 (默认用第一个).
     boosted_text: Mapped[str | None] = mapped_column(Text, default=None)
     boost_titles: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
+    # 解构层产物 (2026-08-12): DECONSTRUCT 产出的用户反应清单
+    # (reactions/narrative/research), 洗稿时落库, 爆品改造 P1/P2 读取注入
+    # → P1 钩子戳观众痛点、P2 争议对准焦虑。
+    deconstruct_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
+    # 情绪标注 (2026-08-13): P5 产出 — 段落级 [情绪/强度] 标注, 供 TTS 情绪合成 +
+    # 导演配画面 + 画面搜索 消费. 结构: [{"text": "段落文字", "emotion": "calm|serious|angry|surprised|happy", "strength": "弱|中|强"}, ...]
+    emotion_annotations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=list)
+    # 素材聚合 (2026-08-15): 洗稿时挂的素材包, 回溯脚本用了哪些多源素材
+    material_package_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("material_packages.id"), default=None
+    )
     status: Mapped[str] = mapped_column(
         String(32), default="drafting"
     )  # drafting / approved / generated
@@ -217,6 +233,62 @@ class AudioFile(Base):
 
     audio_job: Mapped["AudioJob"] = relationship("AudioJob", back_populates="audio_files")
     segment: Mapped["Segment | None"] = relationship("Segment", back_populates="audio_files")
+
+
+class MaterialPackage(Base):
+    """素材包 (2026-08-15): 七层洗稿的多源素材聚合容器.
+
+    一篇文章一个包, 洗稿时整包按层注入上下文, 解决 7 层模板单篇原文
+    喂不饱 L3~L6 (背景/参数/实测/商业) 的字数塌陷问题.
+    """
+
+    __tablename__ = "material_packages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    article_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("articles.id"), nullable=False, index=True
+    )
+    title: Mapped[str | None] = mapped_column(String(512), default=None)
+    # collecting (抓取/待审计) / audited (审计完成) / failed
+    status: Mapped[str] = mapped_column(String(32), default="collecting")
+    # 七层覆盖审计产物: {layers: {Lx: {covered, evidence, gaps, search_queries}},
+    #                   item_tags: {"1": ["L3","L4"]}, summary: str}
+    audit_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    search_rounds: Mapped[int] = mapped_column(Integer, default=0)  # 补搜轮次
+    error_message: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    items: Mapped[list["MaterialItem"]] = relationship(
+        "MaterialItem",
+        back_populates="package",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class MaterialItem(Base):
+    """素材条目: url 抓取 / manual 手动粘贴 / search 智谱补搜."""
+
+    __tablename__ = "material_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    package_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("material_packages.id"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(16), default="url")  # url / manual / search
+    title: Mapped[str | None] = mapped_column(String(512), default=None)
+    source_url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    media: Mapped[str | None] = mapped_column(String(128), default=None)  # 来源媒体名(搜索结果)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    fetch_ok: Mapped[bool] = mapped_column(Boolean, default=True)  # url 抓取失败标记
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    search_query: Mapped[str | None] = mapped_column(String(256), default=None)  # 补搜来源查询词
+    layer_tags: Mapped[list[str] | None] = mapped_column(JSON, default=None)  # 审计标注 ["L3","L4"]
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    package: Mapped["MaterialPackage"] = relationship("MaterialPackage", back_populates="items")
 
 
 class CrawlTask(Base):

@@ -1,0 +1,385 @@
+// writing.js (2026-08-15) — 文字加工中心: 洗稿/修正/爆改/保存/字数
+// 依赖 app.js v7 共享层 (api/setStatus/toggle/fetchScript/loadScriptList)
+
+// ── 洗稿 (v7: 挂素材包 material_package_id) ──
+async function rewriteArticle() {
+  if (!currentArticle) return;
+  const model = document.getElementById('rewrite-model').value;
+  const template = document.getElementById('rewrite-template').value || 'laochen_default';
+  const videoFormat = document.getElementById('rewrite-format').value || 'portrait';
+  const hostSelect = document.getElementById('rewrite-host');
+  const personaId = (hostSelect && hostSelect.value) || null;
+  toggle('btn-rewrite', false);
+  setStatus('status-rewrite', currentPackageId ? '洗稿中（素材包已注入）…' : '洗稿中，请稍候...');
+  try {
+    const perspective = document.getElementById('perspective-1')?.value?.trim() || null;
+    const { job_id } = await api('POST', `/articles/${currentArticle.id}/rewrite`, {
+      model, prompt_template: template, video_format: videoFormat, perspective,
+      persona_id: personaId,
+      material_package_id: currentPackageId || null,  // 七层素材包注入
+    });
+    const source = new EventSource(`${API}/jobs/${job_id}/events`);
+    const ta = document.getElementById('script-text');
+    ta.value = '';
+    source.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (_) { return; }  // P2-4: 坏数据不崩
+      if (data.type === 'rewrite_chunk') {
+        ta.value += data.chunk;
+        ta.scrollTop = ta.scrollHeight;
+        updateCharCount();
+      } else if (data.type === 'rewrite_done') {
+        source.close();
+        setStatus('status-rewrite', '洗稿完成', false, true);
+        ta.value = '';
+        fetchScript(data.script_id);
+        toggle('btn-save-script', true);
+        toggle('btn-goto-audio', true);
+        // 显示修正观点区域
+        const p2section = document.getElementById('perspective-2-section');
+        if (p2section) p2section.style.display = 'block';
+        // 半自动流程: 洗稿后显示爆品改造入口 (手动触发)
+        const boostSection = document.getElementById('boost-section');
+        if (boostSection) boostSection.style.display = 'block';
+        toggle('btn-boost', true);
+      } else if (data.type === 'rewrite_error') {
+        source.close();
+        setStatus('status-rewrite', data.error, true);
+        toggle('btn-rewrite', true);
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      setStatus('status-rewrite', 'SSE 连接错误', true);
+      toggle('btn-rewrite', true);
+    };
+  } catch (e) {
+    setStatus('status-rewrite', e.message, true);
+    toggle('btn-rewrite', true);
+  }
+}
+
+// ── 字数统计 (七层模板目标 1400~1550) ──
+function updateCharCount() {
+  const ta = document.getElementById('script-text');
+  const el = document.getElementById('script-char-count');
+  if (!ta || !el) return;
+  const n = ta.value.length;
+  let hint = '';
+  if (n > 0 && n < 2000) hint = ' · ⚠ 距目标还差 ' + (2100 - n) + ' 字 — 情感档语速 6.9字/秒, 不足 5 分钟';
+  else if (n > 2500) hint = ' · 略超目标';
+  el.textContent = `${n} 字 · 目标 2100~2400（七层·情感语速实测校准）${hint}`;
+}
+
+// ── 修正观点 (从 app.js v6 迁入, 按钮改 btn-goto-audio) ──
+async function correctScript() {
+  if (!currentScript) return;
+  const perspective = document.getElementById('perspective-2')?.value?.trim();
+  if (!perspective) {
+    setStatus('status-correct', '请输入修正观点', true);
+    return;
+  }
+  const model = document.getElementById('rewrite-model').value;
+  toggle('btn-correct', false);
+  setStatus('status-correct', '修正中，请稍候...');
+  try {
+    const { job_id } = await api('POST', `/scripts/${currentScript.id}/correct`, { perspective, model });
+    const source = new EventSource(`${API}/jobs/${job_id}/events`);
+    source.onmessage = (ev) => {
+      let data;
+      try { data = JSON.parse(ev.data); } catch (_) { return; }
+      if (data.type === 'correct_chunk') {
+        const ta = document.getElementById('script-text');
+        ta.value += data.chunk;
+        ta.scrollTop = ta.scrollHeight;
+        updateCharCount();
+      } else if (data.type === 'correct_done') {
+        source.close();
+        setStatus('status-correct', '修正完成', false, true);
+        document.getElementById('script-text').value = '';
+        fetchScript(data.script_id);
+        toggle('btn-correct', true);
+        toggle('btn-save-script', true);
+        toggle('btn-goto-audio', true);
+      } else if (data.type === 'correct_error') {
+        source.close();
+        setStatus('status-correct', data.error, true);
+        toggle('btn-correct', true);
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      setStatus('status-correct', 'SSE 连接错误', true);
+      toggle('btn-correct', true);
+    };
+  } catch (e) {
+    setStatus('status-correct', e.message, true);
+    toggle('btn-correct', true);
+  }
+}
+
+async function loadLatest() {
+  try {
+    const list = await api('GET', '/articles?limit=1');
+    if (!list.length) {
+      setStatus('status-rewrite', '暂无稿件 — 请先到「新闻线索」页创建', true);
+      return;
+    }
+    currentArticle = list[0];
+    setStatus('status-rewrite', `已加载稿件: ${currentArticle.title || currentArticle.id}`, false, true);
+    showBanner();
+    toggle('btn-rewrite', true);
+    // 顺带绑定该文章最新素材包 (等价于新闻线索页跳转, 2026-08-15)
+    try {
+      const pkgs = await api('GET', `/materials/packages?article_id=${currentArticle.id}`);
+      const preferred = pkgs.find(p => p.status === 'audited') || pkgs[0];
+      if (preferred) {
+        currentPackageId = preferred.id;
+        await renderMaterialBadge();
+      }
+    } catch (_) { /* 无包静默 */ }
+  } catch (e) {
+    setStatus('status-rewrite', e.message, true);
+  }
+}
+
+// ── 人物/模板下拉 (从 app.js v6 迁入) ──
+async function loadHosts() {
+  const select = document.getElementById('rewrite-host');
+  if (!select) return;
+  try {
+    // 人物即账号 (2026-08-08): 下拉读 /personas, 选项值 = persona.id
+    const personas = await api('GET', '/personas');
+    select.innerHTML = '';
+    if (!personas.length) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '无人物（请先到「人物」页创建）';
+      select.appendChild(opt);
+      return;
+    }
+    let defaultSelected = false;
+    personas.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.brand_name ? `${p.name} · ${p.brand_name}` : `${p.name} · ${p.prompt_template}`;
+      select.appendChild(opt);
+      if (!defaultSelected && p.brand_name) {
+        opt.selected = true;
+        defaultSelected = true;
+      }
+    });
+    if (!defaultSelected && personas.length) select.selectedIndex = 0;
+  } catch (e) {
+    console.error('加载数字人失败', e);
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '人物加载失败';
+    select.appendChild(opt);
+  }
+}
+
+async function loadPromptTemplates() {
+  try {
+    const templates = await api('GET', '/articles/prompt-templates');
+    const select = document.getElementById('rewrite-template');
+    select.innerHTML = '';
+    if (!templates.length) {
+      const opt = document.createElement('option');
+      opt.value = 'laochen_default';
+      opt.textContent = 'laochen_default';
+      select.appendChild(opt);
+      return;
+    }
+    templates.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = t.name;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('加载提示词模板失败', e);
+    const select = document.getElementById('rewrite-template');
+    select.innerHTML = '<option value="laochen_default">laochen_default</option>';
+  }
+}
+
+// ── persona 提示 (拆页后音色在音频加工页, 这里只提示不定音色) ──
+let _personaLockInfo = null;
+async function checkPersonaLock() {
+  const template = document.getElementById('rewrite-template').value;
+  if (!template) return;
+  try {
+    const persona = await api('GET', `/personas/by-template/${encodeURIComponent(template)}`);
+    if (persona) {
+      _personaLockInfo = persona;
+      const voiceName = persona.voice ? persona.voice.name : (persona.voice_id ? '已绑定' : '未绑定');
+      const roleName = persona.role ? persona.role.name : '未绑定';
+      const info = document.getElementById('material-context-info');
+      if (info && !info.textContent) {
+        info.textContent = `🔒 人物「${persona.name}」— 音色: ${voiceName}（音频加工页锁定）| 形象: ${roleName}`;
+      }
+    } else {
+      _personaLockInfo = null;
+    }
+  } catch (e) { _personaLockInfo = null; }
+}
+
+// ── 项目目录渲染 (P1-2 修复版, 从 app.js v6 迁入) ──
+function renderProjectDir(projectDir) {
+  let el = document.getElementById('project-dir');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'project-dir';
+    el.className = 'project-dir';
+    const scriptText = document.getElementById('script-text');
+    const anchor = scriptText ? scriptText.parentElement : document.querySelector('#step-2-card, .card');
+    if (!anchor) return;
+    anchor.insertBefore(el, scriptText);
+  }
+  if (projectDir) {
+    el.innerHTML = `<strong>项目目录：</strong><span style="color:#94a3b8;word-break:break-all;">${projectDir}</span> <span style="font-size:0.75rem;color:#64748b;">(服务器本地路径，请直接在服务器查看)</span>`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function saveScript() {
+  if (!currentScript) return;
+  const text = document.getElementById('script-text').value.trim();
+  try {
+    // 2026-08-12: 改造后编辑区显示改造稿, 保存写回 boosted_text (TTS 用改造稿)
+    const hasBoosted = !!currentScript.boosted_text;
+    const payload = hasBoosted ? { boosted_text: text } : { script_text: text };
+    currentScript = await api('PUT', `/scripts/${currentScript.id}`, payload);
+    setStatus('status-rewrite', hasBoosted ? '改造稿已保存并重新分段' : '脚本已保存并重新分段', false, true);
+    toggle('btn-goto-audio', true);
+  } catch (e) {
+    setStatus('status-rewrite', e.message, true);
+  }
+}
+
+// ── 爆品改造 (从 app.js v6 迁入) ──
+async function boostScript() {
+  if (!currentScript) return;
+  toggle('btn-boost', false);
+  setStatus('status-boost', '爆品改造中（P2预埋→P3节奏→P4精修→P1电击→P5情绪标注）…');
+  try {
+    const { job_id } = await api('POST', `/scripts/${currentScript.id}/boost`);
+    const source = new EventSource(`${API}/jobs/${job_id}/events`);
+    source.onmessage = (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.type && data.type.startsWith('boost_') && data.msg) {
+        setStatus('status-boost', data.msg);
+        return;
+      }
+      if (data.type === 'boost_done') {
+        source.close();
+        if (data.boosted) {
+          setStatus('status-boost', '✅ 爆品改造完成', false, true);
+          fetchScript(currentScript.id);
+        } else {
+          setStatus('status-boost', '改造未执行', true);
+        }
+        toggle('btn-boost', true);
+      } else if (data.type === 'boost_error') {
+        source.close();
+        setStatus('status-boost', '爆品改造失败: ' + (data.error || ''), true);
+        toggle('btn-boost', true);
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      setStatus('status-boost', 'SSE 连接错误', true);
+      toggle('btn-boost', true);
+    };
+  } catch (e) {
+    setStatus('status-boost', e.message, true);
+    toggle('btn-boost', true);
+  }
+}
+
+// ── 调取已有脚本 (从 app.js v6 迁入) ──
+async function selectExistingScript(select) {
+  const scriptId = select.value;
+  if (!scriptId) return;
+  try {
+    await fetchScript(scriptId);
+    const p2 = document.getElementById('perspective-2-section');
+    if (p2) p2.style.display = 'block';
+    const boost = document.getElementById('boost-section');
+    if (boost) boost.style.display = 'block';
+    toggle('btn-save-script', true);
+    toggle('btn-boost', true);
+    toggle('btn-goto-audio', true);
+    // 调取脚本后回填来源文章 banner
+    if (currentScript.article) {
+      currentArticle = currentScript.article;
+      currentPackageId = currentScript.material_package_id || null;
+      showBanner();
+    }
+    setStatus('status-rewrite', '已调取脚本，可编辑/改观点/爆品改造', false, true);
+  } catch (e) {
+    setStatus('status-rewrite', '调取脚本失败: ' + e.message, true);
+  }
+}
+
+// ── banner (来源稿件 + 素材包状态) ──
+function showBanner() {
+  const banner = document.getElementById('article-banner');
+  if (!banner || !currentArticle) return;
+  banner.style.display = 'block';
+  document.getElementById('banner-article-title').textContent =
+    currentArticle.title || currentArticle.id;
+  renderMaterialBadge();
+}
+
+async function renderMaterialBadge() {
+  const el = document.getElementById('material-context-info');
+  if (!el) return;
+  if (!currentPackageId) {
+    el.textContent = '';
+    return;
+  }
+  try {
+    const p = await api('GET', `/materials/packages/${currentPackageId}`);
+    const covered = p.audit_json
+      ? Object.values(p.audit_json.layers || {}).filter(l => l.covered).length : null;
+    el.textContent = covered !== null
+      ? `🧺 素材包已挂载: ${p.items.length} 条素材 · 覆盖 ${covered}/7 层`
+      : `🧺 素材包已挂载: ${p.items.length} 条素材（未审计）`;
+  } catch (e) { el.textContent = ''; }
+}
+
+function gotoAudio() {
+  if (!currentScript) return;
+  window.location.href = '/web/audio.html?script_id=' + encodeURIComponent(currentScript.id);
+}
+
+// ── 初始化: URL 参数 (article_id/package_id 从新闻线索页跳入) ──
+document.addEventListener('DOMContentLoaded', async () => {
+  loadPromptTemplates();
+  loadHosts();
+  // 字数实时统计
+  const ta = document.getElementById('script-text');
+  if (ta) ta.addEventListener('input', updateCharCount);
+
+  const params = new URLSearchParams(location.search);
+  const articleId = params.get('article_id');
+  const packageId = params.get('package_id');
+  if (articleId) {
+    try {
+      currentArticle = await api('GET', `/articles/${articleId}`);
+      if (packageId) currentPackageId = packageId;
+      showBanner();
+      toggle('btn-rewrite', true);
+      setStatus('status-rewrite', currentPackageId
+        ? '已就绪 — 洗稿将注入素材包' : '已就绪 — 可直接洗稿（无素材包）');
+    } catch (e) {
+      setStatus('status-rewrite', '加载稿件失败: ' + e.message, true);
+    }
+  } else {
+    // 直开本页 (无 URL 参数): 自动绑定最新稿件, 免点「加载最新稿件」(2026-08-15)
+    await loadLatest();
+  }
+});

@@ -1,15 +1,8 @@
 # -*- coding: utf-8 -*-
 """爆品改造服务 (Boost Service) — 洗稿后自动优化口播稿的流量指标.
 
-流水线 (2026-08-10, 用户拍板):
-  P1 开场专家 (前 30 秒 + 标题)  ┐
-                                ├─ 并行 (P1 产头, P2 正好不要头)
-  P2 预埋专家 (评论 + 关注回收) ┘
-  P3 节奏专家 (呼吸点)           ← 等 P1/P2 都回来再跑 (P3 需要 P2 的预埋位置)
-
-每个 Pass 调用一次 LLM (DeepSeek pro), 输出 JSON (P1/P2) 或纯文本 (P3).
-产物:
-  boosted_text  = 改造后全文 (P1 开头 + P2 预埋正文 + P3 呼吸点)
+流水线 (2026-08-14, 用户拍板): P2→P3→P4→P1→P5
+  P2→P3→P4→P1→P5 串行 (P1 后移至精修之后, 避免被覆盖).
   boost_titles  = P1 输出的标题候选 (默认用第一个)
 保留 script_text 为洗稿原稿 (对比回滚).
 
@@ -31,23 +24,67 @@ logger = logging.getLogger(__name__)
 
 # ── Pass 提示词 ──────────────────────────────────────────────────────────────
 
-P1_PROMPT = """你是{persona}的【开场外科医生】。你的工作不是创作，而是像外科医生一样，在不触动身体其他部位的情况下，精准替换掉原稿的开头。
+P1_PROMPT = """你是{persona}的【开场电击外科医生】。你的唯一目标是：在用户划走之前的 3 秒内，通过一次“认知电击”，强行锁死对方的注意力。
 
-# 【手术任务：只输出前 30 秒 + 标题】
+# 🧠 电击逻辑（绝对执行）
+你必须将原稿的开头，重构成一个**【电击四部曲】**。禁止任何铺垫，禁止任何宏大叙事，禁止任何“娓娓道来”。
 
-## ⚠️ 绝对禁区（触发即失败）
-- ❌ 禁止首句出现：自我介绍（我是{persona}）、报告、机构、政府、数据。
-- ❌ 禁止输出：画面描述、BGM、时长、数字人形象、封面文案。
-- ❌ 禁止合并：前 30 秒必须且只能是 4 个独立的短句。
+# 🗣️ 口播清晰度（贯穿四句，违反即失败）
+- **主语清晰**：每句主谓宾完整，禁止无主句（如"拼命建中心"→谁建？）。要写"各大闭源厂商疯狂砸算力中心"，不写"拼命建中心"。
+- **短句分层**：一句只表达一个意思，多件事拆成多句，禁止挤在一句（口播语速快时观众抓不住）。
+- 每句写完自问：念出来，观众能立刻知道"谁、干了什么、跟我有啥关系"吗？
 
-## 你的输出 = 严格 JSON（无其他内容）
+1. 第一句：【极限压力/死穴抛出】（0-5s）
+目标：制造“这事儿跟我有关”且“情况极其危急”的错觉。
+电击要求：禁止使用“在...背景下”、“随着...的发展”等引导词。禁止使用宏大名词（如：算力壁垒、制裁格局）。
+操作：用一个**【极具画面感的动作词】或【极端的负面状态】**直接开场。
+❌ 错误示范：“当美国AI制裁层层收紧，行业陷入恐慌。”（太沉，像新闻）
+✅ 电击示范：“国产AI现在有个死穴，而且被锁得死死的，全行业都在发抖。” / “咱们现在的AI芯片，其实是在走钢丝。”
+
+2. 第二句：【群体反差/对标】（5-15s）
+目标：建立一个“所有人都在犯错”的共识，为主角的出场做铺垫。
+电击要求：快速扫描全行业，用“都在...”、“全在...”等词汇制造一种“集体盲目”的氛围。
+操作：描述一个所有人都认为正确、但其实是死路的行为。
+✅ 电击示范：“就在所有人都觉得，只要疯狂烧钱抢流量、卷参数就能赢的时候。”
+
+3. 第三句：【反常识爆点/反差】（15-20s）
+目标：抛出一个极其离谱、不符合逻辑的事实，强行制造“为什么”的悬念。
+电击要求：必须是【极端的 A】→【极端的 B】。
+操作：揭露一个看似反常、实则真实存在的反差行为（如：巨头把未来产能全锁给AI、消费疲软但业绩暴涨）。**必须是原文真实信息**，禁止编造“不营销却爆火”“蠢操作却成功”等原文没有的情节。
+✅ 电击示范：“结果有巨头干了件最狠的事：把未来五年产能，全锁给AI。”（基于原文“产能售罄、签五年长约”）
+
+4. 第四句：【认知反转/价值定调】（20-30s）
+目标：揭露这个反差背后的“大棋局”，给用户一个必须听下去的理由。
+电击要求：制造“世俗评价/常理预期”与“真实结果”的剧烈冲突。
+操作：用“常理以为 A → 真实结果是 B”的逻辑收尾。**反转必须从原文真实信息中提取**（如：消费市场低迷 vs 巨头业绩暴涨的冰火两重天、缺货却只供企业级）。**悬念分层递进**：把"他做A→其实B→为了C→最终D"拆成多个短句逐步揭开，不挤在一句（如："以为他发善心？不，他在砸对手金矿。铺自己的管道，等你跳进去。标准，他定。")
+✅ 电击示范：“消费市场惨淡，存储该降价甩卖。结果巨头业绩暴涨45倍——冰火两重天，这背后藏着什么？”
+
+# 🚫 真实性红线（最高优先，违反即失败）
+- ❌ **禁止编造被骂/被嘲讽/被质疑/被笑话**等原文不存在的情节。反转冲突必须基于原文真实事实（数据/供需/行业矛盾），不是虚构戏剧冲突。
+- ❌ 禁止为凑“被骂→封神”模板，给原文没有的内容硬加戏剧性。
+- ❌ **禁止夸大打击面（范围失真）**：死穴/爆点必须精确指代对象。原文只讲"闭源云厂商"就写"闭源云厂商"，**禁止写成"全行业/所有人/AI巨头"这类一竿子打翻**——专业观众一眼判定标题党，冲击力靠精准不靠夸大。
+  - ❌ 错误："AI巨头把你的隐私当耗材。全行业都在吸数据血。"（范围夸大）
+  - ✅ 正确："闭源云厂商，早把普通人隐私当训练耗材。"（精确指代，冲击不减）
+
+# ⚠️ 绝对禁区（触发即失败）
+- ❌ 禁止宏大叙事：严禁出现“格局”、“赛道”、“维度”、“战略”等词汇。请用“死穴”、“坑”、“算盘”、“走钢丝”代替。
+- ❌ 禁止慢启动：严禁第一句出现任何背景介绍。
+- ❌ 禁止礼貌用语：严禁出现“大家好”、“今天我想聊聊”。
+
+# 📋 输出格式（严格 JSON）
 {
-  "opening_30s": ["句1(0-5s 砸冲击词，无铺垫)", "句2(5-15s 兑现爆点，具体欺骗行为)", "句3(15-20s {persona}式冷幽默/反讽)", "句4(20-30s 抛全篇悬念，拉回注意力)"],
-  "titles": ["推荐标题(含冲击词≤25字)", "备选1", "备选2"]
+  "opening_30s": [
+    "句1(电击开场：动作词起手，抛出死穴/危机)",
+    "句2(群体对标：揭露行业共识/集体盲目)",
+    "句3(反常爆点：抛出离谱事实/极致反差)",
+    "句4(认知反转：世俗评价VS结果封神，抛出深层悬念)"
+  ],
+  "titles": ["一个能让用户产生'恐惧错过'心理的标题", "备选1", "备选2"]
 }
 
-## 字数硬约束
-opening_30s 四句总字数必须 120-150 字（不含标点），每句 25-40 字。"""
+# 📐 字数硬约束
+总字数 120-150 字。
+每句必须是短句，严禁出现超过 20 字的长句。"""
 
 P2_PROMPT = """你是{persona}的【数据操盘手】。你不是在做"广告"，你是在替{persona}把话说到让用户必须回应的地步。
 
@@ -143,7 +180,74 @@ P3_PROMPT = """你是{persona}的【节奏调节师】。你深谙人类大脑�
 (输出完整文案，呼吸点请用【加粗】标出。除呼吸点外，其余文字必须与原稿 1:1 一致。预埋标注保留原样。结尾严格按【结尾结构硬约束】排列)"""
 
 
-DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】。你的工作不是写作，而是精确复刻一个普通用户看完这篇新闻后，心里真实冒出来的所有反应。
+# P4 (2026-08-14 重写): 7层适配版精修师.
+# 旧版假设 P1钩子+P2预埋+P3呼吸点 旧结构, 硬编码旧身份段/结尾/情绪标签 → 跑7层稿全面破坏.
+# 新版: 输入=7层洗稿原稿(已是完整爆款结构), 只做"逐句表达精修", 1:1锁定结构/身份段/结尾/钩子.
+# 情绪交给 P5 (emotion_annotations 给 IndexTTS), P4 不注入任何行内 [情绪] 标签.
+P4_PROMPT = """你是{persona}的【最终精修师】。你拿到的是一篇已完成的多层结构口播稿（极速钩子→身份接管→背景纵深→硬实力底牌→实测修罗场→商业降维→价值观收割）。你的唯一任务：**逐句精修表达**，让口播更顺滑、更口语、更有画面感——**但绝对禁止改变稿件结构、身份段、结尾、钩子或任何事实**。
+
+# ⚖️ 结构锁定铁律（最高优先级，违反即失败）
+- **1:1 保留稿件原有的层结构、段落顺序、身份段、结尾、钩子**。你的权限只有"逐句打磨表达"，没有"重组/合并/拆分段落"的权限。
+- **身份段原样保留**：输入稿的身份段（通常是"我是XX，专盯[赛道品类]"格式）必须 1:1 原样保留，**禁止改成"大家好，我是XX""在这个不确定的时代"等任何旧版开场**。
+- **结尾原样保留**：输入稿的结尾（通常是金句+点赞/收藏+下期预告三件套）必须 1:1 原样保留，**禁止改成"听懂逻辑，少走弯路。我是XX，下期见"等任何旧版结尾**。
+- **钩子原样保留**：开头钩子段 1:1 原样，禁止重写。
+
+# ⚖️ 信息守恒铁律
+- **逐段对应**：输入稿每一段都必须有对应输出，禁止删段、禁止合并。输出段落数 ≥ 输入段落数。
+- **字数下限锁（2026-08-15）**：输出总字数不得低于原文的 95%。精修 = 打磨表达，不是压缩——禁止把多个短句合并成长句来省字数。若精修后字数不足，用强化画面感的修饰补足，禁止注水复述。
+- **数据零丢失**：所有数字、人名、公司名、专有名词（昇腾、智谱、中科加禾等）1:1 保留。
+- **数字锚定**：孤立数字（"暴涨45倍""营收89.6亿"）首次出现必须带对比基准（"净利润同比去年暴涨45倍"）。未锚定的补上锚定，不改变数字本身。
+- **金句保留**：原稿犀利比喻和金句必须强化，禁止稀释。
+
+# 🎙️ 表达精修（你的核心工作）
+- **短句化**：每句 ≤20 字，用标点（，。！？；）自然停顿（IndexTTS 不认 || 符号，禁止产出 ||）。
+- **型号连字符替换（2026-08-15）**：型号/版本号中的连字符一律删除并转中文读法（GLM-5.3 → GLM五点三；GLM-130B → GLM一百三十B；DeepSeek-V4 → DeepSeek四版）。裸连字符 TTS 会读成「负」。
+- **清除预告/计数句（2026-08-15）**：「这篇的赞，我给三条」「下面说三件事」等内容预告/计数句直接删除，只保留内容本身。
+- **口语化电击**：严禁"综上所述""值得注意的是"等 AI 腔；用老谭式转场（"这事儿咱们得剥开看""这里面有个坑"）。
+- **有画面感**：让听众闭眼能"看见"画面，拒绝抽象名词堆砌。
+- **先炸后圆**：重要结论先抛，再解释背景。
+- **认知差**：适当插入"普通人以为 A，但实际是 B"。
+- **主观评价中立化**：主观情绪论断（"我觉得他不好"）改写为中立陈述+开放互动（"我不评价他，欢迎评论区聊聊"），仅改主观句，不动事实。
+
+# 🚫 绝对禁区（触发即失败）
+- ❌ 禁止编造事实。
+- ❌ 禁止改变结构/身份段/结尾/钩子（只能精修表达）。
+- ❌ **禁止注入任何 [calm]/[serious]/[confident] 等情绪标签**——情绪由下游 P5 统一标注，你不要加任何 [xxx]。
+- ❌ **禁止重复句**：同一句话、同一比喻、同一论断禁止在稿中出现两次。精修时若发现输入稿本身有重复，合并或删去重复处。
+- ❌ 禁止宏大叙事词汇（格局/赛道/维度/战略），翻译成具象口语（死穴/坑/算盘/走钢丝）。
+- ❌ 禁止元叙述（"下面进入正文"等）。
+
+# 📋 输出格式（严格执行）
+直接输出精修后的完整口播稿正文，**从第一句到最后一句**。**严禁输出任何清单、说明、[精修清单]、# 标题、层标题**——只输出稿件本身。"""
+
+
+P5_PROMPT = """你是{persona}的【情绪标注师】。你拿到的是【最终定稿】。你的唯一任务：**不动任何一个字**，把定稿按"情绪起伏"切成段落，并给每段标注「情绪 + 强度档」。
+
+# 🎭 情绪基调（整篇一个主基调，禁止频繁切换）
+整篇以**惊讶(surprised)**为主基调（叙述/铺垫/爆点/转折/身份段都用惊讶）。
+serious(揭秘)、happy(升华) 仅用于**关键大模块**，全篇情绪切换 ≤2-3次。
+**禁止用"平静"**（平淡会让人划走，低强度段用惊讶/低档替代）。
+
+# 🎚️ 强度档（每段必填，1-7）
+1=最弱(平缓叙述) → 7=最强(高亢冲击)，每档差0.05。
+主体用惊讶低档（叙述/身份段1-3档），关键段4-7档。
+相邻段强度差≤2档，形成情绪坡度。
+
+# 📐 段落划分规则（关键：大模块，禁止切太细）
+- 大模块级切段：整篇切6-10段，每段是一个完整语义模块（含多句）
+- 情绪切换只在模块边界，且全篇≤2-3次
+
+# 🚫 绝对禁区
+- 禁止改动任何文字
+- 禁止自创情绪
+- 禁止切超过10段
+
+# 📋 输出格式（每段一行）
+[情绪/强度] 段落文字（原文1:1，含||）"""
+
+
+
+DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】。你的工作不是写作，而是精确复刻一个普通用户看完这篇新闻后，心里真实冒出来的所有反应，以及评论区里真实存在的几种典型人设。
 
 # 核心原理（最重要）
 一个真实用户看新闻，不是"带着问题找答案"，也不是"句句吐槽"，而是三种反应混在一起：
@@ -153,7 +257,15 @@ DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】�
 
 这三种反应，每一种都是钩子的来源。你的任务是把一个普通用户（无专业背景、平时刷短视频）看完这篇新闻后，这三种反应全都挖出来。
 
-# 任务：输出三块
+同时，你还要模拟评论区里必然出现的**五种典型人设**。每条新闻的评论区，都会有这五类人出现：
+
+1. **技术科普党** — 真懂技术的人，觉得媒体讲得太浅，出来写一段技术科普（越难越好，技术型输出）。观众感觉："这人真懂。"
+2. **国产无脑支持党** — 不懂技术，但看到国产就支持，情绪驱动。观众感觉："热血上头。"
+3. **品牌红粉** — 某品牌/阵营的粉丝，会引用之前的事件来为品牌辩解或拔高。观众感觉："是有这回事。"
+4. **品牌黑粉** — 某品牌/阵营的黑粉，会引用之前的事件来攻击。观众感觉："虽然偏激，但有点道理。"
+5. **源头党** — 指出新闻原始来源（"这新闻最早是XX发的""原文链接呢"），不是评论，是信息来源标注。观众感觉："可信。"
+
+# 任务：输出四块
 
 ## 第一块：用户反应清单（4-8 条）
 每条是"一个普通人看完新闻后心里的话"，三类都要有：
@@ -162,16 +274,31 @@ DECONSTRUCT_PROMPT = """你是短视频财经稿的【观众心理解构师】�
 - 嫌累的（"说半天想表达啥？"）
 要求：口语、真实、像普通人心里话，不是专业分析。
 
-## 第二块：层层递进叙事线
+## 第二块：评论区生态人设（必填 5 条）
+每条对应一种典型评论人设，按真实评论区的口吻写，每条 1-3 句话。
+注意：
+- 技术科普党：内容要硬，涉及具体技术术语，不能泛泛而谈
+- 红粉：引用一个真实存在的事件/数据来支撑
+- 黑粉：引用一个真实存在的事件/数据来攻击
+- 源头党：格式为"原文链接：… / 来源：…"
+
+## 第三块：层层递进叙事线
 把用户最想知道、最困惑的点编排成"先讲什么再讲什么"，层层揭开。
 每层解答一个"用户的反应/疑问"，下一层更深。
 
-## 第三块：资料清单
+## 第四块：资料清单
 要讲清楚这些，需要备足哪些料（3-8条）。
 
 # 输出格式（严格 JSON）
 {
   "reactions": ["用户心里话1（标注类型：懂/盲区/嫌累）", "..."],
+  "comment_archetypes": [
+    {"type": "tech_explainer", "comment": "技术科普党写的评论", "audience_feeling": "这人真懂"},
+    {"type": "national_supporter", "comment": "国产支持党的评论", "audience_feeling": "热血上头"},
+    {"type": "brand_fan", "comment": "品牌粉丝的评论，引用之前事件", "audience_feeling": "有道理"},
+    {"type": "brand_hater", "comment": "品牌黑粉的评论，引用之前事件", "audience_feeling": "有点道理"},
+    {"type": "source_tracker", "comment": "原始新闻来源标注", "audience_feeling": "可信"}
+  ],
   "narrative": [{"layer": 1, "answers": "对应反应", "content": "这层讲什么"}, ...],
   "research": ["资料需求1", "..."]
 }"""
@@ -227,9 +354,18 @@ def clean_boosted_text(text: str) -> str:
                 continue
             in_listing = False  # 脱离清单
 
+        # 正文锚点 (2026-08-12): 【888999000】是下游拼接的内部标记, 整行删除
+        if "【888999000】" in s:
+            continue
+
         # 模块标题整段删
         mm = re.match(r"^【([^】]{1,10})】", s)
         if mm and mm.group(1) in _MODULE_MARKERS:
+            continue
+
+        # markdown 标题整行删 (2026-08-14): ## 第X层 / # 精修清单 / # 最终全稿 等
+        # 7层洗稿稿 LLM 偶发自加 ## 层标题; P4 也可能漏出 # 清单头. 兜底剥掉, 不进 boosted_text
+        if re.match(r"^#{1,6}\s", s):
             continue
 
         # 加粗内容句 **【xxx】** → 去 ** 和 【】
@@ -237,6 +373,10 @@ def clean_boosted_text(text: str) -> str:
         # 去内容句的【】括号 (保留文字)
         s = re.sub(r"^【([^】]+)】", r"\1", s)
         s = re.sub(r"【([^】]+)】", r"\1", s)
+        # 剥离"（此处口播为X）"标注 (2026-08-12): 多音字消歧误标专有名词如 昇腾→生疼。
+        # 昇腾（此处口播为生疼）→ 昇腾；【昇腾（口播：生疼）】→ 昇腾
+        s = re.sub(r"[（(](?:此处|口播)[：:][^）)]*[）)]", "", s)
+        s = re.sub(r"[（(]此处口播为[^）)]*[）)]", "", s)
         # 清理孤立单 | (保留 || 停顿符)
         s = re.sub(r"(?<!\|)\|(?!\|)", "", s)
         s = s.strip()
@@ -246,35 +386,44 @@ def clean_boosted_text(text: str) -> str:
     return "\n".join(out)
 
 
-def _deepseek_cfg():
-    """获取 DeepSeek 配置. 生产走 lifespan 单例, 独立脚本/后台线程 fallback 到 load_config."""
+def _resolve_llm_cfg():
+    """获取 LLM 配置. 首选硅基流动, fallback DeepSeek (2026-08-14)."""
+    from ..config import get_config, load_config
     try:
-        from ..config import get_config
-
-        return get_config().deepseek
+        cfg = get_config()
     except RuntimeError:
-        return load_config().deepseek
+        cfg = load_config()
+    # 硅基流动优先
+    if cfg.siliconflow.api_key:
+        return cfg.siliconflow
+    return cfg.deepseek
 
 
-def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retries: int = 2) -> str:
-    """调用 DeepSeek pro. 返回文本; 抛异常由调用方处理.
+def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retries: int = 2,
+          model: str | None = None, temperature: float = 0.5) -> str:
+    """调用 LLM. 默认 flash; 传 model="pro" 或用洗稿模板时外部指定 model.
+    返回文本; 抛异常由调用方处理.
 
     重试: reasoning 模型偶发空输出/截断, 空响应时重试 up to retries 次.
+    temperature: 判定/审计类任务 (素材审计) 传 0.2 求稳定 (2026-08-15).
     """
     import time
-
     import requests
 
-    cfg = _deepseek_cfg()
+    cfg = _resolve_llm_cfg()
+    resolved = cfg.model_flash if model is None else (cfg.model_pro if model == "pro" else model)
     last_err: Exception | None = None
     for attempt in range(retries + 1):
         try:
             payload: dict[str, Any] = {
-                "model": cfg.model_pro,
+                "model": resolved,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.5,
+                "temperature": temperature,
                 "stream": False,
                 "max_tokens": max_tokens,
+                # 关闭 reasoning 思考链 (DeepSeek-V4-Flash 复杂 prompt 失控思考,
+                # 单步 110s+→15s 提速 7x); 非 reasoning provider 会忽略此字段
+                "enable_thinking": False,
             }
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
@@ -283,7 +432,7 @@ def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retri
                 "Content-Type": "application/json",
             }
             url = f"{cfg.base_url.rstrip('/')}/chat/completions"
-            resp = requests.post(url, headers=headers, json=payload, timeout=240)
+            resp = requests.post(url, headers=headers, json=payload, timeout=120)
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
             if content and content.strip():
@@ -322,6 +471,7 @@ def deconstruct_article(raw_text: str, *, emit=None) -> dict[str, Any] | None:
             return None
         return {
             "reactions": [str(r) for r in data.get("reactions", [])],
+            "comment_archetypes": data.get("comment_archetypes", []),
             "narrative": data.get("narrative", []),
             "research": [str(r) for r in data.get("research", [])],
         }
@@ -331,15 +481,64 @@ def deconstruct_article(raw_text: str, *, emit=None) -> dict[str, Any] | None:
 
 
 def format_pseudo_comments(decon: dict[str, Any]) -> str:
-    """把解构产出的用户反应，格式化为"伪用户评论"块，供 laotan 输入."""
+    """把解构产出的用户反应 + 评论生态人设，格式化后供 laotan 输入."""
+    reactions = decon.get("reactions", [])
+    archetypes = decon.get("comment_archetypes", [])
+
+    # 兼容: reactions 可能是字符串列表或 {"text":"...","type":"..."} 字典列表
+    def _reaction_text(r: Any) -> str:
+        if isinstance(r, dict):
+            return r.get("text", str(r))
+        return str(r)
+
+    parts = []
+
+    # 用户反应
+    if reactions:
+        lines = "\n".join(f'{i+1}. "{_reaction_text(r)}"' for i, r in enumerate(reactions))
+        parts.append(f"""【以下是这篇新闻的真实用户评论，请在改写稿件时充分考虑这些言论】
+（这些评论来自真正用户，反映了普通观众看到这条新闻时的真实反应、疑问和盲区）
+
+{lines}""")
+
+    # 评论生态人设
+    if archetypes:
+        arch_lines = []
+        for i, a in enumerate(archetypes):
+            if isinstance(a, dict):
+                c = a.get("comment", str(a))
+                t = a.get("type", "?")
+                f = a.get("audience_feeling", "")
+                arch_lines.append(f"{i+1}. [{t}] {c}  （观众感受：{f}）")
+        if arch_lines:
+            parts.append(f"""【以下是这篇新闻评论区里的五种典型人设，请在改写时充分考虑这些视角】
+（你的稿子会同时被这五类人看到，每一类人都可能成为评论区里的声音）
+
+{chr(10).join(arch_lines)}""")
+
+    return "\n\n".join(parts)
+
+
+def _format_deconstruct_for_prompt(decon: dict[str, Any] | None) -> str:
+    """把解构产物格式化为 P1/P2 的"观众真实痛点"上下文 (2026-08-12).
+
+    洗稿时 DECONSTRUCT 产出的用户反应清单已落库到 script.deconstruct_json。
+    爆品改造时读出来注入 P1 (钩子戳痛点) + P2 (争议对焦虑)。缺失/无反应 →
+    返回空串, P1/P2 输入与现状一致 (非破坏性)。
+    """
+    if not decon:
+        return ""
     reactions = decon.get("reactions", [])
     if not reactions:
         return ""
-    lines = "\n".join(f'{i+1}. "{r}"' for i, r in enumerate(reactions))
-    return f"""【以下是这篇新闻的真实用户评论，请在改写稿件时充分考虑这些言论】
-（这些评论来自真实用户，反映了普通观众看到这条新闻时的真实反应、疑问和盲区）
-
-{lines}"""
+    lines = ["\n\n【观众真实痛点（用户研究员产出，供你精准打击痛点）】"]
+    for i, r in enumerate(reactions[:8], 1):
+        if isinstance(r, dict):
+            rtext = r.get("text", str(r))
+        else:
+            rtext = str(r)
+        lines.append(f"{i}. {rtext}")
+    return "\n".join(lines)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -388,17 +587,26 @@ _LAOTAN_ANCHORS = (
 def _find_end(script_text: str) -> str:
     """返回 P2 需要的"去掉开头钩子"的正文.
 
-    洗稿稿结构通常为: [钩子段] + [身份段(大家好/我是XX)] + [引导词] + [正文...].
-    用 laotan 稳定引导词做锚点, 从锚点之后开始保留正文 (含锚点句本身,
-    让 P1 新开头 → 引导词 → 正文 的衔接自然). 比按段落位置跳过更可靠.
+    洗稿稿结构通常为: [钩子段] + [身份段(大家好/我是XX)] + [正文锚点] + [正文...].
+
+    定位优先级 (2026-08-12):
+    1. 正文锚点【888999000】—— 洗稿模板 (laotan 家族) 强制 LLM 在正文正式
+       开始处输出, 最可靠。从标记后开始保留正文。
+    2. 引导词锚点 (这事儿咱们得剥开看 等) —— 旧稿/未埋锚点稿兼容。
+    3. 兜底: 去掉钩子段 + 身份段 (保守删 1-2 行, 不猜正文起点)。
     """
+    # 1. 正文锚点 (2026-08-12): 洗稿模板埋入, 精准定位正文起点
+    anchor_idx = script_text.find("【888999000】")
+    if anchor_idx != -1:
+        return script_text[anchor_idx + len("【888999000】"):]
+    # 2. 引导词锚点
     for anchor in _LAOTAN_ANCHORS:
         idx = script_text.find(anchor)
         if idx != -1:
             # 从锚点所在行首开始 (保留引导词那整句)
             line_start = script_text.rfind("\n", 0, idx) + 1
             return script_text[line_start:]
-    # 无锚点 fallback: 去掉钩子段 + 身份段
+    # 3. 兜底: 去掉钩子段 + 身份段 (保守, 不猜正文起点)
     lines = [ln for ln in script_text.splitlines() if ln.strip()]
     drop = 1
     if len(lines) > 2 and ("大家好" in lines[1] or "我是" in lines[1]):
@@ -439,18 +647,50 @@ def _strip_p3_head(text: str) -> str:
     return text.strip()
 
 
+def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
+    """Parse P5 output: [emotion/strength] text -> [{"emotion":..., "strength":..., "text":...}]"""
+    import re
+    segs = []
+    pattern = re.compile(r"^\[(\w+)/(\d+)\]\s*(.*)")
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = pattern.match(line)
+        if m:
+            segs.append({
+                "emotion": m.group(1),
+                "strength": int(m.group(2)),
+                "text": m.group(3).strip(),
+            })
+    return segs if segs else None
+
+
+def annotate_emotions(text: str, persona_name: str = "老谭") -> str | None:
+    """独立 P5 情绪标注 (2026-08-14, 供"保存编辑"后重跑, 不经 run_boost).
+
+    输入口播稿全文 + 人设名 → 调 P5_PROMPT 标段落级情绪 → 返回 "[情绪/强度] 文本\\n..."
+    字符串(落 emotion_annotations 给 TTS/IndexTTS). 失败返回 None (调用方保留旧标注或置空).
+    """
+    try:
+        prompt = P5_PROMPT.replace("{persona}", persona_name) + "\n\n【最终定稿】\n" + text
+        raw = _call(prompt, max_tokens=4000)
+        segs = _parse_emotion_annotations(raw)
+        if segs:
+            return "\n".join(f"[{s['emotion']}/{s['strength']}] {s['text']}" for s in segs)
+        logger.warning("[boost] annotate_emotions parse failed: %s", raw[:100])
+        return None
+    except Exception as exc:
+        logger.warning("[boost] annotate_emotions failed: %s", exc)
+        return None
+
+
 def run_boost(db: Session, script_id: str, *, title: str | None = None,
               emit=None) -> dict[str, Any]:
-    """执行完整爆品改造.
+    """执行完整爆品改造 (2026-08-14, 新流水线: P2→P3→P4→P1→P5).
 
-    Args:
-        db: DB session
-        script_id: 目标 Script
-        title: 原标题 (P1 输入)
-        emit: 可选回调 (event_type, msg) 推送给前端
-
-    Returns:
-        {"boosted_text": ..., "boost_titles": [...], "p1_ok": bool, "p2_ok": bool, "p3_ok": bool}
+    P1 后移至精修之后, 避免被 P3/P4 覆盖.
+    失败容错: 单个 Pass 失败跳过, 用已成功部分的拼接; 全部失败回退原稿 (不卡死配音).
     """
     from ..models import Script
 
@@ -459,30 +699,95 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
         raise ValueError(f"Script {script_id} not found")
     original = script.script_text
     original_title = title or (script.article.title if script.article else None)
-    # 人物 IP 名: 优先 stamp_name (老谭), 其次 host.name (老谭聊科技).
-    # 用于提示词人设 + 固定结尾"我是XX" — 必须是 IP 简称 (老谭), 不是账号全名.
     persona_name = "老谭"
     if script.host:
         persona_name = (script.host.stamp_name if getattr(script.host, "stamp_name", None) else script.host.name) or "老谭"
 
+    decon_ctx = _format_deconstruct_for_prompt(script.deconstruct_json)
+
     def _emit(evt: str, msg: str) -> None:
         if emit:
-            try:
-                emit(evt, msg)
-            except Exception:
-                pass
+            try: emit(evt, msg)
+            except Exception: pass
 
     p1_result: dict[str, Any] | None = None
     p2_text: str | None = None
+    p3_text: str | None = None
+    p4_text: str | None = None
+    p5_annotated: str | None = None
 
+    # ── P2: 预埋争议+关注 ──
+    def _run_p2() -> None:
+        nonlocal p2_text
+        _emit("boost_p2_start", "预埋专家：埋争议 + 关注钩子")
+        try:
+            body = _find_end(original)
+            p2_prompt = P2_PROMPT.replace('{persona}', persona_name) + "\n\n【输入口播稿（无开头钩子）】\n" + body + decon_ctx
+            p2_text = _call(
+                p2_prompt,
+                max_tokens=3000,
+            )
+            _emit("boost_p2_done", "预埋专家：预埋完成")
+        except Exception as exc:
+            logger.warning("[boost] P2 failed: %s", exc)
+            _emit("boost_p2_error", f"预埋专家失败：{str(exc)[:100]}")
+
+    # ── P3: 呼吸点 ──
+    def _run_p3() -> None:
+        nonlocal p3_text
+        _emit("boost_p3_start", "节奏专家：插入呼吸点")
+        try:
+            p3_prompt = P3_PROMPT.replace('{persona}', persona_name) + "\n\n【输入口播稿全文】\n" + (p2_text or original)
+            raw_p3 = _call(
+                p3_prompt,
+                max_tokens=3500,
+            )
+            p3_text = _strip_p3_head(raw_p3)
+            _emit("boost_p3_done", "节奏专家：呼吸点完成")
+        except Exception as exc:
+            logger.warning("[boost] P3 failed: %s", exc)
+            _emit("boost_p3_error", f"节奏专家失败：{str(exc)[:100]}")
+
+    # ── P4: 精修正文 ──
+    def _run_p4() -> None:
+        nonlocal p4_text
+        _emit("boost_p4_start", "全篇精修：正文顺滑化")
+        try:
+            input_text = p3_text or p2_text or original
+            p4_prompt = P4_PROMPT.replace('{persona}', persona_name) + "\n\n【输入已完成全文】\n" + input_text
+            raw_p4 = _call(
+                p4_prompt,
+                max_tokens=4000,
+            )
+            p4_text = _strip_p3_head(raw_p4)
+            if not p4_text or not p4_text.strip():
+                p4_text = input_text
+            # 字数下限兜底 (2026-08-15): P4 偶发压缩 13~16% (合并短句/删句),
+            # 精修定位是 1:1 打磨, 输出 <88% 原文长度视为越权 → 回退原稿。
+            # 88% 而非 95%: 容忍旧稿 || 剥离等合法格式差。
+            if len(p4_text) < len(input_text) * 0.88:
+                logger.warning(
+                    "[boost] P4 shrunk %d→%d chars (<88%%), fallback to original",
+                    len(input_text), len(p4_text),
+                )
+                _emit("boost_p4_error", f"精修输出过短({len(p4_text)}字<{int(len(input_text)*0.88)}字)，已回退原稿防压缩")
+                p4_text = input_text
+            _emit("boost_p4_done", "全篇精修完成")
+        except Exception as exc:
+            logger.warning("[boost] P4 failed: %s", exc)
+            _emit("boost_p4_error", f"全篇精修失败：{str(exc)[:100]}")
+
+    # ── P1: 电击开场（后置，用 P4 后的正文） ──
     def _run_p1() -> None:
         nonlocal p1_result
         _emit("boost_p1_start", "开场专家：重写前 30 秒 + 标题")
         try:
+            input_text = p4_text or p3_text or p2_text or original
+            p1_prompt = P1_PROMPT.replace('{persona}', persona_name) + "\n\n【原标题】\n" + (original_title or '') + "\n\n【口播稿全文】\n" + input_text + decon_ctx
             raw = _call(
-                f"{P1_PROMPT.replace('{persona}', persona_name)}\n\n【原标题】\n{original_title or ''}\n\n【口播稿全文】\n{original}",
+                p1_prompt,
                 json_mode=True,
-                max_tokens=4000,
+                max_tokens=1500,
             )
             parsed = _parse_opening(raw)
             if not parsed:
@@ -495,66 +800,51 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
             logger.warning("[boost] P1 failed: %s", exc)
             _emit("boost_p1_error", f"开场专家失败：{str(exc)[:100]}")
 
-    def _run_p2() -> None:
-        nonlocal p2_text
-        _emit("boost_p2_start", "预埋专家：埋争议 + 关注钩子")
+    # ── P5: 情绪标注 ──
+    def _run_p5() -> None:
+        nonlocal p5_annotated
+        _emit("boost_p5_start", "情绪标注：惊讶基调 + 强度 1-7")
         try:
-            body = _find_end(original)
-            p2_text = _call(
-                f"{P2_PROMPT.replace('{persona}', persona_name)}\n\n【输入口播稿（无开头钩子）】\n{body}",
-                max_tokens=8000,
+            p5_prompt = P5_PROMPT.replace('{persona}', persona_name) + "\n\n【最终定稿】\n" + final_text
+            raw5 = _call(
+                p5_prompt,
+                max_tokens=4000,
             )
-            _emit("boost_p2_done", "预埋专家：预埋完成")
+            segs = _parse_emotion_annotations(raw5)
+            if segs:
+                p5_annotated = "\n".join(f"[{s['emotion']}/{s['strength']}] {s['text']}" for s in segs)
+                _emit("boost_p5_done", f"情绪标注完成：{len(segs)} 段")
+            else:
+                p5_annotated = raw5
+                _emit("boost_p5_error", "情绪标注解析失败，保留 raw")
         except Exception as exc:
-            logger.warning("[boost] P2 failed: %s", exc)
-            _emit("boost_p2_error", f"预埋专家失败：{str(exc)[:100]}")
+            logger.warning("[boost] P5 failed: %s", exc)
+            _emit("boost_p5_error", f"情绪标注失败：{str(exc)[:100]}")
 
-    # P1 与 P2 并行
-    _emit("boost_start", "爆品改造开始（开场 ∥ 预埋）")
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f1 = pool.submit(_run_p1)
-        f2 = pool.submit(_run_p2)
-        f1.result()
-        f2.result()
+    # ═══════ 执行流水线 (2026-08-14: 砍 P1-P3 + _splice) ═══════
+    # 7层洗稿已是完整爆款结构; P1(电击开场)/P2(预埋)/P3(呼吸点) 是旧六模块逻辑,
+    # 跑7层稿只会覆盖钩子/身份段/结尾. 实证(_test_7layer_ab A/B)确认 P1-P3 零增益纯破坏.
+    # 现仅保留: P4(逐句表达精修, 1:1锁定7层结构) → P5(情绪锚点给 IndexTTS).
+    _emit("boost_start", "爆品改造开始（P4精修→P5情绪标注）")
 
-    # P3 等 P1/P2 都回来再跑
-    p3_text: str | None = None
-    _emit("boost_p3_start", "节奏专家：插入呼吸点")
-    try:
-        spliced = _splice_boosted(p1_result, p2_text, original)
-        raw_p3 = _call(
-            f"{P3_PROMPT.replace('{persona}', persona_name)}\n\n【输入口播稿全文（含预埋标注）】\n{spliced}",
-            max_tokens=10000,
-        )
-        # 剥掉 [呼吸点审计清单] 只留 [最终全稿]
-        p3_text = _strip_p3_head(raw_p3)
-        _emit("boost_p3_done", "节奏专家：呼吸点完成")
-    except Exception as exc:
-        logger.warning("[boost] P3 failed: %s", exc)
-        _emit("boost_p3_error", f"节奏专家失败：{str(exc)[:100]}")
+    # P4 精修 (_run_p4 内部 fallback 链 p3/p2/original 全 None → 取 original 洗稿稿)
+    _run_p4()
 
-    # 汇总
-    # 全部失败 → 原稿原样回退 (不走拼接, 避免空行差异)
-    if not p1_result and not p2_text and not p3_text:
-        boosted = original
-    else:
-        boosted = p3_text if p3_text else _splice_boosted(p1_result, p2_text, original)
-        # 代码兜底: P3 模型可能丢 P1 新开头 (视"新句"为废稿). 若结果不含 P1 新开头, 强制拼回.
-        if p1_result:
-            opening_marker = p1_result["opening_30s"][0][:12]
-            if opening_marker and opening_marker not in boosted:
-                boosted = _splice_boosted(p1_result, boosted, original)
-    if not boosted.strip():
-        boosted = original
+    # final = P4 精修稿 (P4 失败回退原稿, 不卡死)
+    final_text = p4_text or original
+    if not final_text.strip():
+        final_text = original
 
-    # 剥离内部标注 (模块标题/清单/括号), 得到干净口播文本 (2026-08-11)
-    boosted = clean_boosted_text(boosted)
+    # 剥离内部标注 (层标题/锚点/清单残留)
+    final_text = clean_boosted_text(final_text)
 
-    titles = (p1_result or {}).get("titles", []) if p1_result else []
+    # P5 情绪标注 (产 emotion_annotations → IndexTTS 情绪合成)
+    _run_p5()
+
     return {
-        "boosted_text": boosted,
-        "boost_titles": titles,
-        "p1_ok": p1_result is not None,
-        "p2_ok": p2_text is not None,
-        "p3_ok": p3_text is not None,
+        "boosted_text": final_text,
+        "boost_titles": [],  # P1 砍掉, 不再产标题候选
+        "p5_annotated": p5_annotated,
+        "p4_ok": p4_text is not None,
+        "p5_ok": p5_annotated is not None,
     }

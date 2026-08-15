@@ -207,6 +207,45 @@ def update_article(article_id: str, payload: ArticleUpdate, db: Session = Depend
     return article
 
 
+@router.post("/{article_id}/deconstruct")
+def run_deconstruct(article_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """评论层独立解构 (2026-08-15): 复刻观众反应 + 评论区人设, 落 article.deconstruct_json.
+
+    洗稿时也会自动跑并覆盖; 此端点供新闻线索页在洗稿前单独触发 (选题洞察)。
+    """
+    article = db.query(Article).filter(Article.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    job_id = str(uuid.uuid4())
+
+    def _do_deconstruct():
+        if get_session_maker() is None:
+            _publish(job_id, {"type": "deconstruct_error", "error": "Database not initialized"})
+            return
+        with db_session() as db2:
+            try:
+                _publish(job_id, {"type": "deconstruct_start", "msg": "解构观众反应…"})
+                a = db2.query(Article).filter(Article.id == article_id).first()
+                if not a:
+                    _publish(job_id, {"type": "deconstruct_error", "error": "Article not found"})
+                    return
+                from ..services.boost_service import deconstruct_article
+
+                result = deconstruct_article(a.raw_text)
+                if not result:
+                    _publish(job_id, {"type": "deconstruct_error", "error": "解构输出解析失败，请重试"})
+                    return
+                a.deconstruct_json = result
+                db2.commit()
+                _publish(job_id, {"type": "deconstruct_done", "msg": f"解构完成：{len(result.get('reactions') or [])} 条观众反应"})
+            except Exception as exc:
+                logger.exception("[deconstruct] standalone failed for %s: %s", article_id, exc)
+                _publish(job_id, {"type": "deconstruct_error", "error": str(exc)})
+
+    background_tasks.add_task(_do_deconstruct)
+    return {"job_id": job_id, "status": "started"}
+
+
 @router.post("/{article_id}/rewrite")
 def rewrite_article(
     article_id: str,
@@ -221,11 +260,11 @@ def rewrite_article(
 
     job_id = str(uuid.uuid4())
     model_alias = request.model
-    prompt_template = request.prompt_template or "laochen_default"
     video_format = request.video_format or "portrait"
     perspective = request.perspective
 
     def _do_rewrite():
+        _tpl = request.prompt_template or "laochen_default"
         if get_session_maker() is None:
             _publish(job_id, {"type": "rewrite_error", "error": "Database not initialized"})
             return
@@ -236,10 +275,8 @@ def rewrite_article(
                     _publish(job_id, {"type": "rewrite_error", "error": "Article not found"})
                     return
 
-                # 数字人绑定 (2026-08-08): 洗稿不再强制 laochen.
-                # 人物即账号: 前端显式 persona_id → host_id → config 默认 → 首个 host 回退.
-                # persona_id 解析出的 host 同时带出品牌/开结尾, 随 script.host_id 贯通
-                # audio / HF 品牌注入 / C 线出镜.
+
+                # 数字人绑定
                 host = None
                 persona: Persona | None = None
                 if request.persona_id:
@@ -249,9 +286,9 @@ def rewrite_article(
                         return
                     host = db2.query(Host).filter(Host.id == persona.host_id).first() if persona.host_id else None
                     # 人物即账号: persona 自带提示词模板, 覆盖请求里的 prompt_template
-                    # (选"老谭聊科技" → 用 laotan-tech, 而不是前端模板下拉的独立值)
                     if persona.prompt_template:
-                        prompt_template = persona.prompt_template
+                        _tpl = persona.prompt_template
+
                 if host is None and request.host_id:
                     host = db2.query(Host).filter(Host.id == request.host_id).first()
                     if not host:
@@ -293,20 +330,45 @@ def rewrite_article(
                 try:
                     from ..services.boost_service import deconstruct_article, format_pseudo_comments
 
-                    _publish(job_id, {"type": "deconstruct_start", "script_id": script.id, "msg": "解构层：复刻观众反应"})
+                    _publish(job_id, {"type": "deconstruct_start", "msg": "解构层：复刻观众反应"})
                     decon_result = deconstruct_article(article.raw_text)
                     if decon_result:
                         pseudo = format_pseudo_comments(decon_result)
                         if pseudo:
                             # 伪用户评论追加到原文后, 作为 laotan 输入的一部分
                             raw_for_rewrite = article.raw_text + "\n\n" + pseudo
-                            _publish(job_id, {"type": "deconstruct_done", "script_id": script.id, "msg": f"解构完成：{len(decon_result['reactions'])} 条观众反应"})
+                            _publish(job_id, {"type": "deconstruct_done", "msg": f"解构完成：{len(decon_result['reactions'])} 条观众反应"})
+                            # 评论层持久化到文章 (2026-08-15): 新闻线索页「评论层」面板展示
+                            article.deconstruct_json = decon_result
+                            db2.commit()
                 except Exception as decon_exc:
                     logger.warning("[deconstruct] failed, fallback to normal rewrite: %s", decon_exc)
 
+                # 素材聚合 (2026-08-15): material_package_id 存在时, 素材包按层
+                # 分桶注入 raw_for_rewrite 尾部 (顺序: 原文 → 伪评论 → 素材包).
+                # 无包路径零改动; llm_service 不感知素材包.
+                material_package_id: str | None = None
+                if request.material_package_id:
+                    from ..models import MaterialPackage
+                    from ..services.material_service import build_material_context_block
+
+                    pkg = (
+                        db2.query(MaterialPackage)
+                        .filter(MaterialPackage.id == request.material_package_id)
+                        .first()
+                    )
+                    if not pkg or pkg.article_id != article.id:
+                        _publish(job_id, {"type": "rewrite_error", "error": "素材包不存在或不属于该稿件"})
+                        return
+                    ok_items = [it for it in pkg.items if it.fetch_ok and it.raw_text]
+                    material_block = build_material_context_block(ok_items, pkg.audit_json)
+                    if material_block:
+                        raw_for_rewrite = raw_for_rewrite + "\n\n" + material_block
+                    material_package_id = pkg.id
+
                 script_text = llm.rewrite_article(
                     raw_for_rewrite,
-                    prompt_template=prompt_template,
+                    prompt_template=_tpl,
                     model=model_alias,
                     stream=True,
                     chunk_callback=_cb,
@@ -317,11 +379,18 @@ def rewrite_article(
                     article_id=article.id,
                     host_id=host_id,
                     version=1,
-                    prompt_template=prompt_template,
+                    prompt_template=_tpl,
                     script_text=script_text,
                     video_format=video_format,
                     status="drafting",
                 )
+                # 解构层产物落库 (2026-08-12): 洗稿时存 decon_result, 供爆品改造
+                # P1/P2 读取注入 (钩子戳痛点/争议对焦虑)。deconstruct 失败时为 None。
+                if decon_result:
+                    script.deconstruct_json = decon_result
+                # 素材包回溯 (2026-08-15): 记录洗稿用了哪个素材包
+                if material_package_id:
+                    script.material_package_id = material_package_id
                 db2.add(script)
                 db2.commit()
                 db2.refresh(script)
