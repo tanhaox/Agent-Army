@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import String, or_
+from sqlalchemy import String, and_, or_
 from sqlalchemy.orm import Session
 
 from app.config import get_config
@@ -104,6 +104,13 @@ def match_local_assets(
             )
         if orientation:
             query = query.filter(VideoAsset.orientation == orientation)
+        # 质量硬底线 (2026-08-16 用户反馈烂素材泛滥): 低清素材直接出局。
+        # 横版宽 <1280 / 竖版高 <1280 的不进候选 — 830/1796 个素材低清是
+        # "烂"的主因; 宁可候选变少走 Pexels, 不上低清货。
+        query = query.filter(or_(
+            and_(VideoAsset.orientation == "portrait", VideoAsset.height >= 1280),
+            and_(VideoAsset.orientation != "portrait", VideoAsset.width >= 1280),
+        ))
         if people:
             query = query.filter(VideoAsset.people == people)
         if location and with_location:
