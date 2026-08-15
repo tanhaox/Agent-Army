@@ -48,3 +48,13 @@ logs/
 # 系统
 Thumbs.db
 .DS_Store
+
+# 剪映 J 线：参考仓库克隆（调查用，本地保留）
+_ref_*/
+
+# 剪映模板明文快照（847 文件，研究原料库，仅本地）
+data/jy_template_snapshot/
+
+# 剪映实验残留
+data/jy_expA_bg.png
+scripts/_tmp_*.py
