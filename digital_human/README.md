@@ -86,7 +86,9 @@ digital_human/
 
 | URL | 后端路由 | 作用 |
 |---|---|---|
-| [`/web/index.html`](web/index.html) | (主 SPA) | 文章 → 洗稿 → 配音 3 步管线 |
+| [`/web/index.html`](web/index.html) | (主 SPA) | **新闻线索**: 文章输入 + 素材包 (多源聚合/七层审计/智谱补搜) |
+| [`/web/writing.html`](web/writing.html) | `/api/articles/*` + `/api/scripts/*` | **文字加工中心**: 洗稿/修正/爆品改造/字数统计 |
+| [`/web/audio.html`](web/audio.html) | `/api/audio/*` | **音频加工中心**: 段落选择 + TTS + 一键成片 |
 | [`/web/director.html`](web/director.html) | `/api/director/*` | 导演控制台 (规划→执行→合成→下载) |
 | [`/web/library.html`](web/library.html) | `/api/library/*` | 视频库 (素材库 + 成品库) |
 | [`/web/templates.html`](web/templates.html) | `/api/articles/prompt-templates` | 提示词模板管理 |
@@ -96,20 +98,22 @@ digital_human/
 | [`/web/digital_human_video.html`](web/digital_human_video.html) | `/api/dhv/*` | DHV 数字人视频生成 (LTX23 管线) |
 | [`/web/visual_render.html`](web/visual_render.html) | `/api/visual-render/*` | HF 视觉渲染 (新闻数据图) |
 | [`/openapi.json`](http://127.0.0.1:54321/openapi.json) | - | 自动生成 API 文档 (Swagger) |
-| 导航栏入口 | (在 `web/index.html:45`) | 顶部 4 个 `<a target="_blank">` 链接到 4 个子页面 |
+| 导航栏入口 | (在 `web/index.html`) | 顶部 3 链接导航 (全站 9 页统一: 写稿/音频/导演台) |
 
-**后端路由清单** (14 个 router 模块, 全在 `app/routers/`):
-- `articles.py` — 文章 CRUD + DeepSeek 洗稿 + 提示词模板管理
-- `scripts.py` — 脚本 + 分段 CRUD
-- `audio.py` — TTS 配音任务 (含聚合)
+**后端路由清单** (15 个 router 模块, 全在 `app/routers/`, 其中 `director_routes/` 为 director 子包):
+- `articles.py` — 文章 CRUD + DeepSeek 洗稿 (含解构 `POST /{id}/deconstruct`) + 提示词模板管理
+- `materials.py` — 素材包 (七层审计 + 智谱补搜, 8 端点, SSE 后台线程)
+- `scripts.py` — 脚本 + 分段 CRUD (编辑标 stale + P5 情绪重跑)
+- `audio.py` — TTS 配音任务 (含聚合 + stale 清理)
 - `voices.py` — 音色管理 + TTS 引擎测试
 - `roles.py` — 角色管理 + ComfyUI 视图生成
 - `comfyui.py` — ComfyUI workflow 同步 + 直提交
 - `digital_human_video.py` — DHV 主链路 (8 端点)
 - `visual_render.py` — HF 视觉渲染 (8 端点)
-- `director.py` — 视觉导演 2.0 (规划/执行/合成/下载)
+- `director.py` + `director_routes/` — 视觉导演 2.0 (planning/execution/compose/retry, 含 `replace-material` 与单 slot `preview`)
 - `library.py` — 视频库 (素材 CRUD+搜索+标签+赞 / 成品 CRUD)
-- `personas.py` — 人物关联 (模板+音色+形象)
+- `personas.py` — 人物关联 (模板+音色+形象, 含 `by-template` 音色锁)
+- `tagging.py` — 素材 AI 打标
 - `tts_services.py` — TTS 服务管理
 - `hosts.py` / `jobs.py` — 主持人管理 + 任务状态 SSE 流
 
@@ -125,7 +129,7 @@ main.py
  ├─ database.{init_db,get_session_maker}
  ├─ models.{Host,Voice}
  ├─ services.workflow_sync.sync_workflows_on_startup
- └─ routers.*  ←── 14 个全部挂载
+ └─ routers.*  ←── 15 个全部挂载
 
 routers/digital_human_video.py (DHV 主链路)
  ├─ config.get_config
@@ -143,10 +147,16 @@ routers/visual_render.py (HF 视觉渲染)
 
 routers/articles.py (文章 + 洗稿)
  ├─ config.get_config
- └─ services.llm_service.LLMService   # DeepSeek 调用
+ ├─ services.llm_service.LLMService   # DeepSeek 调用
+ └─ services.boost_service            # 爆品改造 P4→P5 (解构伪评论 + 素材包注入)
+
+routers/materials.py (素材包)
+ ├─ services.material_service         # 七层审计 / 精选制注入块 / URL 批量抓取
+ └─ services.zhipu_search             # 智谱 web_search (免费额度 2026-09-12 到期硬拦截)
 
 routers/audio.py (TTS 配音)
- └─ config.get_config
+ ├─ config.get_config
+ └─ services.tts_service              # emotion_annotations → IndexTTS 情绪参数
 ```
 
 **全部模块** 用 `config.get_config`(模块级 singleton);`main.py` 只导出 `Config / load_config / set_config`,没有 `get_config`。路由模块只能从 `..config` 取,不能从 `..main` 取。
@@ -161,8 +171,10 @@ routers/audio.py (TTS 配音)
 |---|---|---|
 | `hosts` | `routers/hosts.py` | 主持人元数据 (persona/开场白/默认音色) |
 | `voices` | `routers/voices.py` | 音色 CRUD (master_audio + backend URLs) |
-| `articles` | `routers/articles.py` | 文章 + raw_text + status |
-| `scripts` | `routers/articles.py` (rewrite 后) | 洗稿脚本 |
+| `articles` | `routers/articles.py` | 文章 + raw_text + status + deconstruct_json (评论层) |
+| `scripts` | `routers/articles.py` (rewrite 后) | 洗稿脚本 (+ emotion_annotations / material_package_id / prompt_template) |
+| `material_packages` | `routers/materials.py` + `services/material_service.py` | 素材包 (status: collecting→audited/failed, audit_json 七层审计) |
+| `material_items` | `services/material_service.py` | 素材条目 (source_type: url/manual/search, layer_tags 审计回填) |
 | `segments` | `routers/scripts.py` | 脚本分段 (line_index + control_chars) |
 | `crawl_tasks` | (旧爬虫) | 抓取任务 (M0 遗留) |
 | `audio_jobs` | `routers/audio.py` | TTS 任务 |

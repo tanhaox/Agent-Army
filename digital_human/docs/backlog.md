@@ -822,6 +822,18 @@
 - **数据现状**：1536 素材（全 hasfile）；portrait 943 / landscape 593；scenes 城市768/街景489/生活221/商业210/自然205/工业87/科技82/财经38/美食13/教育13/医疗7；shot_types 空镜626/建筑503/交通390/人像293/航拍279/特写221；tone cool499/warm376/bright322/neutral221/dark20/monochrome4。词表包 `data/vocabulary_pack.json` 聚合库内全标签（stats assets 1467）。
 - **相关**：ID-033（文件夹预标注补硬维度，挂起）。
 
+### ID-034 后续（2026-08-12）：门槛重构 + 同 job 硬排除 + 导演台素材操作
+
+> 详见 `docs/improvements/已完成-20260812-本地碰撞门槛重构与导演台素材操作升级.md`。本会话在 ID-034 基础上修复了"本地碰撞命中率 ~4%"与"同素材一视频出现 28 次"两个核心问题，并补齐导演台素材操作功能。
+
+- **✅ 门槛重构（0%→68%）**：软维度门槛 6 维降 3 维（scenes/shots/tone，3 中 ≥2），motion/content/time 降为加分维；空值跳过（素材未标不记失分）；备选值交集（shot_types=[建筑,特写] 任一命中）；location C 折中（strict 空才放宽 foreign + 标记）。
+- **✅ 同 job 素材硬排除（一素材一视频只用一次）**：本地命中写回 `params_json["local_file"]` + `match_local_assets` 加 `exclude` 参数 + `_collect_used_local_files` 收集（按 status=completed，跨 phase）。实测 V20260807-0012 从 28 次 → 1 次。
+- **✅ 导演台素材三件套**：禁用素材标（`POST .../disable-material`，本地线补 `preference!=dislike` 过滤）+ 替换去重校验（已用素材 → 409）+ 重新生成强制 P 线下载（`force_pexels` 跳过本地碰撞）。
+- **✅ slot 视频预览 + 素材编号替换**：`GET .../slots/{id}/preview`（FileResponse）+ `POST .../replace-material`（填 asset_no → 写 params.file + 切 broll_local → 同步重渲染即时生效）；预览加 cache-busting 时间戳修复替换后不刷新。
+- **✅ 音频过期标记（方案A）**：文稿改动 → 旧 AudioJob 标 `stale`；`generate_audio` 清理 stale job 磁盘 wav → 强制重新合成（修复"改稿后音频跳过不重生成"）。
+- **✅ 脚本列表加保存时间**：下拉每项显示最后保存时间；`list_scripts` 排序改 `updated_at`。
+- **✅ library 视频卡复制编号按钮**：`copyAssetNo` 一键复制 asset_no，与导演台替换闭环。
+
 ### ID-035：【BUG】圆饼图缺角修复 — offset 守恒 + 纯 opacity 淡入（模板层）
 
 - **状态**: done（2026-08-08，双模板各重渲染含 0.1% 极小段的 pie 成片 + PIL 像素验证 4/4 帧无缺角）
@@ -903,6 +915,7 @@
 ### ID-039：【功能】爆品改造流水线（Boost Service）— 洗稿后自动优化流量指标
 
 - **状态**: done（2026-08-11，`d6897e03`；手动测试 3 Pass 全通，待真实投放数据验证）
+- ⚠️ **2026-08-14 更新**：七层洗稿定稿后 P1/P2/P3 已全砍，流水线改 **P4→P5**，本条的 P1∥P2→P3 编排仅对旧六模块稿有效，详见 ID-046。
 - **优先级**: P0
 - **提出时间**: 2026-08-10
 - **背景**: 零粉新号第一条视频（AI骗人）投放数据：2s 跳出 20%、5s 完播 47.85%、平均 28s（全片 5:10）、收藏24 vs 分享0、评论2。内容是高板（收藏好），短板是结构（开头冷、无互动引导、节奏无呼吸）。
@@ -917,7 +930,7 @@
   - `_call` 空响应自动重试 2 次（reasoning 模型偶发空输出）。
   - 代码兜底：P3 丢 P1 开头时强制拼回；全 Pass 失败回退原稿（不卡死配音）。
 - **涉及模块**: `app/services/boost_service.py`（新增）、`app/routers/articles.py`（rewrite 端点链式调）、`app/models/content.py`（Script 加 boosted_text/boost_titles）、`app/database.py`（迁移加列）
-- **文档**: [进行中-老谭提示词精进-20260810.md](improvements/进行中-老谭提示词精进-20260810.md)（完整讨论+决策）、[爆品改造-阶段提示词.md](improvements/爆品改造-阶段提示词.md)（三 Pass 提示词定稿）
+- **文档**: [已完成-老谭提示词精进-20260810.md](improvements/已完成-老谭提示词精进-20260810.md)（完整讨论+决策）、[爆品改造-阶段提示词.md](improvements/爆品改造-阶段提示词.md)（三 Pass 提示词定稿，已转历史参考）
 - **验证**: 用老陈稿（瓜子水饺）跑 `run_boost` 端到端：P1/P2/P3 全成功，P1 新开头进稿、正文保留、预埋+呼吸点+结尾正确。
 - **待办**:
   - 前端看稿页展示 boost_titles / boosted_text（人工确认用新标题）。
@@ -1044,7 +1057,7 @@
 
 **待做**：
 - [ ] 写"钩子解构"提示词（产出 用户反应清单+叙事线+资料清单）
-- [ ] 接入流程：新闻→解构(AI生成伪装用户评论)→laotan→P1
+- [x] 接入流程：新闻→解构(AI生成伪装用户评论)→laotan（✅ 2026-08-15：独立端点 `POST /api/articles/{id}/deconstruct` + 五种评论区人设伪评论注入洗稿 + 新闻线索页「评论层」面板，见 ID-048）
 - [ ] 用真实新闻实验（如麦加协议：土耳其为什么签/合约是什么）验证解构初稿
 
 ### ID-042：【视觉+配音】视觉层与配音层已知问题（稿件源头已整治，视觉/配音待处理）
@@ -1238,6 +1251,68 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
 - [ ] 继续收集用户选题思维链（≥5-8 条后提炼共性）
 - [ ] 提炼后：写"选题思维链提示词"（产出选题疑问/反差点/认知颠覆/调研清单）
 - [ ] laotan 介入时机后移调研（多源调研 → 综合稿 → laotan 洗稿）
+
+---
+
+## 2026-08-13 ~ 08-15 批次（情绪链路 / boost 七层适配 / 素材聚合 / 三页拆分）
+
+### ID-045：【功能】P5 情绪标注生产化 + 情绪链路全线打通（✅ 2026-08-13/08-14 完成）
+
+- **状态**: done（8/13 方案落地 `improvements/已完成-20260813-P5情绪标注生产化.md`；8/14 链路三处连环 bug 修复后 IndexTTS 首次真正拿到情绪）
+- **链路**：P5 段落级 `[情绪/强度1-7]` 标注 → `scripts.emotion_annotations` 落库 → TTS `synthesize_lines(emotion_segments=...)` → 导演 `_intent.py` 情绪转视觉意图
+- **统一情绪字典**：`app/services/emotion_dict.py` — 8 维向量（happy/angry/.../calm）+ 强度档→α 坡度（0.30~0.60 步进 0.05），全链路共享
+- **8/14 修复的三处连环 bug**：
+  1. `scripts.py` P5 落库 key 错（`emotion_annotations`→`p5_annotated` 写错，读回恒 None → IndexTTS 永走 calm）
+  2. `tts_service.py` 不消费 `emotion_annotations`（新增 `_parse_emotion_annotations` + `resolve_emotion`）
+  3. 段落拼接破音 → `_concat_wavs_with_fade`（fade 消段接缝，gap=0）
+- **配套**：`lines.py` 按 P5 情绪段落分组行、每批带情绪参数；`enable_thinking: False`（DeepSeek-V4-Flash reasoning 失控思考，单步 110s→15s）
+- **文档**: [p5_情绪标注升级方案.md](p5_情绪标注升级方案.md)（注意：其中 P1-P3 标意图的三层分工已被 ID-046 砍除）、[tts_emotion_experiments.md](tts_emotion_experiments.md)（α 参数定稿依据）
+
+### ID-046：【重构】爆品改造 boost 七层适配 — P1-P3 砍除（✅ 2026-08-14 完成）
+
+- **状态**: done（基于 `_test_7layer_ab.py` A/B 实证：7 层洗稿稿已是完整爆款结构，P1(电击开场)/P2(预埋)/P3(呼吸点) 是旧六模块逻辑、对七层稿纯破坏）
+- **新流水线**：`run_boost` 只保留 **P4（逐句精修）→ P5（情绪标注）**，`boost_titles` 恒空（P1 砍掉）
+- **P4_PROMPT 重写**：结构锁定铁律（1:1 锁结构/身份段/结尾/钩子）+ 信息守恒（字数 ≥95%、数字零丢失、数字锚定、型号连字符转中文读法）+ **兜底：输出 <88% 原文长度视为越权压缩 → 回退原稿**
+- **LLM 通道**：`_resolve_llm_cfg` 硅基流动(siliconflow)优先、DeepSeek 回退；`_call` 默认 flash；新增 `config/siliconflow.yaml`
+- **清洗**：`clean_boosted_text` 剥 `## 第X层` 标题 / `【888999000】` 锚点行 / "（此处口播为X）"标注；`_find_end` 加正文锚点优先定位
+- ⚠️ ID-039 的 P1∥P2→P3 编排已被本条推翻；`improvements/爆品改造-阶段提示词.md` 已转历史参考
+
+### ID-047：【功能】素材聚合层（七层喂饱）+ 智谱定向补搜（✅ 2026-08-15 上线）
+
+- **状态**: done（已上线；无包 827 字 → 带包 1843 字实测）
+- **背景**：7 层模板要求 1370~1550 字且每层需特定信息类型（背景/参数/实测/商业），单篇原文喂不饱 L3~L6 导致字数塌陷
+- **新模块**：`app/routers/materials.py`（8 端点：素材包 CRUD / items 增删(URL 抓取+手动粘贴) / 重新审计 / 定向补搜）+ `app/services/material_service.py` + `app/services/zhipu_search.py`；后台 daemon 线程（照抄 boost 模式），SSE：`material_fetch_progress / material_search_start / material_audit_start / material_done / material_error`
+- **新表**：`material_packages`（status/audit_json 七层审计/search_rounds）+ `material_items`（source_type=url|manual|search / layer_tags 审计回填）；`scripts.material_package_id` 回溯
+- **七层审计**：LLM JSON 审计每层 applicable/覆盖度；**applicable 跨轮锁定防翻转**（补搜后重审沿用首轮判定，重置需新建包）
+- **精选制注入**（实验结论）：全量注入稀释主题/人设——仅 L3~L6 分桶、每层 ≤3 条、单条 800 字、search 素材无层标注即丢弃；洗稿注入块尾部带"审计缺口提示：未覆盖的层不要编造"
+- **智谱补搜**：独立 `/web_search` 端点；缺口补搜词 cap 6；link+同源系列标题去重；**免费额度 2026-09-12 到期，客户端日期比对 + 服务端额度关键词双保险拦截**（明确中文报错不静默），前端常显到期提示
+- **待办**：
+  - [ ] 投稿数据验证素材包对完播/字数的实际增益
+  - [ ] 智谱额度 2026-09-12 到期前换搜索源或充值
+  - [ ] ⚠️ `config/siliconflow.yaml` 硬编码真实 api_key，应移入 `.env`
+
+### ID-048：【重构】流水线前端三页拆分（✅ 2026-08-15 完成）
+
+- **状态**: done
+- **拆分**：原 `index.html` 单页（文章→洗稿→音频一条龙）→ 三页：
+  - `index.html` + `news.js` — **新闻线索页**：文章输入 + 素材包面板（多 URL 批量抓取/手动贴/七层红绿审计 chip/补搜词 checkbox/一键补搜）+ 评论层面板（五种评论人设渲染）
+  - `writing.html` + `writing.js` — **文字加工中心**：洗稿/修正观点/爆品改造/保存 + 素材包徽章 + 字数实时统计（目标 2100~2400）+ URL 带参跳转（article_id/package_id）
+  - `audio.html` + `audio.js` — **音频加工中心**：段落勾选/拖拽 + 音色 + C/P/H 管线 + 一键成片 + **persona 音色锁**（按 `script.prompt_template` 调 `/api/personas/by-template/{template}`）
+- **app.js v6→v7**：879→213 行，只留跨页共享层（api/status/toggle/toast/管线开关），全元素 null 守卫；**删除 index.js**；全站 9 页 nav 统一三链接
+- **验证**：`scripts/_verify_pages.py`（Playwright 三页 console 错误 + 跳转链断言）
+- **配套**：`POST /api/articles/{id}/deconstruct` 独立解构端点（SSE），五种评论区人设（tech_explainer/national_supporter/brand_fan/brand_hater/source_tracker）伪评论注入洗稿 —— ID-041 的解构接入流程就此固化
+
+### ID-049：【优化】素材匹配门槛重构 + 导演台/音频一致性杂项（✅ 2026-08-14/15 完成）
+
+- **素材匹配（`asset_matcher.py`）**：
+  - location 硬过滤改折中：strict 为空才放宽 foreign 并标 `location_relaxed=True`（本地库 foreign 占 1215/1672，原一刀切全灭）
+  - 门槛维（scenes/shot_types/tone，3 中 ≥2）与加分维（motion/content_density/time_of_day 不排除）拆分，与导演 `_constants.py` 对齐
+  - 同 job 素材硬排除（`params_json["local_file"]` 写回）；`preference=="dislike"` 本地线也排除
+  - **成片复用硬上限**：`used_count >= local_asset_max_uses`（config 默认 2）出局，防"万能素材"每片被选
+- **导演台新端点**：`POST /jobs/{id}/slots/{id}/replace-material`（按 asset_no 换素材+同步重渲染）、`GET /jobs/{id}/slots/{id}/preview`（单 slot 预览）；retry 加 `force_pexels`；broll_pexels 剥离与 API orientation 矛盾的方位词（vertical/portrait 导致 Pexels 全拒）
+- **规划质量钳制（`_postprocess.py`）**：最小 slot 时长（broll 2.5s / HF 卡 3.0s）、hf_title ≤5 张、碎片并入、同秒去重、**时间轴满铺**（修 323s 音频 223s 处 8.7s 空洞致成片音轨错位）
+- **音频过期一致性**：编辑文稿/最终稿 → 旧 completed 音频标 `stale`；编辑 boosted_text 后后台线程重跑 P5；生成音频时清 stale wav+记录（杜绝断点续传误复用旧音频）；脚本列表排序 created_at→updated_at
+- **HF 渲染提速参数化**：`workers`（多 Chrome 并行）/ `fast_capture`（~2x）/ `gpu_encode`（NVENC）
 
 ---
 
