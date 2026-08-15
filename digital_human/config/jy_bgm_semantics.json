@@ -7,10 +7,10 @@
   "bgms": {
     "Judgment Day": {
       "file": "Judgment Day.m4a",
-      "semantics": "理性分析、背景陈述",
-      "user_note": "一般表示理性分析，背景陈述",
-      "used_in": ["10-女性情感", "17-二手车"],
-      "pipeline_signal": "财经/科技认知类口播的默认底噪 BGM; 纠错/论证段适配"
+      "semantics": "理性分析、背景陈述；片头钩子",
+      "user_note": "一般表示理性分析，背景陈述；2026-08-16 补充：这段音乐也属于下钩子专属了",
+      "used_in": ["10-女性情感", "17-二手车", "49-财经 (1)"],
+      "pipeline_signal": "★双场景 BGM：① 钩子段（与 Wallis 并列的钩子选择，49期 0s 起铺即钩子）② 论证/陈述底噪。二选一看内容：争议事件钩子用 Judgment Day，泛提问钩子用 Wallis"
     },
     "Push Up（剪辑版）": {
       "file": "Push Up（剪辑版）",
