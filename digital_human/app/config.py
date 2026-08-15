@@ -120,6 +120,9 @@ class DefaultsConfig:
     # P 线本地碰撞策略 (2026-08-16 用户反馈烂素材反复用): normal=原75%门槛 /
     # strict=仅强命中(85%)才用本地(默认) / off=全走 Pexels 新下载
     p_line_local_collision: str
+    # 本地素材内容质量硬底线 (2026-08-16 治理③): VLM 质量分低于此值出局;
+    # 0=关闭。未打分素材暂放行 (asset_quality_scan 渐进收紧)
+    local_asset_min_quality: int
 
 
 @dataclass(frozen=True)
@@ -285,6 +288,7 @@ def load_config(path: Path | str | None = None) -> Config:
             ),
         ),
         p_line_local_collision=defaults_raw.get("p_line_local_collision", "strict"),
+        local_asset_min_quality=int(defaults_raw.get("local_asset_min_quality", 4)),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),

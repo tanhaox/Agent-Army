@@ -115,6 +115,17 @@ def match_local_assets(
             query = query.filter(VideoAsset.people == people)
         if location and with_location:
             query = query.filter(VideoAsset.location == location)
+        # 内容质量硬底线 (2026-08-16 烂素材治理③): VLM 质量分 ≤3 的出局;
+        # 未打分(None)暂放行 — asset_quality_scan 全量跑完后逐步收紧。
+        try:
+            _min_q = get_config().defaults.local_asset_min_quality
+        except Exception:
+            _min_q = 4
+        if _min_q and _min_q > 0:
+            query = query.filter(
+                VideoAsset.quality_score.is_(None)
+                | (VideoAsset.quality_score >= _min_q)
+            )
         # 只查本地已有文件的素材
         query = query.filter(VideoAsset.file_path.isnot(None))
         if min_duration_sec:

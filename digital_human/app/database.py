@@ -110,6 +110,19 @@ def _apply_manual_migrations(engine) -> None:
                     conn.execute(text("ALTER TABLE articles ADD COLUMN deconstruct_json TEXT"))
                 logger.info("[db] migrated: articles.deconstruct_json column added")
 
+        # video_assets 内容质量分 (2026-08-16 烂素材治理③): VLM 质量打分产物,
+        # matcher 硬底线+排序依据 — 治"分辨率没问题但内容平庸"的主病
+        if "video_assets" in tables:
+            cols = {c["name"] for c in inspector.get_columns("video_assets")}
+            va_cols = {"quality_score": "FLOAT", "quality_reason": "TEXT"}
+            for col_name, col_type in va_cols.items():
+                if col_name not in cols:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(f"ALTER TABLE video_assets ADD COLUMN {col_name} {col_type}")
+                        )
+                    logger.info("[db] migrated: video_assets.%s column added", col_name)
+
         # scripts 爆品改造列 (2026-08-10): 洗稿后自动跑 P1开场→P2预埋→P3节奏.
         # boosted_text = 改造后全文 (保留 script_text 洗稿原稿); boost_titles = 标题候选 JSON.
         if "scripts" in tables:

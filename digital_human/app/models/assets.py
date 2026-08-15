@@ -92,6 +92,10 @@ class VideoAsset(Base):
     ai_tagged_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     ai_tag_model: Mapped[str | None] = mapped_column(String(64), default=None)
     ai_confidence: Mapped[dict | None] = mapped_column(JSON, default=None)
+    # 内容质量分 (2026-08-16 烂素材治理③): VLM 按"专业剪辑师验收标准"打 1-10,
+    # 含 generic-stock 惩罚 — 与维度打标不同, 这是对"素材好不好"的直接回答
+    quality_score: Mapped[float | None] = mapped_column(Float, default=None)
+    quality_reason: Mapped[str | None] = mapped_column(Text, default=None)
     ai_tags_extra: Mapped[dict | None] = mapped_column(JSON, default=None)
     # 使用统计
     used_count: Mapped[int] = mapped_column(Integer, default=0)
