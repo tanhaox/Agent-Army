@@ -1316,6 +1316,32 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
 
 ---
 
+## 2026-08-15 J 线上线后新增（导演关键词 + 新素材源）
+
+### ID-050：【优化】P 线关键词提示词 — 抽象概念词 Pexels 匹配差（2026-08-15 用户实测反馈）
+
+- **现象**：导演给出的 `artificial intelligence / data center / server room / digital graph` 匹配效果不好
+- **根因**：`visual_director_v2.txt` §检索关键词有"主体优先铁律"但**没有概念→具象的翻译层**——LLM 直接输出文稿里的抽象概念词，而 Pexels 检索只对"摄像机拍得到的具体物"友好（"artificial intelligence"返回的是烂大街的神经网络素材；"digital graph"根本不是摄影词）
+- **改法**（提示词层）：
+  1. 加硬规则：**关键词必须是"镜头能拍到的东西"**，禁抽象概念词（AI/智能/数据/科技/数字/digital/intelligence/technology 一律不得直接出现）
+  2. 加【概念→具象映射表】few-shot：`AI → circuit board close up / robot arm factory / programmer typing code`；`数据中心 → server racks corridor / network cables`；`数据图表 → stock market screen / dashboard screen close up`
+  3. 每词 ≤3 个英文单词，名词短语，不加修饰语
+- **验证**：同一篇稿子改前/改后各跑一次导演，对比 Pexels 下载素材的可用率
+
+### ID-051：【素材源】flaticon 视频动效版 SVG 图标/大厂 logo（2026-08-15 用户提供方向）
+
+- **价值**：科技财经稿必备的**图标与公司 logo**（英伟达/华为/OpenAI...），P 线永远不会有，HF 线手画质量不够——flaticon 的动效 SVG 正好补这块
+- **落点**：与 J 线天然契合——SVG 可转 PNG 序列/GIF 进草稿贴纸轨，或做进 HF 模板；建议进 `jy_effect_library` 素材清单
+- **⚠️ 合规待确认**：flaticon 免费版商用需**署名**（attribution）；大厂 logo 本身有商标权问题（内容里"报道引用"通常可，做品牌装饰有风险）——批量使用前确认授权方案（付费版免署名）
+- **待做**：调研动效 SVG → 剪映可用形态（贴纸/WebM 透明通道）的转换管线
+
+### ID-052：【素材源】canva 图表 — 比 HF 线精良、导出基本无水印（2026-08-15 用户提供方向）
+
+- **价值**：canva 图表模板质量远超 HF 线自制，导出即用
+- **落点**：两条路——① 手动精修通道：hf_chart 类 slot 允许"canva 素材替换"（导演台已有 replace-material 端点，正好用）；② 建 canva 图表素材库进本地素材库（video_assets），C 线碰撞复用
+- **⚠️ 合规待确认**：canva 内容许可协议对"导出素材脱离设计单独复用"有限制条款（免费素材可入设计、单独提取复用属灰色）——矩阵化商用前要过一遍
+- **定位**：HF 线保持全自动兜底，canva 作为**精修增强**（人工半自动），不替代
+
 ### 近期（当前周期可推进）
 1. ~~ID-001：URL 自动抓取~~（done）
 2. ~~ID-008：前端模型选择开关~~（done）

@@ -174,6 +174,20 @@ def _strip_orientation_words(keywords: list[str]) -> list[str]:
     return cleaned or keywords  # 全被滤掉(如只有方位词)时退回原词保底
 
 
+# 抽象概念词剥离 (2026-08-15, ID-050): LLM 仍会输出 abstract/泛科技词, 在 Pexels
+# 返回的是烂大街 Neural-Network 特效图。整词命中的直接滤掉(降维重试会依次缩词)。
+_ABSTRACT_WORDS = {
+    "artificial intelligence", "intelligence", "technology", "digital",
+    "digital graph", "data", "big data", "innovation", "future",
+    "internet", "ai", "network", "science technology", "data center",
+}
+
+
+def _strip_abstract_words(keywords: list[str]) -> list[str]:
+    cleaned = [k for k in keywords if str(k).strip().lower() not in _ABSTRACT_WORDS]
+    return cleaned or keywords  # 全滤光时退回原词保底(交给 Pexels 自身兜底)
+
+
 def _resolve_pexels(
     db: Session, slot: DirectorSlot, used_ids: set[int],
     min_dur: int, orientation: str,
@@ -196,7 +210,9 @@ def _resolve_pexels(
     keywords = params.get("keywords")
     used_query: str | None = None
     if isinstance(keywords, list) and keywords:
-        clean_keywords = _strip_orientation_words([str(k) for k in keywords])
+        clean_keywords = _strip_abstract_words(
+            _strip_orientation_words([str(k) for k in keywords])
+        )
         items, used_query = pexels_service.resolve_descending(
             clean_keywords, max_results=1,
             min_duration_sec=min_dur, orientation=orientation,

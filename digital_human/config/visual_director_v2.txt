@@ -48,6 +48,24 @@
 - ❌ 错误：`capitalist` / `money` / `robot`
 - ✅ 正确：主关键词 `datacenter server room` + 映射表隐喻 `dark corridor door`
 
+**具象化铁律（2026-08-15 用户实测补充：抽象概念词匹配差）**：
+- ⛔ 关键词必须是**"摄像机拍得到的东西"**。以下抽象概念词**禁止直接出现**在 keywords 里：
+  `artificial intelligence / intelligence / technology / digital / data / graph / chart / innovation / future / internet / network(泛指) / ai(泛指)`
+  （这些词在 Pexels 返回的是烂大街的 Neural-Network 特效图或空泛科技风素材，与文稿主体无关）
+- 抽象概念必须先翻译成具象画面，查下表（表外概念同样按"镜头里有什么"自行翻译）：
+
+| 文稿概念 | ❌ 禁用搜索词 | ✅ 具象替换词 |
+|---|---|---|
+| 人工智能/AI | artificial intelligence | `circuit board macro` / `robot arm factory` / `programmer typing code` |
+| 算力/数据中心 | data center(裸词) | `server racks corridor` / `network cables room` / `server room blinking lights`（组合词 `datacenter server room` 可用） |
+| 数据/图表 | digital graph | `stock market screen` / `dashboard screen closeup` / `financial chart display` |
+| 大模型/LLM | large language model | `ai chip macro` / `gpu graphics card` / `datacenter blue lights` |
+| 芯片/半导体 | semiconductor | `silicon wafer macro` / `circuit board closeup` / `chip manufacturing cleanroom` |
+| 互联网平台 | internet | `person scrolling smartphone` / `office laptops working` / `data center exterior` |
+| 数字化转型 | digital transformation | `factory robot arms` / `modern office meeting` / `warehouse automation` |
+
+- 每个关键词 ≤3 个英文单词的**名词短语**，不加形容词堆砌、不加泛修饰（beautiful/amazing/futuristic 一律不要）。
+
 
 # 任务目标
 将输入的口播脚本转换为 **slot 工序单 JSON**,每个 slot 对应一个下游可执行的工作流(`workflow`),下游 Agent 会按 `workflow` 名称调度对应小 Agent 渲染对应画面片段。
