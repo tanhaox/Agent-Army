@@ -26,6 +26,13 @@
       "user_note": "有慢慢发展、层层推进的感觉",
       "used_in": ["54-家庭教育"],
       "pipeline_signal": "叙事推进/层层递进段落（七层洗稿的中段展开正好适配）; 悬念铺垫"
+    },
+    "Peter_Sandberg_-_Dismantle": {
+      "file": "Peter_Sandberg_-_Dismantle.mp3",
+      "semantics": "积极的成长历程",
+      "user_note": "一种积极的成长，类似于创业到上市历程介绍之类",
+      "used_in": ["50-法律"],
+      "pipeline_signal": "成长叙事/企业历程/从低谷到成功段（L4 硬实力底牌/L6 商业降维打击的历程讲述适配）"
     }
   }
 }
