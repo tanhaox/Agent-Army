@@ -237,9 +237,10 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     folder = draft_mod.DraftFolder(str(_drafts_dir()))
     script = folder.create_draft(name, width, height, allow_replace=True)
 
-    # 轨道: 后来居上 — text 最上, video 中, audio 底
+    # 轨道: 后来居上 — text 最上, video 中, audio 底; sfx 为音效轨(J2 配方挂载点)
     script.append_tracks([
         draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
+        draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
         draft_mod.TrackSpec(draft_mod.TrackType.video, "main"),
         draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"),
     ])
@@ -379,3 +380,30 @@ def _probe_duration(path: str | Path) -> float | None:
     except Exception as exc:
         logger.warning("[jy_export] 时长探测失败 %s: %s", path, exc)
     return None
+
+
+# ── 音效挂载 (J2 前置, 2026-08-16): 语义分类见 data/jy_sounds/_semantics.json ──
+_SOUNDS_DIR = Path(__file__).resolve().parents[2] / "data" / "jy_sounds"
+
+
+def sound_path(name: str) -> Path | None:
+    """按语义名取音效文件 (库: data/jy_sounds/<名>.mp3)."""
+    p = _SOUNDS_DIR / f"{name}.mp3"
+    return p if p.exists() else None
+
+
+def attach_sound(script: Any, track_name: str, sound_name: str, at_sec: float,
+                 volume: float = 1.0) -> bool:
+    """往草稿音效轨挂一个音效. 缺文件时记日志返回 False (不阻塞导出)."""
+    p = sound_path(sound_name)
+    if not p:
+        logger.warning("[jy_export] 音效缺失, 跳过: %s", sound_name)
+        return False
+    dur = _probe_duration(p) or 1.0
+    script.add_segment(
+        draft_mod.AudioSegment(
+            str(p), trange(int(round(at_sec * _US)), int(round(dur * _US))), volume=volume
+        ),
+        track_name,
+    )
+    return True
