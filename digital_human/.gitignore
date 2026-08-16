@@ -62,3 +62,6 @@ data/jy_sounds/
 
 # 剪映 BGM 音频文件本体（语义库在 config/jy_bgm_semantics.json 跟踪）
 data/jy_bgm/
+
+# 地缘提示词优化循环批次(成稿与豆包点评, 本地)
+data/geo_batch/
