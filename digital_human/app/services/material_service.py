@@ -166,11 +166,21 @@ def audit_package(
                 + "\n".join(prev_lines)
                 + "\n(applicable 只取决于主稿内容类型, 补充素材变化不影响它; 本轮只需重新判定 covered/evidence/gaps/search_queries/item_tags)"
             )
-    try:
-        raw = _call(prompt, json_mode=True, max_tokens=3000, model="pro", temperature=0.2)
-        data = _extract_json(raw)
-    except Exception as exc:
-        logger.warning("[material] audit LLM call failed: %s", exc)
+    # 重试 ×3 (2026-08-16 实测: 补搜后重审偶发 LLM JSON 解析失败 → 包卡 failed,
+    # 用户被灰按钮困死; 审计是结构化输出, 一次失败重跑比让人重按划算)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = _call(prompt, json_mode=True, max_tokens=3000, model="pro", temperature=0.2)
+            data = _extract_json(raw)
+            break
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("[material] audit LLM attempt %d failed: %s", attempt + 1, exc)
+            data = None
+    if data is None:
+        if last_exc is not None:
+            logger.warning("[material] audit LLM call failed after 3 attempts")
         return None
     if not isinstance(data, dict) or not isinstance(data.get("layers"), dict):
         return None

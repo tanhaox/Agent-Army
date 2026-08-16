@@ -370,7 +370,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (articleId) {
     try {
       currentArticle = await api('GET', `/articles/${articleId}`);
-      if (packageId) currentPackageId = packageId;
+      if (packageId) {
+        // 包归属校验 (2026-08-16 bug 防再犯): 旧稿件的包被带入新稿件时,
+        // 后端洗稿会报"素材包不存在或不属于该稿件" — 这里提前发现并降级, 不堵流程
+        try {
+          const pkg = await api('GET', `/materials/packages/${packageId}`);
+          if (pkg && pkg.article_id === articleId) {
+            currentPackageId = packageId;
+          } else {
+            toast('⚠ 素材包不属于该稿件，已按无包模式继续（可回新闻线索重新分析）', 'info');
+          }
+        } catch (_) {
+          toast('⚠ 素材包不存在，已按无包模式继续（可回新闻线索重新分析）', 'info');
+        }
+      }
       showBanner();
       toggle('btn-rewrite', true);
       setStatus('status-rewrite', currentPackageId

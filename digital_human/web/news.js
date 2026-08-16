@@ -41,6 +41,15 @@ async function createArticle() {
     setStatus('status-create', `稿件已创建: ${currentArticle.id}`, false, true);
     enablePackageUI();
     renderComments(null);  // 新稿无评论层
+    // 新稿件必须清空旧包状态 (2026-08-16 bug: currentPackageId 残留上一篇的包,
+    // 导致"去洗稿"带旧 package_id → writing 页报"素材包不存在或不属于该稿件")
+    currentPackageId = null;
+    const sel = document.getElementById('package-select');
+    if (sel) sel.innerHTML = '<option value="">— 新建素材包 —</option>';
+    const auditBox = document.getElementById('audit-report');
+    if (auditBox) auditBox.style.display = 'none';
+    const itemsBox = document.getElementById('material-items');
+    if (itemsBox) itemsBox.innerHTML = '';
     // 流程修正 (2026-08-16 用户口径): 原稿 → 观众解构(自动) → 七层素材分析。
     // 之前是素材分析先跑、解构靠手动 — 顺序反了。
     await deconstructArticle();
@@ -278,10 +287,11 @@ function subscribePackage(jobId) {
       toggle('btn-material-create', true);
     } else if (t === 'material_error') {
       source.close();
-      setStatus('status-material', data.error || '素材任务失败', true);
+      setStatus('status-material', (data.error || '素材任务失败') + ' — 可点「🔄 重新分析」重试', true);
+      // 刷新按钮态 (2026-08-16): 失败后 refreshPackage 让「重新分析」恢复可点,
+      // 否则用户被灰按钮困死 (补搜后重审偶发 LLM 解析失败的恢复路径)
       reloadPackageOptions();
       refreshPackage();
-      toggle('btn-material-create', true);
     }
   };
   source.onerror = () => {
