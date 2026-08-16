@@ -41,7 +41,9 @@ async function createArticle() {
     setStatus('status-create', `稿件已创建: ${currentArticle.id}`, false, true);
     enablePackageUI();
     renderComments(null);  // 新稿无评论层
-    await loadPackages(currentArticle.id);
+    // 流程修正 (2026-08-16 用户口径): 原稿 → 观众解构(自动) → 七层素材分析。
+    // 之前是素材分析先跑、解构靠手动 — 顺序反了。
+    await deconstructArticle();
   } catch (e) {
     setStatus('status-create', e.message, true);
   }
@@ -80,13 +82,21 @@ async function deconstructArticle() {
         setStatus('status-comment', data.msg || '解构中…');
       } else if (data.type === 'deconstruct_done') {
         source.close();
-        setStatus('status-comment', data.msg || '解构完成', false, true);
+        setStatus('status-comment', data.msg || '解构完成，自动进入七层素材分析…', false, true);
         toggle('btn-deconstruct', true);
         refreshComments();
+        // 流程链 (2026-08-16): 解构完成 → 七层素材分析 (还没包才自动建, 防重复)
+        if (currentArticle && !currentPackageId) {
+          loadPackages(currentArticle.id);
+        }
       } else if (data.type === 'deconstruct_error') {
         source.close();
-        setStatus('status-comment', data.error || '解构失败', true);
+        setStatus('status-comment', data.error || '解构失败（可手动重试，或直接进行素材分析）', true);
         toggle('btn-deconstruct', true);
+        // 解构失败不堵流程: 直接进素材分析
+        if (currentArticle && !currentPackageId) {
+          loadPackages(currentArticle.id);
+        }
       }
     };
     source.onerror = () => {
