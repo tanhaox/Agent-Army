@@ -265,9 +265,7 @@ def rewrite_article(
     perspective = request.perspective
 
     def _do_rewrite():
-        # 赛道默认模板 (2026-08-16): geo 稿未显式选模板/persona 时走 laotan-geo
-        _default_tpl = "laotan-geo" if (getattr(article, "track", "tech") == "geo") else "laochen_default"
-        _tpl = request.prompt_template or _default_tpl
+        _tpl = request.prompt_template
         if get_session_maker() is None:
             _publish(job_id, {"type": "rewrite_error", "error": "Database not initialized"})
             return
@@ -277,6 +275,12 @@ def rewrite_article(
                 if not article:
                     _publish(job_id, {"type": "rewrite_error", "error": "Article not found"})
                     return
+
+                # 赛道默认模板 (2026-08-16): geo 稿未显式选模板时走 laotan-geo
+                # (必须在 article 查询之后 — 此前放在函数开头引用未定义的 article,
+                #  NameError 杀线程且无 rewrite_error 事件 → 前端永久等待卡死)
+                if not _tpl:
+                    _tpl = "laotan-geo" if (getattr(article, "track", "tech") == "geo") else "laochen_default"
 
 
                 # 数字人绑定
