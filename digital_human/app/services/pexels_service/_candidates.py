@@ -56,6 +56,53 @@ def _candidate_downloadable(
     return True
 
 
+def _quality_gate(db: Session, local_path: str | Path) -> bool:
+    """下载即质检 (2026-08-16 烂素材治理③闭环).
+
+    模式 (pexels_quality_gate_mode, 生产考量 2026-08-16 用户指出同步打分拖慢成片):
+      sync  = 同步打分, ≤门槛换下一候选 (最严, 每片 +4~6 分钟)
+      async = 默认: 下载即返回, 后台秒级补打分落库 — 同 job 后续 slot 与
+              未来全片受保护, 仅当前 slot 可能带病上岗
+      (pexels_download_quality_gate=False 时完全关闭)
+    fail-open: 视觉模型不可用/打分失败 → 放行。
+    """
+    from app.config import get_config
+
+    try:
+        cfg = get_config().defaults
+        if not getattr(cfg, "pexels_download_quality_gate", True):
+            return True
+        mode = getattr(cfg, "pexels_quality_gate_mode", "async")
+    except Exception:
+        mode = "async"
+    if mode != "sync":
+        from app.services.asset_quality import enqueue_quality_check
+
+        enqueue_quality_check(str(local_path))
+        return True
+    from app.services.asset_quality import score_video_file
+
+    result = score_video_file(local_path)
+    if result is None:
+        return True
+    # 分数写回素材库 (video_assets 按文件路径定位)
+    from app.models import VideoAsset
+
+    asset = db.query(VideoAsset).filter(VideoAsset.file_path == str(local_path)).first()
+    if asset is not None:
+        asset.quality_score = float(result["score"])
+        asset.quality_reason = ("generic;" if result["generic"] else "") + result["verdict"]
+        if result["score"] <= 3:
+            asset.preference = "dislike"
+        db.commit()
+    threshold = getattr(get_config().defaults, "local_asset_min_quality", 4)
+    ok = result["score"] >= min(threshold, 4)  # 下载门槛: ≤3 一票否决档
+    if not ok:
+        logger.info("[pexels] 质检不合格(score=%d): %s — 换下一候选",
+                    result["score"], result["verdict"])
+    return ok
+
+
 def _handle_candidate(
     svc: Any, db: Session, video: dict[str, Any],
     prefer_resolution: str, min_duration_sec: int, orientation: str,
@@ -71,6 +118,15 @@ def _handle_candidate(
     pexels_id = video.get(API_ID)
     existing = db.query(MaterialAsset).filter(MaterialAsset.pexels_id == pexels_id).first()
     if existing and existing.local_path and Path(existing.local_path).exists():
+        # 缓存复用也过质检 (未打分的才打; 已出局的素材缓存也跳过)
+        from app.models import VideoAsset
+
+        va = db.query(VideoAsset).filter(VideoAsset.file_path == existing.local_path).first()
+        if va is not None and va.preference == "dislike":
+            return None, False
+        if va is not None and va.quality_score is None:
+            if not _quality_gate(db, existing.local_path):
+                return None, False
         return asset_to_item(existing), False
     if remaining_quota <= 0:
         return None, False
@@ -94,6 +150,9 @@ def _handle_candidate(
     increment_quota(db, pexels_id, file_size)
     asset = upsert_asset(db, existing, video, chosen, source_url, local_path, tags_str)
     register_video_asset(db, video, chosen, local_path, tags_str, raw_query=raw_query)
+    # 下载即质检 (2026-08-16): 不合格 → 素材已标记出局, 本候选作废, 循环换下一个
+    if not _quality_gate(db, local_path):
+        return None, True
     return asset_to_item(asset), True
 
 

@@ -123,6 +123,12 @@ class DefaultsConfig:
     # 本地素材内容质量硬底线 (2026-08-16 治理③): VLM 质量分低于此值出局;
     # 0=关闭。未打分素材暂放行 (asset_quality_scan 渐进收紧)
     local_asset_min_quality: int
+    # Pexels 下载即质检 (2026-08-16 治理③闭环): 下载后 VLM 打分;
+    # 视觉模型不可用时 fail-open 放行
+    pexels_download_quality_gate: bool
+    # 质检模式 (2026-08-16 生产考量): sync=同步打分不合格换候选(最严, 每片+4~6分钟) /
+    # async=默认, 下载即返回后台补打分(当前slot可能带病, 后续与未来全片受保护)
+    pexels_quality_gate_mode: str
 
 
 @dataclass(frozen=True)
@@ -289,6 +295,8 @@ def load_config(path: Path | str | None = None) -> Config:
         ),
         p_line_local_collision=defaults_raw.get("p_line_local_collision", "strict"),
         local_asset_min_quality=int(defaults_raw.get("local_asset_min_quality", 4)),
+        pexels_download_quality_gate=bool(defaults_raw.get("pexels_download_quality_gate", True)),
+        pexels_quality_gate_mode=defaults_raw.get("pexels_quality_gate_mode", "async"),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),
