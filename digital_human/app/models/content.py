@@ -93,6 +93,9 @@ class Article(Base):
     title: Mapped[str | None] = mapped_column(String(512), default=None)
     source_url: Mapped[str | None] = mapped_column(String(2048), default=None)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # 赛道 (2026-08-16 用户方案: 建稿时勾选, 驱动评论层/七层审计走对应分支)
+    # tech=科技/商业(默认, 七层科技版+财经观众) / geo=地缘/国际(七层地质版+地缘观众)
+    track: Mapped[str] = mapped_column(String(16), default="tech")
     perspective_1: Mapped[str | None] = mapped_column(Text, default=None)  # 洗稿前的补充观点
     # 评论层 (2026-08-15): 解构层产物 (reactions/comment_archetypes/narrative/research),
     # 洗稿时自动生成, 也可单独触发; 新闻线索页「评论层」面板展示, 供人工洞察

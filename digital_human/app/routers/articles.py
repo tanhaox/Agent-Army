@@ -170,6 +170,7 @@ def create_article(payload: ArticleCreate, db: Session = Depends(get_db)):
         title=payload.title,
         source_url=payload.source_url,
         raw_text=payload.raw_text,
+        track=payload.track or "tech",
         status="pending",
     )
     db.add(article)
@@ -231,7 +232,7 @@ def run_deconstruct(article_id: str, background_tasks: BackgroundTasks, db: Sess
                     return
                 from ..services.boost_service import deconstruct_article
 
-                result = deconstruct_article(a.raw_text)
+                result = deconstruct_article(a.raw_text, track=getattr(a, "track", "tech") or "tech")
                 if not result:
                     _publish(job_id, {"type": "deconstruct_error", "error": "解构输出解析失败，请重试"})
                     return
@@ -264,7 +265,9 @@ def rewrite_article(
     perspective = request.perspective
 
     def _do_rewrite():
-        _tpl = request.prompt_template or "laochen_default"
+        # 赛道默认模板 (2026-08-16): geo 稿未显式选模板/persona 时走 laotan-geo
+        _default_tpl = "laotan-geo" if (getattr(article, "track", "tech") == "geo") else "laochen_default"
+        _tpl = request.prompt_template or _default_tpl
         if get_session_maker() is None:
             _publish(job_id, {"type": "rewrite_error", "error": "Database not initialized"})
             return
@@ -331,7 +334,10 @@ def rewrite_article(
                     from ..services.boost_service import deconstruct_article, format_pseudo_comments
 
                     _publish(job_id, {"type": "deconstruct_start", "msg": "解构层：复刻观众反应"})
-                    decon_result = deconstruct_article(article.raw_text)
+                    decon_result = deconstruct_article(
+                        article.raw_text,
+                        track=getattr(article, "track", "tech") or "tech",
+                    )
                     if decon_result:
                         pseudo = format_pseudo_comments(decon_result)
                         if pseudo:

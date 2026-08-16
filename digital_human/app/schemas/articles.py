@@ -30,6 +30,9 @@ class ArticleCreate(BaseModel):
     title: str | None = None
     source_url: str | None = None
     raw_text: str = Field(..., min_length=1, max_length=15000)
+    track: Literal["tech", "geo"] | None = Field(
+        default="tech", description="赛道: tech=科技/商业(默认) / geo=地缘/国际 — 驱动评论层与七层审计分支"
+    )
 
 
 class RewriteRequest(BaseModel):
@@ -75,6 +78,7 @@ class ArticleOut(BaseModel):
     title: str | None
     source_url: str | None
     status: str
+    track: str | None = None  # 赛道 tech/geo (2026-08-16)
     perspective_1: str | None = None
     deconstruct_json: dict[str, Any] | None = None  # 评论层 (2026-08-15)
     created_at: datetime

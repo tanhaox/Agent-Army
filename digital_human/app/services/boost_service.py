@@ -449,7 +449,17 @@ def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retri
     return ""
 
 
-def deconstruct_article(raw_text: str, *, emit=None) -> dict[str, Any] | None:
+# 地缘赛道解构适配块 (2026-08-16, track=geo 时追加到 DECONSTRUCT_PROMPT 之后)
+_GEO_DECONSTRUCT_ADDON = """
+
+【赛道适配 — 地缘/国际】本篇是地缘政治/国际关系内容，观众心理按地缘受众校准：
+- 核心关切：会不会打起来/影响祖国安全吗、影响我的钱包吗（油价/汇率/旅游/做外贸的生意）、领土主权完整、大国博弈谁占上风
+- 典型盲区：分不清官方表态与自媒体渲染、不了解历史脉络（条约/驻军/前科）、把某届政府当成整个国家
+- 嫌累点：地名舰名人名记不住、觉得离自己生活太远
+- 五种人设的评论角度相应对准事件本身（强硬派/理性派各有立场）、对消息源追问、对当事政客嘲讽；观众对"煽动开战"的节奏本身也警惕——reactions 里应包含至少一条"不想被带节奏/要客观"的声音"""
+
+
+def deconstruct_article(raw_text: str, *, emit=None, track: str = "tech") -> dict[str, Any] | None:
     """解构层：复刻普通用户看完新闻的真实反应（懂/盲区/嫌累）→ 伪用户评论.
 
     产出:
@@ -460,8 +470,11 @@ def deconstruct_article(raw_text: str, *, emit=None) -> dict[str, Any] | None:
     失败时返回 None, 调用方回退到无解构的普通洗稿.
     """
     try:
+        prompt = f"{DECONSTRUCT_PROMPT}\n\n【输入新闻稿】\n{raw_text}"
+        if track == "geo":
+            prompt += _GEO_DECONSTRUCT_ADDON
         raw = _call(
-            f"{DECONSTRUCT_PROMPT}\n\n【输入新闻稿】\n{raw_text}",
+            prompt,
             json_mode=True,
             max_tokens=4000,
         )

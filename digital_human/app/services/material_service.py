@@ -38,7 +38,21 @@ SEVEN_LAYERS: list[tuple[str, str, str, str]] = [
     ("L6", "商业降维打击", "250~280字", "价格对比具体倍数/比例+一笔普通人的账+商业操作细节及意图"),
     ("L7", "价值观收割", "250~280字", "对普通人的具体影响+思维转变(过去靠什么/未来靠什么)"),
 ]
-_LAYER_IDS = [lid for lid, *_ in SEVEN_LAYERS]
+
+# 地缘/国际版七层 (2026-08-16 用户方案: 建稿勾选赛道, 审计走对应层集)。
+# 与 config/laotan-geo.txt 六模块+素材拓展引擎(A背景纵深/B横向对照/C花边)对齐:
+# L6 由"商业降维打击"换成"横向对照与花边"——地缘稿几乎必有对照/花边需求而非商业数字。
+GEO_LAYERS: list[tuple[str, str, str, str]] = [
+    ("L1", "极速钩子", "40~50字", "一个具体的反差事实/惊人之语/意外动作"),
+    ("L2", "身份+现象反差", "80~100字", "核心矛盾「双方各说各话/表面A实际B」"),
+    ("L3", "背景纵深", "200~230字", "该事件的历史沿革/同类前科/条约与部署沿革 ≥2条"),
+    ("L4", "硬事实牌·部署与数据", "250~280字", "≥3个具体事实: 部署动向/时间线/军力数字/官方表态原话"),
+    ("L5", "一线细节与人物故事", "300~330字", "现场具体细节/当事人故事/一线人员处境(有画面感的真人真事)"),
+    ("L6", "横向对照与花边", "250~280字", "可类比的其他事件/国家做法对照+一条调节奏的掌故花边"),
+    ("L7", "价值观收割", "250~280字", "专家观点/趋势判断+对普通人的具体影响(安全/经济/生活)"),
+]
+
+_LAYER_IDS = [lid for lid, *_ in SEVEN_LAYERS]  # 两套层集共用 L1~L7 编号, 下游全兼容
 # 洗稿注入时分桶的层 (L1/L2/L7 原文已覆盖, 不单独建桶)
 _BUCKETED_LAYERS = ("L3", "L4", "L5", "L6")
 
@@ -79,6 +93,48 @@ search_queries 写法（重要，检索词质量直接决定补搜有效性）:
 - 好例子（主稿=数据泄露创新高）: "2025 数据泄露 事件 盘点"、"数据泄露 平均损失 IBM 报告"
 - 坏例子: "数据泄露 防护 测试 翻车 现场 实录"（行话堆砌，检索无效）"""
 
+# 地缘版审计 prompt (2026-08-16): 层集换成 GEO_LAYERS, 事实清单与 applicable 规则按地缘内容重写
+_AUDIT_PROMPT_GEO = """你是一名短视频素材完备性审计员。给定一篇主稿和多条补充素材，地缘/国际赛道洗稿模板（六模块+背景纵深/横向对照/花边拓展引擎）要求产出约1800~2500字口播稿。请逐层审计素材集合能否支撑该层写作。
+
+【判定标准 — 只看事实素材，不看写作手法】
+covered=true 当且仅当该层写作所需的**事实性素材**已在素材集合中齐备（按下方每层清单）。"提炼""贯穿""比喻""反差"是写作手法，由撰稿人完成，不要求素材里出现。
+各层事实清单：
+L3 背景纵深：该事件/冲突的历史沿革、同类前科、条约与部署沿革事实 ≥2 条
+L4 硬事实牌：部署动向/时间线/军力与预算数字/官方表态原话 ≥3 个
+L5 一线细节与人物故事：现场具体细节、当事人或一线人员的故事 ≥1 组（有画面感的真人真事）
+L6 横向对照与花边：可类比的其他事件或国家做法 ≥1 条 + 可调节奏的掌故花边 ≥1 条（花边须真实可考）
+L1/L2/L7 通常主稿自身即可覆盖。
+
+【内容类型适配 — 先判断 applicable 再判 covered】
+applicable 只取决于**主稿内容类型本身**，与补充素材多少无关。逐层标准：
+- L4: 主题能凑出 ≥3 个具体事实（部署/日期/数字/表态原话）就适用
+- L5: 需要存在现场细节/人物故事可供叙述，纯政策声明类通常不适用
+- L6: 地缘稿几乎总有可类比事件，通常适用；但纯双边技术性协议（无对照价值）不适用
+- L1/L2/L3/L7 对任何内容都适用
+applicable=false 的层：covered 填 false、gaps 写"本篇内容不适用该层（原因）"、search_queries 给空数组。
+
+只输出 JSON，不要输出其他文字：
+{
+  "layers": {
+    "L1": {"applicable": true, "covered": true, "evidence": "素材中一句话证据(≤60字, 没有则空串)", "gaps": "缺口描述(≤60字, covered=true可为空)", "search_queries": ["仅当applicable且缺料: 1~2条中文新闻检索词, 每条≤70字符"]},
+    "L2": {}, "L3": {}, "L4": {}, "L5": {}, "L6": {}, "L7": {}
+  },
+  "item_tags": {"1": ["L3","L4"], "2": ["L5"]},
+  "summary": "一句话总体判断(≤50字, 若有不适用的层请点名)"
+}
+item_tags: 把每条编号素材标注到它最能支撑的层(可多标); 编号对应输入里的【素材N】。
+
+search_queries 写法（重要，检索词质量直接决定补搜有效性）:
+- 你在为编辑生成「拿去搜索引擎找素材」的检索词。必须用大众/新闻语言，锚定主稿的具体事件、国家、人物、舰名、数字。
+- 禁止模板术语入检索词——"背景纵深""横向对照""花边""修罗场""铁律"都是内部行话。
+- 禁止抽象泛化词（如"国际局势""军事动态"这类万金油词）。
+- 好例子（主稿=霍尔木兹海峡事件）: "林肯号航母 部署天数"、"伊朗 阿曼 霍尔木兹 协议"
+- 坏例子: "海峡 局势 分析 深度"（泛化词，检索无效）"""
+
+
+def _audit_prompt_for(track: str) -> str:
+    return _AUDIT_PROMPT_GEO if (track or "tech") == "geo" else _AUDIT_PROMPT
+
 # 长度控制: 审计输入 / 素材块 (单条降 1200, 总量 40000 — 38+ 条素材不截断)
 _AUDIT_TOTAL_CAP = 40000
 _ARTICLE_CAP = 12000
@@ -111,9 +167,9 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + "…(截断)"
 
 
-def build_audit_input(article_text: str, items: list[MaterialItem]) -> str:
-    """审计 prompt + 主稿 + 编号素材, 总长 cap ~30000."""
-    parts = [_AUDIT_PROMPT, "", "【主稿】", _truncate(article_text, _ARTICLE_CAP)]
+def build_audit_input(article_text: str, items: list[MaterialItem], track: str = "tech") -> str:
+    """审计 prompt + 主稿 + 编号素材, 总长 cap ~30000. track 决定层集 (tech/geo)."""
+    parts = [_audit_prompt_for(track), "", "【主稿】", _truncate(article_text, _ARTICLE_CAP)]
     used = sum(len(p) for p in parts)
     for i, item in enumerate(items, start=1):
         label = item.title or item.media or (item.source_url or "")[:60] or f"素材{i}"
@@ -142,10 +198,12 @@ def _normalize_layer(raw: Any) -> dict[str, Any]:
 
 
 def audit_package(
-    article_text: str, items: list[MaterialItem], prev_audit: dict[str, Any] | None = None
+    article_text: str, items: list[MaterialItem], prev_audit: dict[str, Any] | None = None,
+    track: str = "tech",
 ) -> dict[str, Any] | None:
     """七层覆盖审计. LLM JSON 输出 → 规整 dict; 解析失败返回 None.
 
+    track (2026-08-16): tech=科技七层 / geo=地缘七层(L6=横向对照与花边), 建稿勾选驱动。
     prev_audit: 上一轮审计 (补搜/加素材后重审时传入).
     - prompt 注入上一轮 applicable 判定, 要求 LLM 保持一致;
     - 代码层强制锁定 applicable = 上一轮值 (LLM 判定在补搜后偶发翻转
@@ -153,7 +211,7 @@ def audit_package(
       需重置走「新建素材包」。
     """
     ok_items = [it for it in items if it.raw_text and it.raw_text.strip()]
-    prompt = build_audit_input(article_text, ok_items)
+    prompt = build_audit_input(article_text, ok_items, track=track)
     if prev_audit and isinstance(prev_audit.get("layers"), dict):
         prev_lines = []
         for lid in _LAYER_IDS:

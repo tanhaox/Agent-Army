@@ -36,9 +36,12 @@ async function createArticle() {
     setStatus('status-create', '请输入原文内容', true);
     return;
   }
+  // 赛道 (2026-08-16 用户方案): 建稿勾选 → 评论层解构 + 七层审计走对应分支
+  const trackEl = document.querySelector('input[name="article-track"]:checked');
+  const track = trackEl ? trackEl.value : 'tech';
   try {
-    currentArticle = await api('POST', '/articles', { title, source_url: sourceUrl, raw_text: rawText });
-    setStatus('status-create', `稿件已创建: ${currentArticle.id}`, false, true);
+    currentArticle = await api('POST', '/articles', { title, source_url: sourceUrl, raw_text: rawText, track });
+    setStatus('status-create', `稿件已创建: ${currentArticle.id}（${track === 'geo' ? '地缘/国际' : '科技/商业'}赛道）`, false, true);
     enablePackageUI();
     renderComments(null);  // 新稿无评论层
     // 新稿件必须清空旧包状态 (2026-08-16 bug: currentPackageId 残留上一篇的包,

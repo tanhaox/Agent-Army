@@ -46,8 +46,17 @@
         <button class="btn btn-secondary btn-sm" type="button" id="btn-fetch-url" onclick="fetchUrl()">🌐 抓取 URL</button>
       </div>
       <label>正文内容</label>
-      <textarea id="article-text" placeholder="粘贴财经/科技新闻原文..." style="min-height:160px;"></textarea>
-      <div class="btn-group" style="margin-top:1rem;">
+      <textarea id="article-text" placeholder="粘贴财经/科技/地缘新闻原文..." style="min-height:160px;"></textarea>
+      <div style="display:flex;gap:1.25rem;align-items:center;margin-top:0.6rem;font-size:0.82rem;">
+        <span style="color:var(--text-muted);">赛道（驱动评论层与七层分析分支）：</span>
+        <label style="display:flex;gap:0.3rem;align-items:center;cursor:pointer;">
+          <input type="radio" name="article-track" value="tech" checked> 科技/商业
+        </label>
+        <label style="display:flex;gap:0.3rem;align-items:center;cursor:pointer;">
+          <input type="radio" name="article-track" value="geo"> 地缘/国际
+        </label>
+      </div>
+      <div class="btn-group" style="margin-top:0.75rem;">
         <button class="btn btn-primary" id="btn-create" onclick="createArticle()">创建稿件</button>
       </div>
       <div class="status" id="status-create"></div>

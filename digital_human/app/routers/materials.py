@@ -119,7 +119,10 @@ def _run_package_job(
             # 3) 七层覆盖审计 (传上一轮结果: applicable 锁定, 防 LLM 判定翻转)
             _publish(job_id, {"type": "material_audit_start", "package_id": pkg.id})
             ok_items = [it for it in pkg.items if it.fetch_ok and it.raw_text]
-            audit = material_service.audit_package(article.raw_text, ok_items, prev_audit=pkg.audit_json)
+            audit = material_service.audit_package(
+                article.raw_text, ok_items, prev_audit=pkg.audit_json,
+                track=getattr(article, "track", "tech") or "tech",
+            )
             if audit is None:
                 pkg.status = "failed"
                 pkg.error_message = "审计 LLM 输出解析失败，请重试（重新审计）"

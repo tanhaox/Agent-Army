@@ -109,6 +109,11 @@ def _apply_manual_migrations(engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE articles ADD COLUMN deconstruct_json TEXT"))
                 logger.info("[db] migrated: articles.deconstruct_json column added")
+            # 赛道 (2026-08-16): tech/geo, 建稿勾选驱动评论层+七层审计分支
+            if "track" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN track VARCHAR(16) DEFAULT 'tech'"))
+                logger.info("[db] migrated: articles.track column added")
 
         # video_assets 内容质量分 (2026-08-16 烂素材治理③): VLM 质量打分产物,
         # matcher 硬底线+排序依据 — 治"分辨率没问题但内容平庸"的主病
