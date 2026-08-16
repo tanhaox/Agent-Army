@@ -76,5 +76,6 @@ class MaterialItemAddRequest(BaseModel):
 
 
 class SupplementSearchRequest(BaseModel):
-    queries: list[str] | None = Field(default=None, max_length=6)
+    # max_length 与补搜池 cap 对齐 (2026-08-16 调研清单并入后 6→10)
+    queries: list[str] | None = Field(default=None, max_length=10)
     count: int = Field(default=5, ge=1, le=10)

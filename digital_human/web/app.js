@@ -30,7 +30,11 @@ async function api(method, path, body) {
   const resp = await fetch(API + path, opts);
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
-    throw new Error(data.detail || `HTTP ${resp.status}`);
+    // detail 可能是对象/数组(FastAPI 422 校验错误) — 字符串化防 [object Object]
+    const d = data.detail;
+    const msg = d == null ? `HTTP ${resp.status}`
+      : (typeof d === 'string' ? d : JSON.stringify(d).slice(0, 300));
+    throw new Error(msg);
   }
   return resp.json().catch(() => ({}));
 }
