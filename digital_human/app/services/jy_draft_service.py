@@ -89,6 +89,9 @@ def _num_to_cn_pattern(text: str) -> str:
 def wash_subtitle_text(text: str) -> str:
     """TTS 读法 → 字幕阅读文本 (确定性规则).
 
+    0. 剥情绪标签 (2026-08-17 bug 修复): manifest 文本带 P5 内联标签 [calm]/[serious]/
+       [confident]/[surprised] 等 — 不剥则标签进字幕, 且 latin 正则把 calm/serious
+       当专名抓成强调大字+挂音效 (三重污染), 必须第一道工序清除
     1. 'X点Y' 数字读法 → 'X.Y' (四点六 → 4.6)
     2. 拉丁字母后紧跟的中文数字 → 阿拉伯 + 空格 (Grok四点六/Grok4.6 → Grok 4.6;
        Mythos五 → Mythos 5)
@@ -97,6 +100,7 @@ def wash_subtitle_text(text: str) -> str:
     import re
 
     t = text.strip()
+    t = re.sub(r"\[[a-zA-Z]+\]\s*", "", t)  # 剥 [calm]/[serious] 等情绪标签
     t = _num_to_cn_pattern(t)
     # latin + 中文数字 → latin + 空格 + 阿拉伯
     def _latin_num(m):
@@ -400,22 +404,57 @@ _SFX_FAMILY = {
 
 
 def _classify_chunk(chunk: str) -> tuple[str, str | None]:
-    """字幕块语义分类: (类别, 强调词). 类别 ∈ money/punchline/suspense/plain."""
+    """字幕块语义分类: (类别, 强调短语). 类别 ∈ money/punchline/suspense/plain.
+
+    强调短语升级 (2026-08-17 用户反馈: 之前只抓裸关键词 AI/32/SK, 完全没有
+    金句/反转/概念级长内容) — 按优先级提取:
+      ① 引号内容 → 金句/概念 (整段引用)
+      ② 反转/金句标记词所在分句 → 概念句 (≤16字)
+      ③ 数字+语境单位 → 金额/数据短语 (如 "涨了34%""20亿美元", 非裸数字)
+      ④ 问句 → 疑问核心短语
+    """
     import re
 
+    if re.search(r"[?？]$", chunk.strip()):
+        core = re.sub(r"^(为什么|怎么|难道|凭什么)", "", chunk.strip())
+        core = core.rstrip("？?。！")[:14]
+        return "suspense", (core or None)
+
+    # ① 引号金句/概念: 「...」 “...” "..." （TTS 读法稿里引号保留完整）
+    m = re.search(r"[「“\"]([^「」”\"]{4,24})[」”\"]", chunk)
+    if m:
+        return "punchline", m.group(1)
+
+    # ② 反转/金句标记词 → 所在分句 (金句的"肉"在标记词附近)
+    for marker in ("其实", "根本", "真相", "意味着", "这就是", "关键在于",
+                   "没想到", "说白了", "恰恰是", "最狠的", "最讽刺"):
+        if marker in chunk:
+            # 取含标记词的分句 (按标点切), 超长则取标记词前后共 14 字
+            for clause in re.split(r"[，。！？；、]", chunk):
+                if marker in clause and len(clause.strip()) >= 4:
+                    c = clause.strip()
+                    if len(c) > 16:
+                        i = c.index(marker)
+                        c = c[max(0, i - 4):i + 12]
+                    return "punchline", c
+    # ③ 数字短语: 数字 + 单位/语境 (非裸数字)
+    m = re.search(
+        r"([一-鿿]{0,5}?[\d.]+\s*[万亿]?(?:%|倍|美元|元|日元|欧元|年|个月|天|次|人|条|名)?)",
+        chunk,
+    )
+    if m and re.search(r"\d", m.group(1)):
+        phrase = m.group(1).strip()
+        if len(phrase) >= 2 and any(w in chunk for w in _MONEY_CTX):
+            return "money", phrase[:16]
+        if len(phrase) >= 3:  # 有语境的数字才做强调, 裸短数字放过
+            return "punchline", phrase[:16]
+
+    # ④ 专名兜底 (latin ≥3 字符, 排除已剥标签后的短缩写滥用)
     ranges = find_highlight_ranges(chunk)
-    kw = None
     for s, e in ranges:
         cand = chunk[s:e]
-        if len(cand) >= 2 or cand.isdigit():
-            kw = cand
-            break
-    if re.search(r"[?？]$", chunk.strip()):
-        return "suspense", None  # 问句: 音效即可, 不升大字 (R12 的 ? 由字幕承载)
-    if kw and re.search(r"\d", kw) and any(w in chunk for w in _MONEY_CTX):
-        return "money", kw
-    if kw:
-        return "punchline", kw
+        if len(cand) >= 4 and re.fullmatch(r"[A-Za-z][A-Za-z0-9 .+-]*", cand):
+            return "punchline", cand
     return "plain", None
 
 
@@ -425,8 +464,8 @@ def _auto_choreograph(script: Any, chunk: str, start_us: int, dur_us: int,
     """R9: 每个字幕块 → 强调大字(金/红) + 同帧语义音效 + 密度闸门."""
     cat, kw = _classify_chunk(chunk)
 
-    # ① 强调大字轨 (多轨轮换防重叠) — 关键词占比过大时跳过(字幕已承载)
-    if kw and len(kw) <= max(int(len(chunk) * 0.7), 4):
+    # ① 强调大字轨 (多轨轮换防重叠) — 与字幕完全重复时跳过(金句短语可长, R16 范式)
+    if kw and kw.strip() != chunk.strip():
         color = _EMPH_COLOR if cat in ("money", "punchline") else _EMPH_COLOR_RED
         track = f"emph{(emph_slot[0] % 3) + 1}"
         emph_slot[0] += 1
