@@ -46,7 +46,11 @@ def _brief(pkg: MaterialPackage) -> MaterialPackageBriefOut:
     )
 
 
-def _detail(pkg: MaterialPackage) -> MaterialPackageOut:
+def _detail(pkg: MaterialPackage, article: Article | None = None) -> MaterialPackageOut:
+    # 解构层 research 资料清单并入补搜候选池 (2026-08-16: 此前只躺在评论层面板)
+    research_hints = []
+    if article is not None and article.deconstruct_json:
+        research_hints = [str(r) for r in (article.deconstruct_json.get("research") or []) if r]
     return MaterialPackageOut(
         id=pkg.id,
         article_id=pkg.article_id,
@@ -58,7 +62,7 @@ def _detail(pkg: MaterialPackage) -> MaterialPackageOut:
         created_at=pkg.created_at,
         updated_at=pkg.updated_at,
         items=[MaterialItemOut.model_validate(it) for it in pkg.items],
-        gap_queries=material_service.collect_gap_queries(pkg.audit_json),
+        gap_queries=material_service.collect_gap_queries(pkg.audit_json, research_hints),
     )
 
 
@@ -200,7 +204,8 @@ def get_package(package_id: str, db: Session = Depends(get_db)):
     pkg = db.query(MaterialPackage).filter(MaterialPackage.id == package_id).first()
     if not pkg:
         raise HTTPException(404, "Material package not found")
-    return _detail(pkg)
+    article = db.query(Article).filter(Article.id == pkg.article_id).first()
+    return _detail(pkg, article)
 
 
 @router.post("/packages/{package_id}/items", response_model=MaterialItemOut)

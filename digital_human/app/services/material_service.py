@@ -267,13 +267,19 @@ def audit_package(
     }
 
 
-def collect_gap_queries(audit_json: dict[str, Any] | None) -> list[str]:
-    """缺口层 search_queries 汇总: 仅 applicable 层; 行话过滤、去重、≤70字、cap 6 条."""
-    if not audit_json:
+def collect_gap_queries(audit_json: dict[str, Any] | None,
+                        research_hints: list[str] | None = None) -> list[str]:
+    """缺口层 search_queries 汇总: 仅 applicable 层; 行话过滤、去重、≤70字、cap 6 条.
+
+    research_hints (2026-08-16): 解构层 research 资料清单并入补搜候选池 —
+    评论层挖出的"编辑该调研什么"直接变成可勾选补搜词 (此前只躺在展示面板).
+    带「调研·」前缀区分来源, 计入总 cap.
+    """
+    if not audit_json and not research_hints:
         return []
     seen: set[str] = set()
     out: list[str] = []
-    layers = audit_json.get("layers") or {}
+    layers = (audit_json or {}).get("layers") or {}
     for lid in _LAYER_IDS:
         layer = layers.get(lid) or {}
         if not layer.get("applicable", True):
@@ -285,7 +291,13 @@ def collect_gap_queries(audit_json: dict[str, Any] | None) -> list[str]:
             if q and q not in seen:
                 seen.add(q)
                 out.append(q)
-    return out[:6]
+    # 解构层调研清单并入 (去重后仍受总 cap 约束)
+    for hint in research_hints or []:
+        q = _clean_query(str(hint).strip()[:64])
+        if q and q not in seen:
+            seen.add(q)
+            out.append(f"调研·{q}")
+    return out[:8]
 
 
 def _item_header(item: MaterialItem) -> str:
