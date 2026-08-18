@@ -60,6 +60,9 @@ _SAFE_KEYS = frozenset(
         "portrait_b64",
         "chart_head",
         "source",
+        # 片尾来源声明卡 (hf-source-v1, 2026-08-18): 结构化来源列表 JSON + 免责尾注
+        "sources_json",
+        "disclaimer",
         "duration_sec",
         # 品牌字段 (共享模板逐人设注入): 账号名/印章/标语 (2026-08-08)
         "brand_name",
@@ -70,9 +73,38 @@ _SAFE_KEYS = frozenset(
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 
+# HF 上屏文字净标点 (2026-08-18 用户口径: 只允许回车, 不允许标点)。
+# 仅去句读/括号/引号/破折号; 保留 数字/字母/%/·/./- (域名与数据不被破坏)。
+_PUNCT_STRIP = "，,。．！!？?；;：:、（）()【】[]《》<>〈〉「」『』‘’“”\"'…—–"
+_PUNCT_TABLE = str.maketrans({ch: None for ch in _PUNCT_STRIP})
+_JSON_SUBS = {"opening_lines_json", "sources_json", "scatter_words", "chart_json",
+              "opening_red_words", "opening_accent_words"}
+# 含 HTML 敏感内容或注入属性/文本节点的键: 净标点后仍需转义
+_ESCAPE_TEXT = {"quote_text", "attrib_name", "attrib_role", "hero_text",
+                "hot_word", "sub_text", "disclaimer", "source"}
+
+
+def _strip_punct(s: str) -> str:
+    return s.translate(_PUNCT_TABLE)
+
+
+def _strip_obj(o):
+    """递归净标点 JSON 叶子字符串 (域名里的 . 不在剥离集, 不受影响)."""
+    if isinstance(o, str):
+        return _strip_punct(o)
+    if isinstance(o, dict):
+        return {k: _strip_obj(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_strip_obj(v) for v in o]
+    return o
+
 
 def _build_substitutions(input_data: dict) -> dict[str, str]:
-    """Build a ``{placeholder: value}`` dict from the validated input."""
+    """Build a ``{placeholder: value}`` dict from the validated input.
+
+    末尾统一净标点 + 转义 (2026-08-18): HF 上屏文字只允许回车不允许标点;
+    JSON 类键先递归净叶子再转义; 含 HTML 敏感内容的文本键净标点后转义。
+    """
     subs: dict[str, str] = {}
     subs["title"] = str(input_data.get("title", ""))
     subs["subtitle"] = str(input_data.get("subtitle", ""))
@@ -91,30 +123,51 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
             subs[f"chart_label_{i+1}"] = str(c.get("label", ""))
             subs[f"chart_value_{i+1}"] = str(c.get("value", ""))
     # 完整 chart 结构经 JSON 内联给模板 layout() 三模式自适应渲染 (2026-08-01)
-    subs["chart_json"] = _html_escape(
-        json.dumps(chart, ensure_ascii=False, separators=(",", ":"))
-    )
-    # 开场字幕卡 (hf_opening, 2026-08-11): 多行台词 + 强调词 (JSON 属性含引号, 须转义)
-    subs["opening_lines_json"] = _html_escape(str(input_data.get("opening_lines_json", "[]")))
-    subs["opening_red_words"] = _html_escape(str(input_data.get("opening_red_words", "[]")))
-    subs["opening_accent_words"] = _html_escape(str(input_data.get("opening_accent_words", "[]")))
+    subs["chart_json"] = json.dumps(chart, ensure_ascii=False, separators=(",", ":"))
+    # 开场字幕卡 (hf_opening, 2026-08-11): 多行台词 + 强调词
+    subs["opening_lines_json"] = str(input_data.get("opening_lines_json", "[]"))
+    subs["opening_red_words"] = str(input_data.get("opening_red_words", "[]"))
+    subs["opening_accent_words"] = str(input_data.get("opening_accent_words", "[]"))
     # 财经片头 v3 参数
-    subs["hero_text"] = _html_escape(str(input_data.get("hero_text", "")))
-    subs["hot_word"] = _html_escape(str(input_data.get("hot_word", "")))
-    subs["sub_text"] = _html_escape(str(input_data.get("sub_text", "")))
-    subs["scatter_words"] = _html_escape(str(input_data.get("scatter_words", "[]")))
+    subs["hero_text"] = str(input_data.get("hero_text", ""))
+    subs["hot_word"] = str(input_data.get("hot_word", ""))
+    subs["sub_text"] = str(input_data.get("sub_text", ""))
+    subs["scatter_words"] = str(input_data.get("scatter_words", "[]"))
     # 引用卡参数
-    subs["quote_text"] = _html_escape(str(input_data.get("quote_text", "")))
-    subs["attrib_name"] = _html_escape(str(input_data.get("attrib_name", "")))
-    subs["attrib_role"] = _html_escape(str(input_data.get("attrib_role", "")))
-    subs["portrait_b64"] = _html_escape(str(input_data.get("portrait_b64", "")))
+    subs["quote_text"] = str(input_data.get("quote_text", ""))
+    subs["attrib_name"] = str(input_data.get("attrib_name", ""))
+    subs["attrib_role"] = str(input_data.get("attrib_role", ""))
+    subs["portrait_b64"] = str(input_data.get("portrait_b64", ""))
     subs["chart_head"] = str(chart.get("label") or chart.get("type") or "")
     subs["source"] = str(input_data.get("source", ""))
+    # 来源声明卡: 结构化来源列表 → JSON 内联属性 (≤5 条)
+    subs["sources_json"] = json.dumps(
+        (input_data.get("sources") or [])[:5], ensure_ascii=False, separators=(",", ":")
+    )
+    subs["disclaimer"] = str(input_data.get("disclaimer", ""))
     subs["duration_sec"] = str(input_data.get("duration_sec", "12"))
     # 品牌字段: 共享模板不硬编码账号名, 由 input_data 注入 (2026-08-08)
     subs["brand_name"] = str(input_data.get("brand_name", ""))
     subs["stamp_name"] = str(input_data.get("stamp_name", ""))
     subs["brand_tag"] = str(input_data.get("brand_tag", ""))
+
+    # 净标点 + 转义收口
+    for k in list(subs):
+        v = subs[k]
+        if k == "duration_sec" or k == "portrait_b64":
+            continue
+        if k in _JSON_SUBS:
+            try:
+                obj = json.loads(v)
+            except Exception:
+                obj = None
+            if obj is not None:
+                v = json.dumps(_strip_obj(obj), ensure_ascii=False, separators=(",", ":"))
+            subs[k] = _html_escape(v)
+        elif k in _ESCAPE_TEXT:
+            subs[k] = _html_escape(_strip_punct(v))
+        else:
+            subs[k] = _strip_punct(v)
     return subs
 
 

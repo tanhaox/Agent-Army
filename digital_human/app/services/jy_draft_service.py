@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 import pyJianYingDraft as draft_mod
-from pyJianYingDraft import ClipSettings, TextSegment, Timerange, trange
+from pyJianYingDraft import ClipSettings, TextIntro, TextSegment, Timerange, trange
 
 from app.config import get_config
 from app.models.director import DirectorJob
@@ -35,9 +35,41 @@ _US = 1_000_000  # 秒 → 微秒
 
 # ── 字幕样式 (2026-08-15 用户口径: 美观字号 5, 非 pyJYD 默认 8) ──
 _SUBTITLE_SIZE = 5.0
-# 划重点高亮: 大一号 + 黄色 (取自剪映"智能划重点"实测 schema: size 6 / [1, 0.87, 0])
-_HL_COLOR = (1.0, 0.87, 0.0)
-_HL_SIZE_DELTA = 1.0
+# 内联划重点升级 (2026-08-17 v2): +1→+2.5 字号差 + 金色, 代替被砍掉的独立强调轨
+# (剪映"智能划重点"的真实做法 — 关键词嵌在字幕行内, 变色变大, 不另起文字层)
+_HL_COLOR = (1.0, 0.96, 0.54)  # 引文金 (45期实测)
+_HL_COLOR_RED = (0.72, 0.11, 0.11)  # 冲击红 (四模板验证)
+_HL_SIZE_DELTA = 2.5
+
+# ── R9 v3 (2026-08-18): 动态字幕 = TextIntro 动画挂字幕段本身 + 配对音效 ──
+# 同帧文字独载分工 (用户决策): HF 文字窗内字幕抑制, 文字由 HF 卡独载 —
+# 根治"字幕/HF卡/动效 同帧三段同文" (三者同源 slot.text_context)。
+# 知识源: config/jy_animation_sound_pairs.json (动画↔同帧音效配对, 库缺回退 _SFX_FAMILY)
+#         config/jy_sound_semantics.json (title_in 族 = HF 边界转场音)
+_HF_TEXT_FAMILIES = {"hf_title", "hf_chart", "hf_opening", "hf_quote"}
+
+
+def _load_jy_config(name: str) -> dict:
+    p = Path(__file__).resolve().parents[2] / "config" / name
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("[jy_export] 配置加载失败 %s: %s", name, exc)
+        return {}
+
+
+_ANIM_PAIRS = _load_jy_config("jy_animation_sound_pairs.json").get("animation_sound_family", {})
+_TITLE_IN_SOUNDS = (
+    _load_jy_config("jy_sound_semantics.json")
+    .get("categories", {}).get("title_in", {}).get("sounds", [])
+)
+
+# 类别 → TextIntro 动画 (首条可见字幕用卡拉OK 逐字点亮); 配对音库缺时回退 _SFX_FAMILY
+_CAT_ANIM: dict[str, tuple[str, int]] = {
+    "suspense": ("向上滑动", 400),
+    "punchline": ("放大", 400),
+    "money": ("星光闪闪", 400),
+}
 
 # ── 字幕洗涤 (TTS 读法 → 阅读文本) ──────────────────────────────
 # 仅做确定性转换 (保守, 避免 LLM 成本/幻觉); 转换记录进日志供人工抽查。
@@ -152,43 +184,55 @@ def find_highlight_ranges(text: str) -> list[tuple[int, int]]:
 
 
 class _StyledTextSegment(TextSegment):
-    """字幕 + 自动划重点: 高亮区间大一号 + 黄色, 其余基础样式.
+    """字幕 + 内联划重点: 高亮区间大两号半 + 变色, 其余基础样式.
 
-    pyJYD 原生只输出单一 style (覆盖全文); 本子类在导出时改写 content 的
-    styles 数组为多段 range — 与剪映划重点的数据形态一致。
+    v2 (2026-08-17): 代替被砍掉的独立强调轨 — 剪映"智能划重点"的做法,
+    关键词嵌在字幕行内变色变大, 不另起文字层(解决与字幕/HF卡重合+截断三问题).
     """
+    _HL_DUAL_COLOR = True  # 数字/专名→金, 问句核心→红
 
     def __init__(self, text: str, timerange: Timerange, *,
-                 highlight_ranges: list[tuple[int, int]] | None = None, **kwargs):
+                 highlight_ranges: list[tuple[int, int]] | None = None,
+                 red_ranges: list[tuple[int, int]] | None = None,
+                 **kwargs):
         kwargs.setdefault("style", draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0)))
         super().__init__(text, timerange, **kwargs)
         self._hl_ranges = sorted(highlight_ranges or [])
+        self._red_ranges = sorted(red_ranges or [])
 
     def export_material(self) -> dict:
         ret = super().export_material()
-        if not self._hl_ranges:
+        if not self._hl_ranges and not self._red_ranges:
             return ret
         content = json.loads(ret["content"])
         base = dict(content["styles"][0])
-        hl = dict(base)
-        hl["size"] = _SUBTITLE_SIZE + _HL_SIZE_DELTA
-        fill = json.loads(json.dumps(base.get("fill") or {}))
-        if "content" in fill and "solid" in fill["content"]:
-            fill["content"]["solid"]["color"] = list(_HL_COLOR)
-        hl["fill"] = fill
 
-        styles: list[dict] = []
-        pos = 0
-        for s, e in self._hl_ranges:
-            s = max(s, pos)
-            if s >= e:
-                continue
-            if s > pos:
-                styles.append({**base, "range": [pos, s]})
-            styles.append({**hl, "range": [s, e]})
-            pos = e
-        if pos < len(self.text):
-            styles.append({**base, "range": [pos, len(self.text)]})
+        def make_style(color, ranges):
+            """仅产出高亮段 (金/红), 空档留给下方合并时统一填 base — 避免两组 base 重叠."""
+            hl = dict(base)
+            hl["size"] = _SUBTITLE_SIZE + _HL_SIZE_DELTA
+            fill = json.loads(json.dumps(base.get("fill") or {}))
+            if "content" in fill and "solid" in fill["content"]:
+                fill["content"]["solid"]["color"] = list(color)
+            hl["fill"] = fill
+            return [{**hl, "range": [s, e]} for s, e in ranges if s < e]
+
+        gold = make_style(_HL_COLOR, self._hl_ranges) if self._hl_ranges else []
+        red = make_style(_HL_COLOR_RED, self._red_ranges) if self._red_ranges else []
+        # 合并两组 (金+红), 按位置排序, 空白用 base 填充; 重叠时先到者优先
+        merged = sorted(gold + red, key=lambda s: s["range"][0])
+        styles = []
+        cursor = 0
+        for st in merged:
+            s, e = st["range"]
+            if s < cursor:
+                continue  # 已被更早区间覆盖, 丢弃避免嵌套样式
+            if s > cursor:
+                styles.append({**base, "range": [cursor, s]})
+            styles.append(st)
+            cursor = e
+        if cursor < len(self.text):
+            styles.append({**base, "range": [cursor, len(self.text)]})
         if styles:
             content["styles"] = styles
             ret["content"] = json.dumps(content, ensure_ascii=False)
@@ -241,16 +285,14 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     folder = draft_mod.DraftFolder(str(_drafts_dir()))
     script = folder.create_draft(name, width, height, allow_replace=True)
 
-    # 轨道: 后来居上 — 强调/字幕最上, video 中, audio 底
-    # emph1~3 = R9 强调大字轨(多轨轮换, 45期协同三件套); sfx = 同帧音效轨
+    # 轨道: 后来居上 — caption 最上(内联划重点), video 中, audio 底
+    # 2026-08-17 v2: 砍掉 emph1~3 独立强调轨(与字幕/HF卡高度重合+截断问题),
+    # 强调改为字幕内联划重点(加大字号差+变色) — 剪映"智能划重点"的真实做法
     script.append_tracks([
         draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
         draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
         draft_mod.TrackSpec(draft_mod.TrackType.video, "main"),
         draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"),
-        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph1"),
-        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph2"),
-        draft_mod.TrackSpec(draft_mod.TrackType.text, "emph3"),
     ])
 
     # ── audio 轨: TTS 分段逐段进轨 (时间轴 = 累计时长), 无 manifest 回退整段 ──
@@ -286,6 +328,7 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     # 素材长 → 截取前段。素材实例缓存避免同素材多 slot 重复探测。
     skipped: list[int] = []
     mat_cache: dict[str, draft_mod.VideoMaterial] = {}
+    hf_windows: list[tuple[int, int]] = []  # 文字承载 HF 窗 (字幕抑制用, v3 独载分工)
     for s in slots:
         if not Path(s.output_path).exists():
             skipped.append(s.slot_index)
@@ -319,14 +362,28 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                 volume=0,
             )
         script.add_segment(seg, "main")
+        if s.workflow in _HF_TEXT_FAMILIES:
+            ws = int(round(s.start_sec * _US))
+            hf_windows.append((ws, ws + alloc_us))
+
+    # ── HF 边界转场音 (v3): 画面切换同帧挂 title_in 族 whoosh, 纯音频不碰文字 ──
+    n_boundary = 0
+    _title_in_avail = [s for s in _TITLE_IN_SOUNDS if sound_path(s)]
+    for i, (ws, _we) in enumerate(hf_windows):
+        if not _title_in_avail:
+            break
+        if attach_sound(script, "sfx", _title_in_avail[i % len(_title_in_avail)],
+                        ws / _US, volume=0.9):
+            n_boundary += 1
 
     # ── text 轨: 逐段字幕 (洗 TTS 读法 + 超长断句, 时长按字数比例分配) ──
     # 横屏每屏上限 30 字 (2026-08-15 用户实测超出横屏); 竖屏画面窄取 18。
     max_chars = 18 if height > width else 30
     n_text = 0
-    r9_stats = {"emphasis": 0, "sfx": 0, "sfx_missing": 0, "sfx_density_skip": 0}
-    _emph_slot = [0]
+    r9_stats = {"emphasis": 0, "sfx": 0, "sfx_missing": 0, "sfx_density_skip": 0,
+                "anim": 0, "caption_suppressed": 0, "sfx_boundary": n_boundary}
     _last_sfx = [None]
+    _first_caption = [True]
     if manifest and manifest.get("segments"):
         cum = 0.0
         for seg in manifest["segments"]:
@@ -344,22 +401,39 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                 alloc = [seg_dur_us * len(c) // total_len for c in chunks]
                 alloc[-1] = seg_dur_us - sum(alloc[:-1])
                 for chunk, chunk_us in zip(chunks, alloc):
+                    # v3 独载分工: HF 文字窗内字幕抑制 (中点落窗即抑制), 文字由 HF 卡独载
+                    mid = seg_start_us + max(chunk_us, 1000) // 2
+                    if any(ws <= mid < we for ws, we in hf_windows):
+                        r9_stats["caption_suppressed"] += 1
+                        seg_start_us += chunk_us
+                        continue
+                    # R9 v3: 分类拿内联高亮区间 + 动效(动画名) + 同帧音效
+                    gold, red, anim, anim_ms = _auto_choreograph(
+                        script, chunk, seg_start_us, r9_stats, _last_sfx,
+                        first=_first_caption[0])
+                    _first_caption[0] = False
+                    # 内联划重点: R9 语义区间 + find_highlight_ranges 数字/专名兜底
+                    hl = sorted(set(gold + find_highlight_ranges(chunk)))
+                    rr = sorted(set(red))
                     try:
-                        script.add_segment(
-                            _StyledTextSegment(
-                                chunk,
-                                trange(seg_start_us, max(chunk_us, 1000)),
-                                highlight_ranges=find_highlight_ranges(chunk),
-                                clip_settings=ClipSettings(transform_y=-0.75),
-                            ),
-                            "caption",
+                        seg = _StyledTextSegment(
+                            chunk,
+                            trange(seg_start_us, max(chunk_us, 1000)),
+                            highlight_ranges=hl,
+                            red_ranges=rr,
+                            clip_settings=ClipSettings(transform_y=-0.75),
                         )
+                        # 动态字幕 v2→v3: 动画挂字幕段本身 (不加层, 零重合)
+                        if anim:
+                            seg.add_animation(
+                                getattr(TextIntro, anim),
+                                duration=anim_ms * 1000 if anim_ms else None,
+                            )
+                            r9_stats["anim"] += 1
+                        script.add_segment(seg, "caption")
                         n_text += 1
                     except Exception as exc:  # 单条字幕失败不阻塞
                         logger.warning("[jy_export] 字幕段失败: %s | %s", chunk[:20], exc)
-                    # R9 自动编排: 强调大字 + 同帧音效 (密度闸门在内部)
-                    _auto_choreograph(script, chunk, seg_start_us, max(chunk_us, 1000),
-                                      _emph_slot, r9_stats, _last_sfx)
                     seg_start_us += chunk_us
                 cum += dur
             else:
@@ -379,6 +453,9 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
         "sfx_attached": r9_stats["sfx"],
         "sfx_missing": r9_stats["sfx_missing"],
         "sfx_density_skip": r9_stats["sfx_density_skip"],
+        "anim_attached": r9_stats["anim"],
+        "caption_suppressed": r9_stats["caption_suppressed"],
+        "sfx_boundary": r9_stats["sfx_boundary"],
         "skipped_slots": skipped,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -386,12 +463,9 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     return result
 
 
-# ── R9 自动编排 (2026-08-16): 划重点词→强调轨大字→同帧语义音效 + 密度规则 ──
+# ── R9 自动编排 (2026-08-17): 分类→同帧语义音效 + 内联划重点(金/红) + 密度规则 ──
 # 知识来源: 45期协同三件套 / 音效语义库(用户标注) / 密度规则(用户口径) — 全确定性, 无 LLM
-_EMPH_COLOR = (1.0, 0.96, 0.54)   # 引文金: 数字/金额大字 (45期 T6 实测值)
-_EMPH_COLOR_RED = (0.72, 0.11, 0.11)  # 冲击红: 疑问/设问 (16/28/45期四证)
-_EMPH_SIZE = _SUBTITLE_SIZE + 3.0
-_EMPH_ANIMS = ("放大", "跃进", "向右滑动")  # 轮换 (45期/高频动画池)
+# 视觉强调 v2: 砍掉独立强调轨, 改为字幕行内双色划重点 (解决与字幕/HF卡重合+截断)
 
 # 金额语境词 (数字+语境 → money 族; 纯数字/专名 → punchline 叮族; 问句 → 悬疑族)
 _MONEY_CTX = ("万", "亿", "元", "美元", "收入", "赚", "营收", "薪", "融资", "估值",
@@ -458,65 +532,68 @@ def _classify_chunk(chunk: str) -> tuple[str, str | None]:
     return "plain", None
 
 
-def _auto_choreograph(script: Any, chunk: str, start_us: int, dur_us: int,
-                      emph_slot: list[int], stats: dict[str, int],
-                      last_sound_us: list[int]) -> None:
-    """R9: 每个字幕块 → 强调大字(金/红) + 同帧语义音效 + 密度闸门."""
+def _auto_choreograph(script: Any, chunk: str, start_us: int,
+                      stats: dict[str, int], last_sound_us: list[int],
+                      first: bool = False) -> tuple[list, list, str | None, int | None]:
+    """R9 v3: 每个字幕块 → 内联高亮 (金/红) + 动效动画 + 同帧音效.
+
+    v3 (2026-08-18): 动效 = TextIntro 动画挂字幕段本身 (不加层, 零重合);
+    动画与音效同一次决策同帧触发 — 音效优先取动画配对
+    (jy_animation_sound_pairs), 库缺回退类别族 _SFX_FAMILY。
+    首条可见字幕用卡拉OK (逐字点亮跟音频)。
+    密度闸门管整个事件 (动画+音效): 前 30s 全类别, 之后仅非 plain 且间隔 ≥4s。
+    Returns: (gold_ranges, red_ranges, anim_name, anim_ms)。
+    """
     cat, kw = _classify_chunk(chunk)
 
-    # ① 强调大字轨 (多轨轮换防重叠) — 与字幕完全重复时跳过(金句短语可长, R16 范式)
-    if kw and kw.strip() != chunk.strip():
-        color = _EMPH_COLOR if cat in ("money", "punchline") else _EMPH_COLOR_RED
-        track = f"emph{(emph_slot[0] % 3) + 1}"
-        emph_slot[0] += 1
-        anim = _EMPH_ANIMS[emph_slot[0] % len(_EMPH_ANIMS)]
-        try:
-            seg = _EmphTextSegment(
-                kw, trange(start_us, max(dur_us, 500_000)),
-                color=color,
-                clip_settings=ClipSettings(transform_y=0.42, scale_x=1.25, scale_y=1.25),
-            )
-            seg.add_animation(getattr(draft_mod.TextIntro, anim))
-            seg.add_animation(draft_mod.TextOutro.渐隐)
-            script.add_segment(seg, track)
+    gold: list[tuple[int, int]] = []
+    red: list[tuple[int, int]] = []
+    if kw:
+        idx = chunk.find(kw)
+        if idx >= 0:
+            rng = (idx, idx + len(kw))
+            if cat == "suspense":
+                red.append(rng)
+            else:
+                gold.append(rng)
             stats["emphasis"] += 1
-        except Exception as exc:
-            logger.warning("[jy_export] 强调字失败 %r: %s", kw, exc)
+        # 兜底: 分类词不在 chunk 里(改写后), 用 find_highlight_ranges 补数字/专名
+        elif cat in ("money", "punchline"):
+            gold.extend(find_highlight_ranges(chunk)[:1])
 
-    # ② 同帧音效 + 密度闸门: 前 30s 全类别高密度; 之后只留 money/punchline/suspense
-    #    且间隔 ≥4s (用户口径: 长篇前 30 秒之外降档, 再多烦人)
-    if cat == "plain":
-        return
-    if last_sound_us[0] is not None and start_us - last_sound_us[0] < 4_000_000 and start_us > 30_000_000:
-        stats["sfx_density_skip"] += 1
-        return
-    fam = _SFX_FAMILY[cat]
-    name = fam[stats.get(f"_rot_{cat}", 0) % len(fam)]  # 族内轮换防腻 (A/B 变奏规则)
-    stats[f"_rot_{cat}"] = stats.get(f"_rot_{cat}", 0) + 1
-    if attach_sound(script, "sfx", name, start_us / _US, volume=0.9):
-        stats["sfx"] += 1
-        last_sound_us[0] = start_us
-    else:
-        stats["sfx_missing"] += 1
+    # 动效决策: 首条可见字幕卡拉OK; 其余按类别; 动画名须为 TextIntro 合法枚举
+    anim: str | None = None
+    anim_ms: int | None = None
+    if first:
+        anim = "卡拉OK"
+    elif cat in _CAT_ANIM:
+        anim, anim_ms = _CAT_ANIM[cat]
+    if anim is not None and not hasattr(TextIntro, anim):
+        anim, anim_ms = None, None
 
-
-class _EmphTextSegment(_StyledTextSegment):
-    """强调大字: 固定大号金色样式 (R9)."""
-
-    def __init__(self, text: str, timerange: Timerange, *, color=_EMPH_COLOR, **kw):
-        super().__init__(text, timerange, highlight_ranges=[], **kw)
-        self._emph_color = color
-
-    def export_material(self) -> dict:
-        ret = super().export_material()
-        content = json.loads(ret["content"])
-        for st in content.get("styles", []):
-            st["size"] = _EMPH_SIZE
-            fill = st.get("fill") or {}
-            if "content" in fill and "solid" in fill["content"]:
-                fill["content"]["solid"]["color"] = list(self._emph_color)
-        ret["content"] = json.dumps(content, ensure_ascii=False)
-        return ret
+    # 同帧音效 + 密度闸门 (闸门管整个事件: 动画+音效)
+    if cat != "plain":
+        if last_sound_us[0] is not None and start_us - last_sound_us[0] < 4_000_000 and start_us > 30_000_000:
+            stats["sfx_density_skip"] += 1
+            return gold, red, None, None
+        # 音效: 动画配对优先, 回退类别族; 库内可用者轮换
+        fam: list[str] = []
+        if anim:
+            fam += list(_ANIM_PAIRS.get(anim, {}).get("sounds", []))
+        fam += list(_SFX_FAMILY[cat])
+        avail = list(dict.fromkeys(s for s in fam if sound_path(s)))
+        if avail:
+            rot = stats.get(f"_rot_{cat}", 0)
+            name = avail[rot % len(avail)]
+            stats[f"_rot_{cat}"] = rot + 1
+            if attach_sound(script, "sfx", name, start_us / _US, volume=0.9):
+                stats["sfx"] += 1
+                last_sound_us[0] = start_us
+            else:
+                stats["sfx_missing"] += 1
+        else:
+            stats["sfx_missing"] += 1
+    return gold, red, anim, anim_ms
 
 
 def _probe_duration(path: str | Path) -> float | None:

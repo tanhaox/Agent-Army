@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,10 @@ from app.services.director_service._trace import append_trace
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["_clamp_slot_durations", "_append_references_slot", "_persist_plan"]
+__all__ = ["_clamp_slot_durations", "_append_source_slot", "_persist_plan"]
+
+# 片尾来源声明卡时长 (2026-08-17 用户口径: 5 秒无语音免责声明)
+_SOURCE_CARD_DURATION = 5.0
 
 
 # 质量钳制参数 (2026-08-15): 实测 53 slots/5min、broll 0.9s 闪切、21 张 hf_title → 硬兜底
@@ -104,38 +108,113 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
                     len(kept), dropped)
 
 
-def _append_references_slot(plan: Any, script: Any, total_duration: float) -> None:
-    """Auto-append references card if script has reference segments."""
-    ref_segments = [
-        seg for seg in script.segments
-        if seg.segment_type == "references"
-    ]
-    if ref_segments:
-        from app.schemas import DirectorSlotPlan
-        ref_text = "\n".join(seg.text for seg in ref_segments[:6])
-        ref_duration = 15.0
-        ref_slot = DirectorSlotPlan(
-            slot_index=len(plan.slots),
-            start_sec=round(total_duration, 3),
-            end_sec=round(total_duration + ref_duration, 3),
-            duration_sec=ref_duration,
-            text_context=ref_text[:500],
-            segment_id=ref_segments[0].id,
-            visual_type="hf_title",
-            workflow="hf_title",
-            params={
-                "render_config": {
-                    "title": "参考来源",
-                    "subtitle": ref_text[:200],
-                    "style": "references",
-                },
-                "intensity": "low",
-                "emotion": "closing",
-                "no_voiceover": True,
+def _domain_of(url: str) -> str:
+    """URL → 可读媒体名 (netloc 去 www./m./wap. 前缀). 失败返回空串."""
+    try:
+        host = (urlparse(url).netloc or "").lower()
+    except Exception:
+        return ""
+    for prefix in ("www.", "m.", "wap."):
+        if host.startswith(prefix):
+            return host[len(prefix):]
+    return host
+
+
+def _clean_source_title(title: str) -> str:
+    """清洗来源标题: 截掉智谱搜索的"（发布时间：…"尾巴, 去空白, 限 40 字."""
+    t = (title or "").strip()
+    for marker in ("（发布时间", "(发布时间", "发布时间"):
+        i = t.find(marker)
+        if i > 0:
+            t = t[:i]
+            break
+    return t.strip()[:40]
+
+
+def _collect_news_sources(db: Session, script: Any) -> list[dict[str, str]]:
+    """聚合真实来源: 素材包(真 http URL → 域名作媒体名 + 清洗后标题) + 主稿 article.
+
+    来源数据在 material_items (洗稿时喂 LLM 参考), 产出稿不保留来源列表 →
+    尾卡从这里取 (2026-08-17 修复: 原机制依赖脚本 references 段, 全库从未出现).
+    URL 去重, 上限 5 条.
+    """
+    from app.models import MaterialPackage
+
+    srcs: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    if script.material_package_id:
+        pkg = db.get(MaterialPackage, script.material_package_id)
+        if pkg:
+            for it in pkg.items:
+                url = (it.source_url or "").strip()
+                if not url.lower().startswith("http") or url in seen:
+                    continue
+                seen.add(url)
+                media = _domain_of(url)  # media 字段历史上有日期脏值, 域名更可靠
+                srcs.append({"media": media or "网络", "title": _clean_source_title(it.title)})
+                if len(srcs) >= 5:
+                    break
+
+    if len(srcs) < 5 and script.article and script.article.source_url:
+        url = (script.article.source_url or "").strip()
+        if url.lower().startswith("http") and url not in seen:
+            seen.add(url)
+            srcs.append({"media": _domain_of(url) or "新闻源",
+                         "title": _clean_source_title(script.article.title)})
+    return srcs
+
+
+def _append_source_slot(db: Session, plan: Any, script: Any, total_duration: float) -> None:
+    """片尾来源声明卡 (来源驱动, 无语音) — 修复 2026-08-17.
+
+    原 _append_references_slot 依赖洗稿文本含"参考来源"段 (script_parser 据此建
+    references 段), 但 7 层洗稿 prompt 输出纯口播稿从不含该段 → 全库 references
+    段=0, 尾卡从未触发. 改为从 material_package + article 聚合真实来源, 有来源
+    即恒定追加 5s hf_title 卡 (媒体名·短标题, no_voiceover).
+    """
+    from app.schemas import DirectorSlotPlan
+
+    sources = _collect_news_sources(db, script)
+    if not sources:
+        # 回退: 洗稿文本的 references 段 (历史数据兜底)
+        ref_segments = [seg for seg in script.segments if seg.segment_type == "references"]
+        ref_text = "\n".join(seg.text for seg in ref_segments[:6])[:200].strip()
+        if ref_text:
+            sources = [{"media": "参考来源", "title": ref_text}]
+    if not sources:
+        sources = [{"media": "公开报道", "title": "内容综合自公开报道，仅供参考"}]
+
+    subtitle = "  ·  ".join(
+        f"{s['media']}·{s['title']}" if s["title"] else s["media"] for s in sources
+    )[:200]
+
+    ref_slot = DirectorSlotPlan(
+        slot_index=len(plan.slots),
+        start_sec=round(total_duration, 3),
+        end_sec=round(total_duration + _SOURCE_CARD_DURATION, 3),
+        duration_sec=_SOURCE_CARD_DURATION,
+        text_context=subtitle,
+        segment_id=None,
+        visual_type="hf_title",
+        workflow="hf_title",
+        params={
+            "render_config": {
+                "title": "内容来源声明",
+                "subtitle": subtitle,
+                "style": "references",
+                # 结构化来源列表 (hf-source-v1 专用; 长 subtitle 走 hf-title-v2
+                # 的 kicker 会炸 32 字校验 → 2026-08-18 产线降级黑屏事故)
+                "sources": sources,
             },
-        )
-        plan.slots.append(ref_slot)
-        logger.info("[director] appended references hf_title slot (%.0fs)", ref_duration)
+            "intensity": "low",
+            "emotion": "closing",
+            "no_voiceover": True,
+        },
+    )
+    plan.slots.append(ref_slot)
+    logger.info("[director] appended source-declaration hf_title slot (%.0fs): %s",
+                _SOURCE_CARD_DURATION, subtitle[:60])
 
 
 def _persist_plan(

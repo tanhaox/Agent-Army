@@ -66,9 +66,18 @@ def _build_slot_segments(
     host slots → silence matching the slot duration (ComfyUI video already
     carries the synced audio); non-host slots → TTS audio trimmed from the
     master.  ``(start, end, is_host)`` in timeline order.
+
+    修复 2026-08-17: ``no_voiceover`` 尾卡 (片尾来源声明/参考卡) 也按静音处理 —
+    否则非 host 尾卡会 ``atrim=start=<音轨末尾>`` 切出空音频段, concat 失败/
+    音轨截断 (尾卡在 TTS 主音轨之后, 无对应语音).
     """
     return [
-        (float(s.start_sec), float(s.end_sec), s.workflow in host_wf)
+        (
+            float(s.start_sec),
+            float(s.end_sec),
+            s.workflow in host_wf
+            or bool((s.params_json or {}).get("render_config", {}).get("no_voiceover")),
+        )
         for s in completed
     ]
 

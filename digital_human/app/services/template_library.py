@@ -345,6 +345,41 @@ TEMPLATES: dict[str, dict] = {
             "additionalProperties": True,
         },
     },
+    "hf-source-v1": {
+        # 片尾来源声明卡 (2026-08-18): 财经体系 (深炭+暖金, 同 title_v2/chart_v2/opening_v3).
+        # 原尾卡复用 hf-title-v2 但 subtitle→kicker 受 maxLength 32 校验炸掉,
+        # 降级 hf_chart 渲染近黑屏 → 专用模板承载结构化来源列表.
+        "version": "1.0.0",
+        "composition_id": "hf_source_v1",
+        "source_dir": "hf_source_v1",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 10],
+        "required_input": ["title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "sources": {
+                    "type": "array",
+                    "maxItems": 5,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "media": {"type": "string", "maxLength": 40},
+                            "title": {"type": "string", "maxLength": 60},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "disclaimer": {"type": "string", "maxLength": 80},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 10},
+            },
+            "required": ["title"],
+            "additionalProperties": True,
+        },
+    },
 }
 
 

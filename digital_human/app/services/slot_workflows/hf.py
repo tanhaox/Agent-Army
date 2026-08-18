@@ -11,7 +11,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from app.models import DirectorSlot, Persona, VisualRenderJob
+from app.models import DirectorSlot, VisualRenderJob
 from app.schemas import get_video_format_spec
 from app.services.slot_workflows.common import _pick_hf_template
 from app.services.slot_workflows.hf_chart import _normalize_chart_input
@@ -41,39 +41,30 @@ def _merge_render_config(input_data: dict, render_config: dict) -> None:
             input_data[k] = v
 
 
+# 账号拆分 (2026-08-18): 发布账号按赛道分离, HF 卡品牌文字跟随首页赛道
+# (Article.track, 同驱动评论层/七层分支), 不再读 persona/host 的旧统一账号名.
+#   tech (科技/商业) → 老谭科技观;  geo (地缘/国际) → 老谭观时局
+_TRACK_BRAND = {
+    "tech": {"brand": "老谭科技观", "stamp": "科技", "tag": "科技·商业"},
+    "geo": {"brand": "老谭观时局", "stamp": "时局", "tag": "地缘·国际"},
+}
+
+
 def _merge_brand(input_data: dict, slot: DirectorSlot, db: Session) -> None:
-    """注入品牌字段 (brand_name / stamp_name / brand_tag), 供共享模板逐人设上屏.
+    """注入品牌字段 (brand_name / stamp_name / brand_tag), 跟随赛道自动切换.
 
-    模板由多数数字人共享, 品牌栏/印章不再硬编码某个账号名, 而是从
-    ``script → persona → host`` 闭环动态注入 (2026-08-08 整合: 人物即账号).
-
-    取数优先级:
-      1. persona.brand_name / stamp_name / brand_tag (人物页编辑, 唯一入口)
-      2. host 同名字段 (旧数据回退)
-      3. 中性兜底: 财经频道 / 前 2 字 / 数据解读 (保证老库零迁移也能跑)
+    两套发布账号 (老谭科技观/老谭观时局) 的差异仅品牌文字 — 模板本身已参数化
+    ({{brand_name}}/{{stamp_name}}/{{brand_tag}}), 无需复制两套模板文件.
+    赛道取 ``script.article.track`` (缺省 tech); render_config 显式 brand_tag 仍可覆盖标语.
     """
-    host = slot.director_job.script.host if slot.director_job.script else None
-    persona: Persona | None = None
-    if db is not None:
-        persona = db.query(Persona).filter(Persona.host_id == host.id).first() if host else None
-
-    def _pick(a: str | None, b: str | None) -> str:
-        return (a or b or "").strip()
-
-    name = _pick(persona.brand_name if persona else None, host.brand_name if host else None)
-    if not name and host:
-        name = str(host.name or "").strip()
-    input_data["brand_name"] = name or "财经频道"
-    # 印章: 显式 stamp_name 优先, 否则取品牌名前 2 字竖排 (适配 120px 印章框); 短名取首个字符
-    stamp = _pick(persona.stamp_name if persona else None, host.stamp_name if host else None)
-    if not stamp:
-        stamp = name[:2] if name else ""
-    input_data["stamp_name"] = stamp or "财经"
-    # 标语: 显式 brand_tag 优先, 其次 render_config 覆盖, 缺省用中性 tag
-    tag = _pick(persona.brand_tag if persona else None, host.brand_tag if host else None)
-    if not tag:
-        tag = input_data.get("brand_tag")
-    input_data["brand_tag"] = str(tag).strip() if tag else "数据解读"
+    script = slot.director_job.script if slot.director_job else None
+    track = (script.article.track if script and script.article else None) or "tech"
+    tb = _TRACK_BRAND.get(track, _TRACK_BRAND["tech"])
+    input_data["brand_name"] = tb["brand"]
+    input_data["stamp_name"] = tb["stamp"]
+    # 标语: 显式 brand_tag 优先, 缺省用赛道标语
+    tag = input_data.get("brand_tag")
+    input_data["brand_tag"] = str(tag).strip() if tag else tb["tag"]
 
 
 def _ensure_metrics(input_data: dict) -> None:
@@ -102,6 +93,12 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     # 引用卡 (hf_quote): 一句话观点 + 出处/人物, 黑金质感
     if workflow == "hf_quote":
         return _execute_hf_quote(db, slot)
+
+    # 片尾来源声明卡 (references 风格) → 专用 hf-source-v1 模板:
+    # hf-title-v2 的 subtitle→kicker 受 schema maxLength 32 校验, 来源列表必炸,
+    # 降级 hf_chart 后渲染近黑屏 (2026-08-18 产线实测)
+    if workflow == "hf_title" and (slot.params_json.get("render_config") or {}).get("style") == "references":
+        return _execute_hf_source(db, slot)
 
     # 按 video_format 选模板: 横屏→news-magazine-v1-ls, 竖屏/方屏→news-magazine-v1
     template_id = _pick_hf_template(slot.director_job)
@@ -163,10 +160,12 @@ def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
 
     spec = get_video_format_spec(slot.director_job.video_format)
     render_config = slot.params_json.get("render_config") or {}
-    style = render_config.get("style", "v1") or "v1"
-    if style not in ("v1", "v2", "v3"):
-        style = "v1"
     is_landscape = spec["width"] > spec["height"]
+    # 财经片头 v3 统一默认 (2026-08-18: v1 禁忌警告风为遗留, 账号统一财经体系);
+    # v3 当前仅横屏设计 → 竖屏回退 v1
+    style = render_config.get("style") or ("v3" if is_landscape else "v1")
+    if style not in ("v1", "v2", "v3"):
+        style = "v3" if is_landscape else "v1"
     # style 已是 "v1/v2/v3" (含 v), 直接拼; 横屏 v1/v2 用 -ls 模板, v3 当前仅横屏设计用基础模板
     template_id = f"hf-opening-{style}-ls" if is_landscape and style != "v3" else f"hf-opening-{style}"
     duration = round(slot.end_sec - slot.start_sec, 3)
@@ -174,15 +173,25 @@ def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
     # v3 财经片头: hero/hot/sub/scatter 参数
     if style == "v3":
         input_data = {
-            "hero_text": str(render_config.get("hero") or render_config.get("hero_text") or ""),
+            "hero_text": str(render_config.get("hero") or render_config.get("hero_text") or "")[:16],
             "hot_word": str(render_config.get("hot") or render_config.get("hot_word") or ""),
             "sub_text": str(render_config.get("sub") or render_config.get("sub_text") or ""),
             "scatter_words": json.dumps(render_config.get("scatter") or render_config.get("scatter_words") or [], ensure_ascii=False),
             "duration_sec": max(5, min(8, round(duration))),
         }
-        # 无显式 hero 时从口播取首句
+        # 无显式 hero 时从口播取: 语义分行首行做 hero (108px 字号 ≤14 字防溢出),
+        # 剩余行做 sub_text (2026-08-18 修复: 原 [:20] 整句溢出裁切)
         if not input_data["hero_text"]:
-            input_data["hero_text"] = (slot.text_context or "").split("||")[0][:20]
+            from app.services.slot_workflows.hf_extract import build_opening_lines
+
+            built = build_opening_lines(slot.text_context or "", max_chars=14)
+            lines = built.get("lines", [])
+            input_data["hero_text"] = lines[0] if lines else (slot.text_context or "")[:14]
+            if not input_data["sub_text"] and len(lines) > 1:
+                input_data["sub_text"] = "".join(lines[1:])[:32]
+            if not input_data["hot_word"]:
+                reds = built.get("red_words") or []
+                input_data["hot_word"] = reds[0] if reds else ""
         # 无 hot 词时从口播检测冲击词
         if not input_data["hot_word"]:
             try:
@@ -280,6 +289,43 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
                 input_data["hot_word"] = words[0]
         except Exception:
             pass
+    _merge_brand(input_data, slot, db)
+
+    job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+    db.add(job); db.commit(); db.refresh(job)
+    result = execute_visual_render_job(db, job.id, template_id, input_data)
+    if result.get("status") != "completed":
+        raise RuntimeError(result.get("error_message") or "HF render failed")
+    out_path = result.get("output_path")
+    if not out_path or not Path(out_path).exists():
+        raise RuntimeError("HF render output missing")
+    return out_path
+
+
+def _execute_hf_source(db: Session, slot: DirectorSlot) -> str:
+    """片尾来源声明卡 (hf-source-v1): 结构化来源列表 + 免责尾注, 财经体系.
+
+    - 模板: hf-source-v1 (横屏 1920x1080, 深炭+暖金, 同 title_v2/chart_v2 体系)
+    - 内容: title(卡题) + sources([{media, title}]≤5, 来自 render_config) +
+            disclaimer(免责尾注) + 品牌角标
+    """
+    from app.services.visual_render_service import execute_visual_render_job
+
+    template_id = "hf-source-v1"
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    render_config = slot.params_json.get("render_config") or {}
+
+    sources = render_config.get("sources") or []
+    input_data = {
+        "title": str(render_config.get("title") or "内容来源声明"),
+        "sources": [
+            {"media": str(s.get("media") or "")[:40], "title": str(s.get("title") or "")[:60]}
+            for s in sources[:5] if isinstance(s, dict)
+        ],
+        "disclaimer": str(render_config.get("disclaimer")
+                          or "内容综合自公开报道 仅供参考 不构成投资建议"),
+        "duration_sec": max(4, min(10, round(duration))),
+    }
     _merge_brand(input_data, slot, db)
 
     job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")

@@ -171,6 +171,13 @@ def _split_lines_semantic(text: str, max_chars: int = 12) -> list[str]:
                 if 0 <= idx < cut <= idx + len(w):
                     cut = idx  # 倒退到词首
                     break
+        # 防尾部孤行 (2026-08-18 bug: "…围剿改" + "写。" 孤行): 切后剩余 ≤3 字时
+        # 重平衡为两半 (优先中点附近标点断点, 无则对半), 避免 1-2 字吊尾
+        if 0 < len(t) - cut <= 3:
+            mid = len(t) // 2
+            near = [c for c in (m.end() for m in _BREAK_AFTER.finditer(t))
+                    if mid - 3 <= c <= mid + 3]
+            cut = near[-1] if near else mid
         lines.append(t[:cut])
         t = t[cut:].strip()
     return lines

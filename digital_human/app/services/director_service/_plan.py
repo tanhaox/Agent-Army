@@ -15,7 +15,7 @@ from app.services.director_events import PlanCancelled, publish as _evt
 from app.services.director_service._alignment import _align_fast_or_whisper
 from app.services.director_service._llm import _llm_plan_phase
 from app.services.director_service._postprocess import (
-    _append_references_slot,
+    _append_source_slot,
     _clamp_slot_durations,
     _persist_plan,
 )
@@ -206,6 +206,6 @@ def create_director_plan(
         raise PlanCancelled
 
     _clamp_slot_durations(plan, total_duration)
-    _append_references_slot(plan, script, total_duration)
+    _append_source_slot(db, plan, script, total_duration)
     _persist_plan(db, job, plan, script_title)
     return job, alignment
