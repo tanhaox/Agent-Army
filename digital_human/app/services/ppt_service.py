@@ -88,8 +88,15 @@ def clean_notes(text: str) -> str:
 
 
 def _pt_to_px(pt: float) -> float:
-    """pt (1/72 英寸) → px (按 96dpi 逻辑)."""
-    return pt * 96 / 72
+    """pt (1/72 英寸) → px. 画布 1920px = 13.33in 幻灯片 → 144dpi, 故 ×2.
+
+    2026-08-21 修复: 原 96dpi(×1.333)导致字号缩到 67%, 文字偏小+填不满框=排布错位.
+    """
+    return max(pt, _MIN_FONT_PT) * 144 / 72  # == pt * 2 (6pt 下限)
+
+
+# 最小可读字号 (2026-08-21): <6pt 在手机屏无法看, 作为小字底线
+_MIN_FONT_PT = 6.0
 
 
 def _color_hex(rgb) -> str | None:
@@ -412,7 +419,7 @@ def build_text_element_html(tb: TextBlock, width: int = 1920, height: int = 1080
         f"width:{_px_w(tb.width)}px;height:{_px_h(tb.height)}px;"
         f"font-size:{fs}px;line-height:1.3;color:{_css_color(tb.color)};"
         f"{'font-weight:700;' if tb.bold else ''}"
-        f"font-family:'Source Han Serif SC','Noto Serif SC','Songti SC','Microsoft YaHei',serif;"
+        f"font-family:'Noto Sans SC','Source Han Sans SC','Microsoft YaHei','PingFang SC',sans-serif;"
         f"overflow:hidden;word-wrap:break-word;white-space:pre-wrap;box-sizing:border-box'>"
         f"{_esc(tb.text)}</div>"
     )

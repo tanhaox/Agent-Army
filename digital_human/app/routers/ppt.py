@@ -284,69 +284,107 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 voice = db.query(Voice).filter(Voice.host_id == host.id).first()
             voice_id = voice.id if voice else None
 
-            _evt(job_id, f"开始 TTS ({len(segments)} 段, 音色={voice.name if voice else '默认'})", "info")
-            from app.services.tts_service import TTSService
-            from app.services.gpu_service_manager import get_gpu_service_manager
-            tts = TTSService(cfg.defaults)
-            job = AudioJob(
-                script_id=script.id, voice_id=voice_id,
-                output_dir=str(workdir / "audio"), status="pending",
-                total_segments=len(segments), completed_segments=0,
+            # TTS 缓存 key (2026-08-21): 音色+全段台词哈希, 稿没变复用音频免重跑合成
+            import hashlib as _hl
+            cache_key = _hl.sha256(
+                (str(voice_id or "") + "\x00" + "\x00".join(seg.text for seg in segments)).encode()
+            ).hexdigest()
+            cached_job = (
+                db.query(AudioJob)
+                .filter(AudioJob.status == "completed", AudioJob.tts_cache_key == cache_key)
+                .order_by(AudioJob.completed_at.desc()).first()
             )
-            db.add(job); db.commit(); db.refresh(job)
-            audio_files: list[AudioFile] = []
 
-            def _progress(completed, total, text, af):
-                if _JOBS.get(job_id, {}).get("cancel"):
-                    raise _Cancelled()
-                audio_files.append(af)
-                # 落库: 分段 wav 需进 AudioFile 表, 对齐快路径按 segment_id 匹配
-                if af:
-                    job.completed_segments = completed
-                    db.add(af)
-                    db.commit()
-                    db.refresh(af)
-                _evt(job_id, f"TTS {completed}/{total}: {text[:20]}…", "info",
-                     type="tts_progress", progress=f"{completed}/{total}")
-
-            # 用 GPU 服务管理器会话: 自动拉起 IndexTTS (与 audio 端点一致)
-            backend = voice.backend if voice and voice.backend else cfg.defaults.backend
-            manager = get_gpu_service_manager()
-            with manager.session(backend, status_callback=lambda m: _evt(job_id, m, "info")):
-                result = tts.generate(job, segments, voice, progress_callback=_progress)
-            # 整段拼接: tts.generate 已产出 full_paragraph.wav (combined_file)
-            combined = result.get("combined_file") or {}
-            combined_path = combined.get("file_path")
-            job.status = "completed"
-            job.completed_segments = len(segments)
-            db.commit()
-            _evt(job_id, f"TTS 完成: {len(audio_files)} 段, 整段 {combined.get('duration') or '?'}s", "ok",
-                 type="tts_done")
-
-            # ── 3. 对齐: 每页台词 → start/end (TTS 时长快路径) ──
-            db.commit()
-            _evt(job_id, "开始对齐 (TTS 时长快路径)", "info")
-            # audio 参数应为 AudioFile (combined); 用 AudioFile 对象
+            combined_path = None
             combined_af = None
-            if combined_path and Path(combined_path).exists():
-                combined_af = db.query(AudioFile).filter(
-                    AudioFile.audio_job_id == job.id,
-                    AudioFile.segment_id.is_(None),
-                ).order_by(AudioFile.id.desc()).first()
-                if combined_af is None:
-                    combined_af = AudioFile(
-                        audio_job_id=job.id, segment_id=None,
-                        filename=Path(combined_path).name, file_path=str(combined_path),
-                        duration=combined.get("duration"), sample_rate=24000,
-                    )
-                    db.add(combined_af); db.commit()
-            aligned = _align_fast_or_whisper(
-                db, combined_af, script.id,
-                [{"id": seg.id, "segment_id": seg.id, "text": seg.text, "line_index": seg.line_index} for seg in segments],
-                job_id=job_id,
-            )
-            timings = aligned.get("segment_timings") or []
-            _evt(job_id, f"对齐完成: {len(timings)} 段", "ok")
+            timings_cache: list[dict] | None = None
+            audio_files: list[AudioFile] = []
+            if cached_job:
+                # 缓存命中: 复用已有音频 + 按时长排时间线 (台词相同, 顺序一致)
+                seg_afs = sorted(
+                    [af for af in cached_job.audio_files if af.segment_id and af.duration],
+                    key=lambda af: af.id,
+                )
+                combined_af = next((af for af in cached_job.audio_files if af.segment_id is None), None)
+                combined_path = combined_af.file_path if combined_af else None
+                audio_files = seg_afs
+                cum = 0.0
+                timings_cache = []
+                for i, seg in enumerate(segments):
+                    dur = float(seg_afs[i].duration) if i < len(seg_afs) and seg_afs[i].duration else 0.0
+                    timings_cache.append({"segment_id": seg.id,
+                                          "start": round(cum, 3), "end": round(cum + dur, 3)})
+                    cum += dur
+                _evt(job_id, f"TTS 缓存命中 ({len(segments)} 段, 复用已有音频, 免重跑合成)", "ok",
+                     type="tts_done")
+            else:
+                _evt(job_id, f"开始 TTS ({len(segments)} 段, 音色={voice.name if voice else '默认'})", "info")
+                from app.services.tts_service import TTSService
+                from app.services.gpu_service_manager import get_gpu_service_manager
+                tts = TTSService(cfg.defaults)
+                job = AudioJob(
+                    script_id=script.id, voice_id=voice_id,
+                    output_dir=str(workdir / "audio"), status="pending",
+                    total_segments=len(segments), completed_segments=0,
+                    tts_cache_key=cache_key,
+                )
+                db.add(job); db.commit(); db.refresh(job)
+
+                def _progress(completed, total, text, af):
+                    if _JOBS.get(job_id, {}).get("cancel"):
+                        raise _Cancelled()
+                    audio_files.append(af)
+                    # 落库: 分段 wav 需进 AudioFile 表, 对齐快路径按 segment_id 匹配
+                    if af:
+                        job.completed_segments = completed
+                        db.add(af)
+                        db.commit()
+                        db.refresh(af)
+                    _evt(job_id, f"TTS {completed}/{total}: {text[:20]}…", "info",
+                         type="tts_progress", progress=f"{completed}/{total}")
+
+                # 用 GPU 服务管理器会话: 自动拉起 IndexTTS (与 audio 端点一致)
+                backend = voice.backend if voice and voice.backend else cfg.defaults.backend
+                manager = get_gpu_service_manager()
+                with manager.session(backend, status_callback=lambda m: _evt(job_id, m, "info")):
+                    result = tts.generate(job, segments, voice, progress_callback=_progress)
+                # 整段拼接: tts.generate 已产出 full_paragraph.wav (combined_file)
+                combined = result.get("combined_file") or {}
+                combined_path = combined.get("file_path")
+                job.status = "completed"
+                job.completed_segments = len(segments)
+                db.commit()
+                _evt(job_id, f"TTS 完成: {len(audio_files)} 段, 整段 {combined.get('duration') or '?'}s", "ok",
+                     type="tts_done")
+
+            # ── 3. 对齐: 每页台词 → start/end (缓存命中直接用时长排线, 否则 fast path) ──
+            if timings_cache is not None:
+                timings = timings_cache
+                _evt(job_id, f"对齐(缓存时长)完成: {len(timings)} 段", "ok")
+            else:
+                db.commit()
+                _evt(job_id, "开始对齐 (TTS 时长快路径)", "info")
+                # audio 参数应为 AudioFile (combined); 用 AudioFile 对象
+                if combined_path and Path(combined_path).exists():
+                    if combined_af is None:
+                        combined_af = db.query(AudioFile).filter(
+                            AudioFile.audio_job_id == job.id,
+                            AudioFile.segment_id.is_(None),
+                        ).order_by(AudioFile.id.desc()).first()
+                    if combined_af is None:
+                        combined_af = AudioFile(
+                            audio_job_id=job.id, segment_id=None,
+                            filename=Path(combined_path).name, file_path=str(combined_path),
+                            duration=None, sample_rate=24000,
+                        )
+                        db.add(combined_af); db.commit()
+                aligned = _align_fast_or_whisper(
+                    db, combined_af, script.id,
+                    [{"id": seg.id, "segment_id": seg.id, "text": seg.text, "line_index": seg.line_index} for seg in segments],
+                    job_id=job_id,
+                )
+                timings = aligned.get("segment_timings") or []
+                _evt(job_id, f"对齐完成: {len(timings)} 段", "ok")
 
             # ── 4. 逐页渲染 ──
             # 系列皮肤对齐 (2026-08-21): 非母本集 apply 母本皮肤 (背景/色/字号)
@@ -366,8 +404,16 @@ def _run_ppt_pipeline(job_id: str) -> None:
             clip_paths: list[Path] = []
             clip_meta: list[dict] = []  # {path, image, start_sec, duration_sec, notes}
             # 段→wav (元素级草稿逐页音频)
-            seg_wav_map = {af.segment_id: af.file_path for af in audio_files
-                           if af.segment_id and af.file_path and Path(af.file_path).exists()}
+            if timings_cache is not None:
+                # TTS 缓存命中: 缓存音频顺序 = 当前段顺序 (台词相同), 按顺序映射
+                seg_wav_map = {}
+                for i, seg in enumerate(segments):
+                    if i < len(audio_files) and audio_files[i].file_path \
+                            and Path(audio_files[i].file_path).exists():
+                        seg_wav_map[seg.id] = audio_files[i].file_path
+            else:
+                seg_wav_map = {af.segment_id: af.file_path for af in audio_files
+                               if af.segment_id and af.file_path and Path(af.file_path).exists()}
             element_pages: list[dict] = []  # jy2: 逐页层+编排数据
             for i, s in enumerate(slides):
                 if bound.get("cancel"):

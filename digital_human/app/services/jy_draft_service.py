@@ -601,6 +601,10 @@ _SENT_PAUSE = 0.35
 _READ_WINDOW = 5.0
 # 首帧免责字幕最小停留时长 (豆包统一约束: 右上角常驻≥20秒)
 _MIN_DISCLAIMER_SEC = 20.0
+# 剪映商用字体 (2026-08-21): pyJianYingDraft FontType 覆盖 797 个剪映授权字体, 配置化可随时换
+_JY_FONT_BADGE = draft_mod.FontType.风雅宋        # 系列角标: 雅致书卷气
+_JY_FONT_CAPTION = draft_mod.FontType.Aa全息黑体  # 台词字幕: 清晰可读
+_JY_FONT_DISCLAIMER = draft_mod.FontType.Aa全息黑体  # 免责小字: 清晰可读
 
 
 def _safe_deadline(page_dur: float) -> float:
@@ -765,6 +769,7 @@ def _build_caption_track(
                 seg = _StyledTextSegment(
                     chunk,
                     trange(seg_start_us, max(chunk_us, 1000)),
+                    font=_JY_FONT_CAPTION,
                     highlight_ranges=hl,
                     red_ranges=rr,
                     clip_settings=ClipSettings(transform_y=-0.75),
@@ -1062,10 +1067,11 @@ def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int
         seg = draft_mod.TextSegment(
             disclaimer_text,
             trange(start_us, max(dur_us, 1000)),
+            font=_JY_FONT_DISCLAIMER,
             style=draft_mod.TextStyle(size=2.8, color=(1.0, 1.0, 1.0), alpha=0.85),
             clip_settings=ClipSettings(transform_x=0.32, transform_y=0.42),
         )
-        script.add_segment(seg, "caption")
+        script.add_segment(seg, "disclaimer")  # 独立轨, 防与底部字幕同轨重叠
         return 1
     except Exception as exc:
         logger.warning("[jy_export] 首帧免责字幕失败: %s", exc)
@@ -1090,6 +1096,7 @@ def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indi
             seg = draft_mod.TextSegment(
                 badge_text,
                 trange(start_us, max(dur_us, 1000)),
+                font=_JY_FONT_BADGE,
                 style=draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0), alpha=0.95),
                 clip_settings=ClipSettings(transform_x=-0.42, transform_y=0.42),  # 左上角
             )
@@ -1134,6 +1141,7 @@ def export_element_draft(
     track_specs += [draft_mod.TrackSpec(draft_mod.TrackType.video, f"e{i}") for i in range(max_elements)]
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"))
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "badge"))  # 系列角标(左上角)
+    track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "disclaimer"))  # 免责(右上角, 独立轨防与字幕重叠)
     script.append_tracks(track_specs)
 
     # audio 轨: 整段 TTS (若顶层给 audio_path), 或逐页 audio_file 段

@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 # 跨集统一字体栈 (pptx 字体名不可靠, 全系列硬编码保持一致)
-_DEFAULT_FONT_FAMILY = '"Source Han Serif SC","Noto Serif SC","Songti SC","Playfair Display",serif'
+_DEFAULT_FONT_FAMILY = '"Noto Sans SC","Source Han Sans SC","Microsoft YaHei","PingFang SC",sans-serif'
 _DEFAULT_ANIM = {"stagger": 0.22, "in_dur": 0.55, "effect": "fade-slide-up"}
 
 

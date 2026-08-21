@@ -209,6 +209,7 @@ class AudioJob(Base):
     total_segments: Mapped[int] = mapped_column(Integer, default=0)
     completed_segments: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
+    tts_cache_key: Mapped[str | None] = mapped_column(String(64), default=None, index=True)  # TTS缓存: 音色+台词哈希 (2026-08-21)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
 
