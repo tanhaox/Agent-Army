@@ -606,6 +606,14 @@ _JY_FONT_BADGE = draft_mod.FontType.风雅宋        # 系列角标: 雅致书�
 _JY_FONT_CAPTION = draft_mod.FontType.Aa全息黑体  # 台词字幕: 清晰可读
 _JY_FONT_DISCLAIMER = draft_mod.FontType.Aa全息黑体  # 免责小字: 清晰可读
 
+# 白字可读性机制 (2026-08-21): 字幕/角标/免责是白字, 白底页面会看不见 →
+# 加深色描边 + 阴影, 任何底色都清晰. 描边/阴影可独立调.
+_CAPTION_BORDER = draft_mod.TextBorder(alpha=0.85, color=(0.0, 0.0, 0.0), width=12)
+_CAPTION_SHADOW = draft_mod.TextShadow(alpha=0.55, color=(0.0, 0.0, 0.0), diffuse=12, distance=3)
+_BADGE_BORDER = draft_mod.TextBorder(alpha=0.80, color=(0.0, 0.0, 0.0), width=10)
+_BADGE_SHADOW = draft_mod.TextShadow(alpha=0.50, color=(0.0, 0.0, 0.0), diffuse=10, distance=3)
+_DISCLAIMER_BORDER = draft_mod.TextBorder(alpha=0.60, color=(0.0, 0.0, 0.0), width=8)
+
 
 def _safe_deadline(page_dur: float) -> float:
     """元素最晚入场时刻: 长页留 5s 阅读窗; 短页至少留 0.5s 且不超页长."""
@@ -770,6 +778,8 @@ def _build_caption_track(
                     chunk,
                     trange(seg_start_us, max(chunk_us, 1000)),
                     font=_JY_FONT_CAPTION,
+                    border=_CAPTION_BORDER,
+                    shadow=_CAPTION_SHADOW,
                     highlight_ranges=hl,
                     red_ranges=rr,
                     clip_settings=ClipSettings(transform_y=-0.75),
@@ -1068,6 +1078,7 @@ def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int
             disclaimer_text,
             trange(start_us, max(dur_us, 1000)),
             font=_JY_FONT_DISCLAIMER,
+            border=_DISCLAIMER_BORDER,
             style=draft_mod.TextStyle(size=2.8, color=(1.0, 1.0, 1.0), alpha=0.85),
             clip_settings=ClipSettings(transform_x=0.32, transform_y=0.42),
         )
@@ -1097,6 +1108,8 @@ def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indi
                 badge_text,
                 trange(start_us, max(dur_us, 1000)),
                 font=_JY_FONT_BADGE,
+                border=_BADGE_BORDER,
+                shadow=_BADGE_SHADOW,
                 style=draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0), alpha=0.95),
                 clip_settings=ClipSettings(transform_x=-0.42, transform_y=0.42),  # 左上角
             )
