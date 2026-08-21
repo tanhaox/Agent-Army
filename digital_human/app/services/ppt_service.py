@@ -47,7 +47,9 @@ class TextBlock:
 
 @dataclass
 class ShapeBlock:
-    """装饰自选图形 (卡片底/暗化层等): 填充色+alpha, 圆角, 位置. 不进动画层 (基底)."""
+    """装饰自选图形 (卡片底/暗化层等): 填充色+alpha, 圆角, 位置. 不进动画层 (基底).
+    path_d/path_w/path_h (2026-08-21): 自定义几何(custGeom)的 SVG 路径, 图标/特殊形状用.
+    """
     left: float
     top: float
     width: float
@@ -56,6 +58,9 @@ class ShapeBlock:
     fill_alpha: float = 1.0  # 0-1 (XML alpha/100000)
     rounded: bool = False
     shape_id: int = 0
+    path_d: str | None = None  # SVG path (custGeom)
+    path_w: float = 10000.0
+    path_h: float = 10000.0
 
 
 @dataclass
@@ -77,6 +82,7 @@ class Slide:
     image_blocks: list[ImageBlock] = field(default_factory=list)
     shape_blocks: list[ShapeBlock] = field(default_factory=list)  # 装饰自选图形
     background_b64: str | None = None  # 页面背景图
+    bg_above_shape_id: int | None = None  # 背景图来自全幅 pic 时, 记录其 z 位置 (其下形状被盖住)
     notes: str = ""
 
 
@@ -143,6 +149,38 @@ def _bg_image(slide, prs) -> str | None:
         return None
 
 
+def _custgeom_to_svg(path_el) -> str:
+    """PPT custGeom 路径 → SVG path d. moveTo/cubicBezTo/lineTo/close → M/C/L/Z."""
+    from pptx.oxml.ns import qn
+    parts = []
+    for child in path_el:
+        tag = child.tag.split("}")[-1]
+        if tag == "moveTo":
+            pt = child.find(qn("a:pt"))
+            if pt is not None:
+                parts.append("M%s,%s" % (pt.get("x"), pt.get("y")))
+        elif tag == "cubicBezTo":
+            pts = child.findall(qn("a:pt"))
+            if len(pts) == 3:
+                parts.append("C%s,%s %s,%s %s,%s" % (
+                    pts[0].get("x"), pts[0].get("y"),
+                    pts[1].get("x"), pts[1].get("y"),
+                    pts[2].get("x"), pts[2].get("y")))
+        elif tag == "quadBezTo":
+            pts = child.findall(qn("a:pt"))
+            if len(pts) == 2:
+                parts.append("Q%s,%s %s,%s" % (
+                    pts[0].get("x"), pts[0].get("y"),
+                    pts[1].get("x"), pts[1].get("y")))
+        elif tag == "lineTo":
+            pt = child.find(qn("a:pt"))
+            if pt is not None:
+                parts.append("L%s,%s" % (pt.get("x"), pt.get("y")))
+        elif tag == "close":
+            parts.append("Z")
+    return " ".join(parts)
+
+
 def _shape_block(shape, sid: int) -> ShapeBlock | None:
     """自选图形 → 装饰块 (卡片底/暗化层/细线装饰). 填充/线色读 XML (含 alpha)."""
     from pptx.oxml.ns import qn
@@ -180,6 +218,8 @@ def _shape_block(shape, sid: int) -> ShapeBlock | None:
         if not hexval:
             return None
         rounded = False
+        path_d = None
+        path_w, path_h = 10000.0, 10000.0
         geom = sp_pr.find(qn("a:prstGeom"))
         if geom is not None:
             prst = geom.get("prst") or ""
@@ -197,10 +237,23 @@ def _shape_block(shape, sid: int) -> ShapeBlock | None:
                                 except ValueError:
                                     adj = 0.0
                 rounded = adj > 0
+        # 自定义几何 (custGeom): 图标/特殊形状 → SVG 路径 (2026-08-21 修图标变方块)
+        cust = sp_pr.find(qn("a:custGeom"))
+        if cust is not None:
+            path_el = cust.find(qn("a:pathLst"))
+            if path_el is not None:
+                p0 = path_el.find(qn("a:path"))
+                if p0 is not None:
+                    path_d = _custgeom_to_svg(p0)
+                    if p0.get("w"):
+                        path_w = float(p0.get("w"))
+                    if p0.get("h"):
+                        path_h = float(p0.get("h"))
         return ShapeBlock(
             left=shape.left, top=shape.top,
             width=shape.width, height=shape.height,
             fill_hex=hexval, fill_alpha=alpha, rounded=rounded, shape_id=sid,
+            path_d=path_d, path_w=path_w, path_h=path_h,
         )
     except Exception:
         return None
@@ -268,6 +321,7 @@ def parse_pptx(path: str | Path) -> list[Slide]:
         except Exception as exc:
             logger.warning("[ppt] 页%d 备注失败: %s", i, exc)
         bg = _bg_image(slide, prs)
+        bg_above_shape_id = None
         if bg is None:
             # 无 p:bg → 全幅 picture shape 即背景 (PPT 常见做法: 铺满整页的图不是 p:bg)
             # 全幅图升为背景, 并从前景 image_blocks 移除 (避免元素层重复渲染)
@@ -275,12 +329,13 @@ def parse_pptx(path: str | Path) -> list[Slide]:
                 if (ib.width >= 0.9 * prs.slide_width
                         and ib.height >= 0.9 * prs.slide_height):
                     bg = ib.b64_data
+                    bg_above_shape_id = ib.shape_id  # 记录 z 位置: 其下形状被不透明背景盖住
                     image_blocks.remove(ib)
                     break
         slides.append(Slide(
             index=i, texts=texts, text_blocks=text_blocks,
             image_blocks=image_blocks, shape_blocks=shape_blocks,
-            background_b64=bg, notes=notes,
+            background_b64=bg, bg_above_shape_id=bg_above_shape_id, notes=notes,
         ))
     return slides
 
@@ -402,12 +457,24 @@ def build_base_html(slide: Slide, width: int = 1920, height: int = 1080) -> str:
                    f"height:{height}px;background:#f5f0e6'></div>")
     # 装饰自选图形 (含全幅暗化层/卡片底), 按 shape_id 序叠放
     for sb in slide.shape_blocks:
+        if slide.bg_above_shape_id is not None and sb.shape_id < slide.bg_above_shape_id:
+            continue  # 在不透明全幅背景图之下, 被盖住, 不渲染 (2026-08-21 修背景被色块覆盖)
         alpha = max(0.0, min(1.0, sb.fill_alpha))
-        r = f"border-radius:{min(_px_w(sb.width), _px_h(sb.height)) * 0.12}px" if sb.rounded else ""
-        els.append(
-            f"<div style='position:absolute;left:{_px_left(sb.left)}px;top:{_px_top(sb.top)}px;"
-            f"width:{_px_w(sb.width)}px;height:{_px_h(sb.height)}px;"
-            f"background:{_css_color(sb.fill_hex)};opacity:{alpha:.3f};{r}'></div>")
+        if sb.path_d:
+            # 自定义几何图标 → SVG 路径渲染 (2026-08-21 修图标变方块)
+            els.append(
+                f"<svg style='position:absolute;left:{_px_left(sb.left)}px;top:{_px_top(sb.top)}px;"
+                f"width:{_px_w(sb.width)}px;height:{_px_h(sb.height)}px;"
+                f"overflow:visible' viewBox='0 0 {sb.path_w:.0f} {sb.path_h:.0f}' "
+                f"preserveAspectRatio='none'>"
+                f"<path d='{sb.path_d}' fill='{_css_color(sb.fill_hex)}' "
+                f"fill-opacity='{alpha:.3f}'/></svg>")
+        else:
+            r = f"border-radius:{min(_px_w(sb.width), _px_h(sb.height)) * 0.12}px" if sb.rounded else ""
+            els.append(
+                f"<div style='position:absolute;left:{_px_left(sb.left)}px;top:{_px_top(sb.top)}px;"
+                f"width:{_px_w(sb.width)}px;height:{_px_h(sb.height)}px;"
+                f"background:{_css_color(sb.fill_hex)};opacity:{alpha:.3f};{r}'></div>")
     return _page_shell(width, height) + "".join(els) + "</body></html>"
 
 
