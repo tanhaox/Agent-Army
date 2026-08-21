@@ -137,28 +137,39 @@ def _bg_image(slide, prs) -> str | None:
 
 
 def _shape_block(shape, sid: int) -> ShapeBlock | None:
-    """自选图形 → 装饰块 (卡片底/暗化层). solidFill 色值读 XML (含 alpha, python-pptx 读不到)."""
+    """自选图形 → 装饰块 (卡片底/暗化层/细线装饰). 填充/线色读 XML (含 alpha)."""
     from pptx.oxml.ns import qn
     try:
         sp_pr = shape._element.find(qn("p:spPr"))
         if sp_pr is None:
             return None
         fill = sp_pr.find(qn("a:solidFill"))
-        if fill is None:
-            return None
         hexval = None
         alpha = 1.0
-        clr = fill.find(qn("a:srgbClr"))
-        if clr is not None:
-            hexval = clr.get("val")
-            a = clr.find(qn("a:alpha"))
-            if a is not None and a.get("val"):
-                alpha = int(a.get("val")) / 100000.0
-        elif shape.fill.type is not None:
-            try:
-                hexval = str(shape.fill.fore_color.rgb)
-            except Exception:
-                hexval = None
+        if fill is not None:
+            clr = fill.find(qn("a:srgbClr"))
+            if clr is not None:
+                hexval = clr.get("val")
+                a = clr.find(qn("a:alpha"))
+                if a is not None and a.get("val"):
+                    alpha = int(a.get("val")) / 100000.0
+            elif shape.fill.type is not None:
+                try:
+                    hexval = str(shape.fill.fore_color.rgb)
+                except Exception:
+                    hexval = None
+        else:
+            # 无填充 → 有可见线(a:ln/a:solidFill)也算装饰块 (细线/边框, PPT 常见)
+            ln = sp_pr.find(qn("a:ln"))
+            if ln is not None:
+                lf = ln.find(qn("a:solidFill"))
+                if lf is not None:
+                    clr = lf.find(qn("a:srgbClr"))
+                    if clr is not None:
+                        hexval = clr.get("val")
+                        a = clr.find(qn("a:alpha"))
+                        if a is not None and a.get("val"):
+                            alpha = int(a.get("val")) / 100000.0
         if not hexval:
             return None
         rounded = False
@@ -250,6 +261,15 @@ def parse_pptx(path: str | Path) -> list[Slide]:
         except Exception as exc:
             logger.warning("[ppt] 页%d 备注失败: %s", i, exc)
         bg = _bg_image(slide, prs)
+        if bg is None:
+            # 无 p:bg → 全幅 picture shape 即背景 (PPT 常见做法: 铺满整页的图不是 p:bg)
+            # 全幅图升为背景, 并从前景 image_blocks 移除 (避免元素层重复渲染)
+            for ib in list(image_blocks):
+                if (ib.width >= 0.9 * prs.slide_width
+                        and ib.height >= 0.9 * prs.slide_height):
+                    bg = ib.b64_data
+                    image_blocks.remove(ib)
+                    break
         slides.append(Slide(
             index=i, texts=texts, text_blocks=text_blocks,
             image_blocks=image_blocks, shape_blocks=shape_blocks,
