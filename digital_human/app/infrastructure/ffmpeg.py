@@ -22,6 +22,8 @@ __all__ = [
     "extract_audio_slice_wav",
     "replace_video_audio",
     "render_scale_pad",
+    "frames_to_mp4",
+    "normalize_audio",
 ]
 
 
@@ -149,3 +151,53 @@ def render_scale_pad(
         str(out_path),
     ]
     run_ffmpeg(cmd)
+
+
+def frames_to_mp4(
+    frames_dir: Path,
+    pattern: str,
+    out_path: Path,
+    fps: int = 25,
+    width: int = 1920,
+    height: int = 1080,
+    *,
+    crf: int = 18,
+    timeout: int = 600,
+) -> None:
+    """Encode PNG frame sequence to mp4 (Playwright seek-and-snap 后续).
+
+    pattern 如 "frame_%06d.png", frames_dir 下需有连续编号帧.
+    HyperFrames encodeFramesFromDir 形态: image2 demuxer → libx264 yuv420p.
+    """
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-framerate", str(fps),
+        "-i", str(Path(frames_dir) / pattern),
+        "-vf", f"scale={width}:{height}",
+        "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+        "-pix_fmt", "yuv420p", "-r", str(fps),
+        str(out_path),
+    ]
+    run_ffmpeg(cmd, timeout=timeout)
+
+
+def normalize_audio(
+    src: Path,
+    out_path: Path,
+    *,
+    lufs: float = -16.0,
+    tp: float = -1.5,
+    lra: float = 11,
+    timeout: int = 120,
+) -> Path:
+    """响度归一 (2026-08-21): TTS 输出 mean≈-39dB 偏轻, loudnorm 拉到
+    I=-16 LUFS / TP=-1.5 (口播标准). 产线所有语音落盘前调用.
+    """
+    run_ffmpeg([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(src),
+        "-af", f"loudnorm=I={lufs}:TP={tp}:LRA={lra}",
+        "-c:a", "pcm_s16le",
+        str(out_path),
+    ], timeout=timeout)
+    return out_path

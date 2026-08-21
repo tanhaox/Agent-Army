@@ -89,6 +89,21 @@ def synthesize_lines(
     segment_paths, manifest_segments, _ = _process_batches(
         output_dir, lines, batch_groups, syn, progress_callback, batch_emos=batch_emos,
     )
+    # 2026-08-21: 响度归一 (TTS 源 mean≈-39dB 偏轻) → loudnorm, 覆盖所有调用路径
+    # (tts_service / 错别字替换 / CLI / e2e). app 不可用(独立 CLI)时跳过.
+    try:
+        from app.infrastructure.ffmpeg import normalize_audio
+    except Exception:
+        normalize_audio = None
+    if normalize_audio is not None:
+        for p in segment_paths:
+            try:
+                w = Path(p)
+                tmp = w.with_suffix(".norm.wav")
+                normalize_audio(w, tmp)
+                tmp.replace(w)
+            except Exception:
+                pass  # 单段归一失败不阻断产线
     return _finalize_manifest(output_dir, voice_id, backend, manifest_segments)
 
 

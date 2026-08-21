@@ -458,7 +458,7 @@ async function selectScriptForAudio(select) {
   }
 }
 
-// ── 初始化: URL 参数 script_id (从文字加工中心跳入) ──
+// ── 初始化: URL 参数 script_id (从文字加工中心/拆书讲书页跳入) ──
 document.addEventListener('DOMContentLoaded', async () => {
   const scriptId = new URLSearchParams(location.search).get('script_id');
   if (scriptId) {
@@ -467,8 +467,215 @@ document.addEventListener('DOMContentLoaded', async () => {
       toggle('btn-audio', true);
       toggle('btn-onestop', true);
       setStatus('status-audio', '脚本已加载 — 选段落和音色后生成', false, true);
+      // 2026-08-20: 同步下拉选中, 与拆书讲书页进产线跳转联动
+      try {
+        await loadScriptList();
+        const sel = document.getElementById('script-select');
+        if (sel && [...sel.options].some(o => o.value === scriptId)) sel.value = scriptId;
+      } catch (_) { /* 下拉不同步不阻塞 */ }
     } catch (e) {
       setStatus('status-audio', '加载脚本失败: ' + e.message, true);
     }
   }
+  // PPT 书集上下文 (2026-08-21)
+  _refreshPptBookCtx();
+  // 恢复未完成 PPT 任务 (刷新后继续看进度, 不丢 job)
+  // 优先 sessionStorage, 其次 URL 参数 ?ppt_job_id= (跨刷新/跨会话手工续看)
+  try {
+    const params = new URLSearchParams(location.search);
+    const saved = sessionStorage.getItem('pptJobId') || params.get('ppt_job_id');
+    if (saved) {
+      _pptJobId = saved;
+      const st = await (await fetch(API + `/ppt/${saved}/status`)).json();
+      if (st && st.status === 'running') {
+        _connectPPTSSE(saved);
+        _pollPPT(saved);
+      }
+    }
+  } catch (_) { /* 恢复失败不阻塞 */ }
 });
+
+// ── PPT 出片 (2026-08-20): 上传 → 解析 → 渲染 (有 PPT 走 PPT 产线, 无则现有) ──
+// 2026-08-21: book_id/ep_index 绑定拆书系列 + 母本皮肤包
+let _pptJobId = null;
+let _pptES = null;
+
+// 从 URL 取 book_id/ep_index (从拆书讲书页进产线带参)
+function _pptBookCtx() {
+  const p = new URLSearchParams(location.search);
+  return { book_id: p.get('book_id') || '', ep_index: p.get('ep_index') || '' };
+}
+
+async function _refreshPptBookCtx() {
+  const ctx = _pptBookCtx();
+  const el = document.getElementById('ppt-bookctx');
+  if (!el) return;
+  if (!ctx.book_id) { el.textContent = ''; return; }
+  let txt = `📖 书 ${ctx.book_id.slice(0, 8)}…` + (ctx.ep_index ? ` · 第${ctx.ep_index}集` : '');
+  try {
+    const r = await (await fetch(API + `/ppt/series-skin/${encodeURIComponent(ctx.book_id)}`)).json();
+    if (r.has_master) txt += ` ｜ ✅ 已有母本(第${r.master_ep}集), 渲染自动对齐皮肤`;
+  } catch (_) {}
+  el.textContent = txt;
+}
+
+async function uploadPPT() {
+  const file = document.getElementById('ppt-file').files[0];
+  const status = document.getElementById('ppt-status');
+  if (!file) { status.textContent = '请先选择 .pptx 文件'; return; }
+  status.textContent = '上传解析中…';
+  const ctx = _pptBookCtx();
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    if (ctx.book_id) fd.append('book_id', ctx.book_id);
+    if (ctx.ep_index) fd.append('ep_index', ctx.ep_index);
+    const resp = await fetch(API + '/ppt/upload', { method: 'POST', body: fd });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const r = await resp.json();
+    _pptJobId = r.job_id;
+    try { sessionStorage.setItem('pptJobId', _pptJobId); } catch (_) {}
+    const preview = (r.preview || []).map(p =>
+      `P${p.index} [${p.notes_len}字] ${p.text_preview}`).join('\n');
+    document.getElementById('ppt-preview').textContent = preview;
+    document.getElementById('btn-ppt-render').disabled = false;
+    // 母本按钮: 绑定了 book_id 且尚未有母本时显示
+    const masterBtn = document.getElementById('btn-ppt-master');
+    if (masterBtn) {
+      if (ctx.book_id && ctx.ep_index && !r.has_master) {
+        masterBtn.style.display = '';
+        masterBtn.disabled = false;
+      } else {
+        masterBtn.style.display = 'none';
+      }
+    }
+    let msg = `解析成功: ${r.slides} 页`;
+    if (r.has_master) msg += ` · 已套用现成母本(第${r.master_ep}集)皮肤`;
+    if (ctx.book_id && ctx.ep_index && !r.has_master) msg += ' · 可点「定为母本」';
+    status.textContent = msg;
+    document.getElementById('ppt-download').style.display = 'none';
+  } catch (e) {
+    status.textContent = '上传失败: ' + e.message;
+  }
+}
+
+async function markMasterPPT() {
+  if (!_pptJobId) return;
+  const btn = document.getElementById('btn-ppt-master');
+  const status = document.getElementById('ppt-status');
+  btn.disabled = true; btn.textContent = '⏳ 抽取中…';
+  try {
+    const resp = await fetch(API + `/ppt/${_pptJobId}/mark-master`, { method: 'POST' });
+    if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`); }
+    const r = await resp.json();
+    status.textContent = `✅ 已定为母本: 主色 ${r.color_tokens.join('/')} 字号档 ${r.fontsize_tokens.join('/')}`;
+    btn.textContent = '✓ 已为母本';
+    toast('母本皮肤包已生成', 'success');
+    _refreshPptBookCtx();
+  } catch (e) {
+    status.textContent = '定为母本失败: ' + e.message;
+    btn.disabled = false; btn.textContent = '📌 定为母本';
+  }
+}
+
+async function renderPPT() {
+  const status = document.getElementById('ppt-status');
+  if (!_pptJobId) { status.textContent = '请先上传 PPT'; return; }
+  const btn = document.getElementById('btn-ppt-render');
+  btn.disabled = true; btn.textContent = '⏳ 成片中…';
+  status.textContent = '开始 PPT 成片 (TTS → 渲染 → 拼片, 约 15-25 分钟)…';
+  try {
+    const resp = await fetch(API + `/ppt/${_pptJobId}/render`, { method: 'POST' });
+    if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`); }
+    _connectPPTSSE(_pptJobId);
+    _pollPPT(_pptJobId);
+  } catch (e) {
+    status.textContent = '成片启动失败: ' + e.message;
+    btn.disabled = false; btn.textContent = '🎬 PPT 一键成片';
+  }
+}
+
+function _connectPPTSSE(jobId) {
+  if (_pptES) _pptES.close();
+  _pptES = new EventSource(API + `/ppt/${jobId}/events`);
+  _pptES.onmessage = ev => {
+    const d = JSON.parse(ev.data);
+    if (d.type === 'ppt_done') { setStatus('ppt-status-ss', '成片完成 ✓', false, true); }
+    if (d.type === 'ppt_error') { setStatus('ppt-status-ss', '成片失败: ' + (d.msg || ''), true); }
+  };
+  _pptES.onerror = () => _pptES.close();
+}
+
+async function _pollPPT(jobId) {
+  const status = document.getElementById('ppt-status');
+  const btn = document.getElementById('btn-ppt-render');
+  try {
+    const resp = await fetch(API + `/ppt/${jobId}/status`);
+    const st = await resp.json();
+    const ev = st.events || [];
+    const bar = document.getElementById('ppt-progress');
+    if (ev.length) status.textContent = ev[ev.length - 1].msg;
+    // 进度条: 取最近带 progress 的事件 (TTS x/21 / 渲染 x/21)
+    if (bar) {
+      let prog = null;
+      for (let i = ev.length - 1; i >= 0 && !prog; i--) if (ev[i].progress) prog = ev[i];
+      if (prog && prog.progress && String(prog.progress).includes('/')) {
+        const parts = String(prog.progress).split('/').map(Number);
+        if (parts[1] > 0) { bar.value = parts[0] / parts[1]; bar.style.display = ''; }
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+    if (st.status === 'running') {
+      setTimeout(() => _pollPPT(jobId), 3000);
+    } else {
+      if (bar) bar.style.display = 'none';
+      if (st.status === 'failed' || st.error) {
+        btn.disabled = false; btn.textContent = '🎬 PPT 一键成片';
+        status.textContent = '失败: ' + (st.error || '');
+      } else if (st.status === 'done') {
+        btn.disabled = false; btn.textContent = '🎬 PPT 一键成片';
+        const dl = document.getElementById('ppt-download');
+        const jyBtn = document.getElementById('btn-ppt-jy');
+        if (st.draft) {
+          // jy2 元素级: 草稿已直接进剪映草稿箱, 隐藏下载/手动导出按钮
+          status.textContent = '✅ 剪映草稿已生成: ' + st.draft.draft_name + ' — 打开剪映即可查看/导出';
+          if (dl) dl.style.display = 'none';
+          if (jyBtn) jyBtn.style.display = 'none';
+          const draftEl = document.getElementById('ppt-draft-name');
+          if (draftEl) draftEl.textContent = st.draft.draft_name;
+        } else {
+          dl.href = API + `/ppt/${jobId}/download`;
+          dl.style.display = '';
+          if (jyBtn) { jyBtn.style.display = ''; jyBtn.disabled = false; jyBtn.dataset.jobId = jobId; }
+          status.textContent = '成片完成 ✓ 可下载或导出剪映草稿';
+        }
+      }
+    }
+  } catch (e) {
+    status.textContent = '轮询失败: ' + e.message;
+  }
+}
+
+// PPT 出片 → 剪映草稿 (J 线)
+async function exportPPTJy() {
+  const btn = document.getElementById('btn-ppt-jy');
+  const jobId = btn && btn.dataset.jobId;
+  const status = document.getElementById('ppt-status');
+  if (!jobId) { status.textContent = '请先完成成片'; return; }
+  btn.disabled = true; btn.textContent = '⏳ 导出中…';
+  try {
+    const resp = await fetch(API + `/ppt/${jobId}/export-jy-draft`, { method: 'POST' });
+    if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`); }
+    const r = await resp.json();
+    status.textContent = `剪映草稿已导出 ✓ ${r.video_segments} 页画面 + ${r.text_segments} 条字幕 → ${r.draft_name}`;
+    btn.disabled = false; btn.textContent = '🎬 导出剪映草稿';
+    toast('剪映草稿已生成', 'success');
+  } catch (e) {
+    status.textContent = '导出失败: ' + e.message;
+    btn.disabled = false; btn.textContent = '🎬 导出剪映草稿';
+  }
+}

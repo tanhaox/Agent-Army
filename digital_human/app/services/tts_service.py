@@ -143,6 +143,8 @@ class TTSService:
         combined_path = output_dir / "full_paragraph.wav"
         existing_wavs = [af.file_path for af in audio_files if Path(af.file_path).exists()]
         if existing_wavs and len(existing_wavs) >= 1:
+            # 段级响度归一已在 scripts/tts_lib/lines.synthesize_lines 内完成
+            # (2026-08-21 loudnorm -16 LUFS), 此处直接拼接归一后段 wav.
             try:
                 # 2026-08-13: 段落拼接用 fade(无静音gap), 消除段尾音+段首起音紧贴的破音("噗"),
                 # 且停顿自然(用户验证 gap=0 最舒服).

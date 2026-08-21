@@ -9,6 +9,7 @@
 <body>
   <nav>
     <div class="logo">Pipeline<span>Studio</span></div>
+    <a href="/web/books.html">拆书</a>
     <a href="/web/index.html">新闻线索</a>
     <a href="/web/writing.html">文字加工</a>
     <a href="/web/audio.html" class="active">音频加工</a>
@@ -81,6 +82,23 @@
             <span class="toggle-slider"></span>
             <span class="toggle-label">H线 <small>HF</small></span>
           </label>
+        </div>
+        <!-- PPT 出片 (2026-08-20): 可选上传, 默认收起不影响现有产线 -->
+        <div class="ppt-section" style="margin-top:0.75rem;padding:0.6rem 0.8rem;background:var(--bg-secondary);border-radius:8px;">
+          <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.4rem;" id="ppt-bookctx"></div>
+          <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+            <span style="font-size:0.8rem;font-weight:600;color:var(--text-muted);">📽 PPT 出片</span>
+            <input type="file" id="ppt-file" accept=".pptx" style="max-width:280px;font-size:0.8rem;">
+            <button class="btn btn-sm" id="btn-ppt-upload" onclick="uploadPPT()">上传并解析</button>
+            <button class="btn btn-sm" id="btn-ppt-master" onclick="markMasterPPT()" disabled style="display:none">📌 定为母本</button>
+            <button class="btn btn-sm btn-warning" id="btn-ppt-render" onclick="renderPPT()" disabled>🎬 PPT 一键成片</button>
+            <a id="ppt-download" style="display:none;font-size:0.8rem;color:#4ade80;" href="#">↓ 下载成片</a>
+            <button class="btn btn-sm" id="btn-ppt-jy" onclick="exportPPTJy()" disabled title="J线: 导出剪映草稿到剪映草稿文件夹(音画不合成, 打开剪映即可审片/调BGM/导出)" style="display:none">🎬 导出剪映草稿</button>
+          </div>
+          <div id="ppt-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:0.4rem;"></div>
+          <progress id="ppt-progress" value="0" max="1" style="display:none;width:100%;margin-top:0.3rem;height:0.5rem;"></progress>
+          <div id="ppt-draft-name" style="font-size:0.78rem;color:#4ade80;margin-top:0.2rem;"></div>
+          <div id="ppt-preview" style="font-size:0.75rem;color:var(--text-muted);margin-top:0.3rem;max-height:120px;overflow:auto;"></div>
         </div>
         <div id="persona-lock" style="display:none;margin-top:0.5rem;padding:0.5rem 0.75rem;border-radius:var(--radius-sm);background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.3);font-size:0.82rem;color:#c4b5fd;">
         </div>

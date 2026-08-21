@@ -29,9 +29,15 @@ from app.models.director import DirectorJob
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["export_job_draft", "wash_subtitle_text", "split_subtitle"]
+__all__ = ["export_job_draft", "export_ppt_draft", "wash_subtitle_text", "split_subtitle"]
 
 _US = 1_000_000  # 秒 → 微秒
+
+# ── PPT 页整页动画 (2026-08-21 剪映分流) ──
+# 每页 = 1 静态帧, 动效由剪映原生给: 整页入场动画 + 页间转场.
+# 渐显最稳 (专业稿标配); 想更"活"可换 IntroType.向上滑动/轻微放大.
+_JY_PPT_ENTRANCE = draft_mod.IntroType.渐显
+_JY_PPT_TRANSITION = draft_mod.TransitionType.上移
 
 # ── 字幕样式 (2026-08-15 用户口径: 美观字号 5, 非 pyJYD 默认 8) ──
 _SUBTITLE_SIZE = 5.0
@@ -463,6 +469,702 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     return result
 
 
+def export_ppt_draft(job_id: str, work_root: str | Path) -> dict[str, Any]:
+    """PPT 出片 → 剪映草稿 (2026-08-20): 各页 mp4 → video 轨, 整段音频 → voice 轨,
+    每页台词 → caption 字幕轨. 音画不合成, 打开剪映即可审片/调 BGM/导出.
+
+    ppt.py 管线产物: work_root/{job_id}/ppt_manifest.json 含 {clips[], audio}.
+    纯 JSON 写盘, <1s. Raises ValueError 缺产物/音频.
+    """
+    workdir = Path(work_root) / job_id
+    manifest_path = workdir / "ppt_manifest.json"
+    if not manifest_path.exists():
+        raise ValueError(f"PPT 产物缺失 (未完成渲染): {job_id}")
+    meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+    clips = meta.get("clips") or []
+    audio_path = meta.get("audio")
+    if not clips:
+        raise ValueError("没有已渲染的 PPT 页, 先完成成片再导出")
+    if not audio_path or not Path(audio_path).exists():
+        raise ValueError("PPT 音频缺失 (audio 未生成)")
+
+    # 校验各页 mp4 存在
+    valid_clips = []
+    for c in clips:
+        p = Path(c["path"])
+        if p.exists():
+            valid_clips.append(c)
+    if not valid_clips:
+        raise ValueError("各页 mp4 文件均缺失")
+
+    width, height = 1920, 1080  # PPT 16:9 横屏
+    name = f"PPT_{datetime.now().strftime('%Y%m%d_%H%M')}_{job_id[:8]}"
+    folder = draft_mod.DraftFolder(str(_drafts_dir()))
+    script = folder.create_draft(name, width, height, allow_replace=True)
+    script.append_tracks([
+        draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
+        draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
+        draft_mod.TrackSpec(draft_mod.TrackType.video, "main"),
+        draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"),
+    ])
+
+    # ── audio 轨: 整段 TTS (无 manifest, 直接整段) ──
+    audio_path = Path(audio_path)
+    dur = float(_probe_duration(audio_path) or 0)
+    if dur <= 0:
+        raise ValueError("音频时长未知, 无法导出")
+    script.add_segment(
+        draft_mod.AudioSegment(str(audio_path), _trange_sec(0, dur)),
+        "voice",
+    )
+
+    # ── video 轨: 各页静态帧/mp4 按对齐 start_sec 放轨, 静音 (声音归 voice 轨) ──
+    # 2026-08-21 剪映分流: 每页 = 1 静态帧 PNG (photo 素材), 入场动画+转场由剪映给,
+    # 替代逐帧捕获 (21页真实稿 3h → 秒级截图 + 剪映 GPU 导出).
+    # 素材实际时长可能略短于分配时长 (ffmpeg 帧数向下取整) → 用 mat.duration 钳制,
+    # 避免 source_timerange 超出素材时长报错 (2026-08-20).
+    mat_cache: dict[str, draft_mod.VideoMaterial] = {}
+    for idx, c in enumerate(valid_clips):
+        p = Path(c["path"])
+        mat = mat_cache.get(str(p))
+        if mat is None:
+            mat = draft_mod.VideoMaterial(str(p))
+            mat_cache[str(p)] = mat
+        start_us = int(round(float(c.get("start_sec", 0.0)) * _US))
+        alloc_us = int(round(float(c.get("duration_sec", 5.0)) * _US))
+        mat_us = int(mat.duration) if mat.duration else alloc_us
+        use_us = min(alloc_us, mat_us) if mat_us > 0 else alloc_us
+        seg = draft_mod.VideoSegment(
+            mat, trange(start_us, max(use_us, 100000)), volume=0,
+        )
+        # 入场动画: 整页渐显 (母本/知识付费稿标配); 首页不加转场
+        if _JY_PPT_ENTRANCE is not None:
+            seg.add_animation(_JY_PPT_ENTRANCE)
+        if idx > 0 and _JY_PPT_TRANSITION is not None:
+            seg.add_transition(_JY_PPT_TRANSITION)
+        script.add_segment(seg, "main")
+
+    # ── text 轨: 每页台词作字幕 (对齐该页窗口) ──
+    n_text = 0
+    for c in valid_clips:
+        notes = (c.get("notes") or "").strip()
+        if not notes:
+            continue
+        # 洗 TTS 读法 → 阅读文本; 超长断句 (横屏上限 30 字)
+        washed = wash_subtitle_text(notes)
+        chunks = split_subtitle(washed, 30)
+        start_us = int(round(float(c.get("start_sec", 0.0)) * _US))
+        dur_us = int(round(float(c.get("duration_sec", 5.0)) * _US))
+        total_len = max(len(washed), 1)
+        alloc = [dur_us * len(ch) // total_len for ch in chunks]
+        alloc[-1] = dur_us - sum(alloc[:-1]) if alloc else dur_us
+        seg_start = start_us
+        for chunk, chunk_us in zip(chunks, alloc):
+            try:
+                seg = TextSegment(
+                    chunk, trange(seg_start, max(chunk_us, 1000)),
+                    clip_settings=ClipSettings(transform_y=-0.75),
+                )
+                script.add_segment(seg, "caption")
+                n_text += 1
+            except Exception as exc:
+                logger.warning("[jy_export] PPT 字幕段失败: %s | %s", chunk[:20], exc)
+            seg_start += chunk_us
+
+    script.save()
+    draft_dir = _drafts_dir() / name
+    result = {
+        "draft_name": name,
+        "draft_dir": str(draft_dir),
+        "canvas": f"{width}x{height}",
+        "video_segments": len(valid_clips),
+        "audio_segments": 1,
+        "text_segments": n_text,
+        "audio_mode": "整段 TTS",
+        "skipped_slots": [],
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    logger.info("[jy_export] PPT %s -> %s (%s)", job_id, name, result)
+    return result
+
+
+# ── 元素级 PPT 草稿 (2026-08-21 整体复刻 + 逐级显示) ──────────────────────────
+# 每页 = 1 base 层 (背景+装饰, 无动画) + 逐元素透明 PNG 层 (文字/前景图).
+# 每元素独立 video 轨, 按角色序错峰渐显入场. base 轨页间加转场.
+_ROLE_PRIORITY = {"title": 0, "subtitle": 1, "emphasis": 1.5,
+                  "body": 2, "caption": 3, "other": 4}
+_ELEMENT_ENTRANCE = draft_mod.IntroType.渐显
+_BASE_TRANSITION = draft_mod.TransitionType.上移
+# 句子停顿加权: 每句结束后额外停顿时长 (秒), 模拟 TTS 换气停顿
+_SENT_PAUSE = 0.35
+# 动效完成后的静止阅读窗口: 所有元素最晚入场 ≤ 页末 - 此值
+_READ_WINDOW = 5.0
+
+
+def _safe_deadline(page_dur: float) -> float:
+    """元素最晚入场时刻: 长页留 5s 阅读窗; 短页至少留 0.5s 且不超页长."""
+    return max(0.5, min(page_dur - _READ_WINDOW, page_dur - 0.5))
+
+
+def split_narration(text: str) -> list[str]:
+    """口播稿按句切分 (中文句末标点 .!?。！？;； 及换行)."""
+    import re as _re
+    text = (text or "").strip()
+    if not text:
+        return []
+    parts = _re.split(r"(?<=[。！？；.!?])\s*|\n+", text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _char_weight(sent: str) -> float:
+    """句子权重: 字符数 (标点略降权)."""
+    return sum(0.5 if c in "，、：；。！？,.!?;: " else 1.0 for c in sent)
+
+
+def _match_score(el_text: str, sent: str) -> float:
+    """元素文本 ↔ 口播句 匹配分.
+
+    子串出现 → 1.0 (逐字吻合); 否则最长公共子串占比 (连续才算, 防短句
+    靠共同常用字假阳性, 如 '其实是小麦驯化了我们' 与 '咱们...小麦的手下败将').
+    """
+    el = (el_text or "").strip()
+    if not el:
+        return 0.0
+    if el in sent:
+        return 1.0
+    import difflib
+    m = difflib.SequenceMatcher(None, el, sent).find_longest_match(0, len(el), 0, len(sent))
+    return m.size / max(1, len(el))
+
+
+def compute_element_timing(
+    narration: str,
+    layers: list[dict],
+    page_start: float,
+    page_dur: float,
+    *,
+    first_delay: float = 0.5,
+    group_gap: float = 0.25,
+    match_threshold: float = 0.6,
+) -> list[dict]:
+    """按口播稿时序分配每个元素的入场时刻 (2026-08-21 v3).
+
+    近似法 (TTS 合成音语速稳定, 无需 whisper): 口播按句切分, 每句时长
+    ∝ 字符权重 + 停顿加权, 累计得句窗口.
+    - 高置信匹配 (覆盖率≥0.6): 元素在该句说到时入场, 且**句内偏移**
+      (元素文本在句中的位置 → 精确到该句内部时刻, 而非句首).
+      同句多元素按角色序微错峰 0.25s.
+    - 未匹配元素 (屏上文字与口播不逐字吻合): 补到已匹配之后的
+      空闲句窗口, 保持逐级显示且不跳到已播内容之前.
+    """
+    sents = split_narration(narration)
+    elems = [l for l in layers if l["kind"] != "base"]
+    if not sents or page_dur <= 0 or not elems:
+        return []
+    # 句窗口 (字符权重比例 + 句尾停顿)
+    weights = [_char_weight(s) + _SENT_PAUSE for s in sents]
+    total_w = sum(weights)
+    acc = first_delay
+    sent_wins = []
+    for i, w in enumerate(weights):
+        sent_wins.append({"idx": i, "start": acc, "dur": page_dur * w / total_w})
+        acc += page_dur * w / total_w
+    sent_wins.sort(key=lambda x: x["start"])
+
+    # 角色序 (title 优先占句)
+    elems.sort(key=lambda l: (_ROLE_PRIORITY.get(l.get("role", "other"), 4), l.get("order", 0)))
+    assigned: dict[int, float] = {}
+    group_count: dict[int, int] = {}
+    last_assign = first_delay
+
+    # Phase 1: 高置信匹配 (同句最多 2 元素成组微错峰 — 标题副题常一口气说出)
+    for ei, l in enumerate(elems):
+        if l["kind"] != "text" or not l.get("text"):
+            continue
+        cand = [(w["idx"], _match_score(l["text"], sents[w["idx"]])) for w in sent_wins]
+        cand.sort(key=lambda x: -x[1])
+        for si, score in cand:
+            if score < match_threshold:
+                break
+            if group_count.get(si, 0) >= 2:
+                continue
+            group_count[si] = group_count.get(si, 0) + 1
+            win = next(w for w in sent_wins if w["idx"] == si)
+            pos = sents[si].find(l["text"][:6]) if len(l["text"]) >= 2 else 0
+            rel = max(0.0, pos) / max(1, len(sents[si]))
+            t = win["start"] + win["dur"] * rel + (group_count[si] - 1) * group_gap
+            assigned[ei] = t
+            last_assign = max(last_assign, t)
+            break
+
+    # 动效完成窗口: 所有元素最晚入场 ≤ 页长安全线 (长页留 5s 阅读, 短页不超页长)
+    safe_deadline = _safe_deadline(page_dur)
+
+    # Phase 2: 未匹配 → 均匀铺满 [first_delay, safe_deadline]
+    # 消除"尾部密集 + 前段空白": 未匹配元素按阅读序均布, 不与口播吻合元素争位
+    # (不同轨共存, 时间可穿插, 无冲突).
+    unmatched = [ei for ei in range(len(elems)) if ei not in assigned]
+    if unmatched:
+        n_u = len(unmatched)
+        span = max(0.5, safe_deadline - first_delay)
+        for j, ei in enumerate(unmatched):
+            assigned[ei] = first_delay + (j + 1) * span / (n_u + 1)
+
+    # 全局钳制: 匹配元素若落在安全窗内/后, 一并压到 safe_deadline
+    for ei in assigned:
+        if assigned[ei] > safe_deadline:
+            assigned[ei] = safe_deadline
+
+    out: list[dict] = []
+    for ei, l in enumerate(elems):
+        rel = min(assigned.get(ei, safe_deadline), safe_deadline)
+        out.append({**l, "start_sec": round(page_start + rel, 3)})
+    return out
+
+
+def _build_caption_track(
+    script: Any,
+    pages: list[dict],
+    width: int,
+    height: int,
+) -> dict[str, int]:
+    """元素草稿字幕轨 (2026-08-21): 每页口播稿 → 底部字幕, 复用 R9 v3.
+
+    逐页 narration 洗读法 → 断句 (横屏≤30字) → 时长按字数比例分到页窗口 →
+    每条: 内联划重点(金/红) + TextIntro 动效 + 同帧音效 (与 director 草稿一致).
+    """
+    stats = {"emphasis": 0, "sfx": 0, "sfx_missing": 0, "sfx_density_skip": 0,
+             "anim": 0, "caption_suppressed": 0}
+    _last_sfx = [None]
+    _first_caption = [True]
+    n_text = 0
+    max_chars = 18 if height > width else 30
+
+    for pg in pages:
+        narration = (pg.get("narration") or "").strip()
+        start_sec = float(pg["start_sec"])
+        dur_sec = float(pg["duration_sec"])
+        if not narration or dur_sec <= 0:
+            continue
+        washed = wash_subtitle_text(narration)
+        chunks = split_subtitle(washed, max_chars)
+        total_len = max(len(washed), 1)
+        seg_start_us = int(round(start_sec * _US))
+        seg_dur_us = int(round(dur_sec * _US))
+        alloc = [seg_dur_us * len(c) // total_len for c in chunks]
+        alloc[-1] = seg_dur_us - sum(alloc[:-1])
+        for chunk, chunk_us in zip(chunks, alloc):
+            gold, red, anim, anim_ms = _auto_choreograph(
+                script, chunk, seg_start_us, stats, _last_sfx, first=_first_caption[0])
+            _first_caption[0] = False
+            hl = sorted(set(gold + find_highlight_ranges(chunk)))
+            rr = sorted(set(red))
+            try:
+                seg = _StyledTextSegment(
+                    chunk,
+                    trange(seg_start_us, max(chunk_us, 1000)),
+                    highlight_ranges=hl,
+                    red_ranges=rr,
+                    clip_settings=ClipSettings(transform_y=-0.75),
+                )
+                if anim:
+                    seg.add_animation(getattr(TextIntro, anim),
+                                      duration=anim_ms * 1000 if anim_ms else None)
+                    stats["anim"] += 1
+                script.add_segment(seg, "caption")
+                n_text += 1
+            except Exception as exc:
+                logger.warning("[jy_export] 元素稿字幕段失败: %s | %s", chunk[:20], exc)
+            seg_start_us += chunk_us
+    return {"text": n_text, "sfx": stats["sfx"], "emphasis": stats["emphasis"]}
+
+
+def _content_columns(layers: list[dict], height_emu: float = 6858000) -> int:
+    """内容带列数 (结构化判定): 剔除页头/页脚后按 left 聚类得几列."""
+    _, body, _ = _split_bands(layers, height_emu)
+    cols: list[list] = []
+    for l in sorted(body, key=lambda x: float(x.get("left", 0))):
+        if cols and abs(float(l.get("left", 0)) - float(cols[-1][0].get("left", 0))) <= 320000:
+            cols[-1].append(l)
+        else:
+            cols.append([l])
+    return len(cols)
+
+
+def _split_bands(
+    elems: list[dict], height_emu: float = 6858000,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """按纵向位置分带: (页头 top<12%, 内容带, 页脚 top>85%)."""
+    header, body, footer = [], [], []
+    for l in elems:
+        tr = float(l.get("top", 0)) / height_emu if height_emu else 0
+        if tr < 0.12:
+            header.append(l)
+        elif tr > 0.85:
+            footer.append(l)
+        else:
+            body.append(l)
+    return header, body, footer
+
+
+def _group_into_blocks(
+    elems: list[dict],
+    height_emu: float = 6858000,
+    left_tol: float = 320000,
+) -> list[list[dict]]:
+    """按 PPT 版式把元素聚成信息块 (2026-08-21).
+
+    - 页头 (top<12%高) → 独立块, 先显示
+    - 页脚 (top>85%高) → 独立块, 后显示
+    - 内容带按 left 聚类成列 (块): 三栏 PPT 的 01/02/03 各占一列
+    - 图片随其列; 独立图作单块
+    返回块列表, 每块内元素无序 (排序由调用方).
+    """
+    header, body, footer = _split_bands(elems, height_emu)
+    cols: list[list[dict]] = []
+    for l in sorted(body, key=lambda x: float(x.get("left", 0))):
+        if cols and abs(float(l.get("left", 0)) - float(cols[-1][0].get("left", 0))) <= left_tol:
+            cols[-1].append(l)
+        else:
+            cols.append([l])
+    blocks: list[list[dict]] = []
+    if header:
+        blocks.append(header)
+    blocks.extend(cols)
+    if footer:
+        blocks.append(footer)
+    return blocks
+
+
+def _grid_anchors(elems: list[dict], height_emu: float = 6858000) -> list[dict]:
+    """宫格锚点候选 (2026-08-21): 数字标记(01/02/03) 或 短粗体标题(≥14pt≤20字),
+    排除页头带. 返回锚点列表 (须再经行聚类判定是否真为宫格)."""
+    import re as _re
+    anchors = []
+    for l in elems:
+        if l["kind"] != "text":
+            continue
+        tr = float(l.get("top", 0)) / height_emu if height_emu else 0
+        if tr < 0.12:
+            continue
+        text = (l.get("text") or "").strip()
+        if not text:
+            continue
+        is_num = bool(_re.match(r"^\d{1,2}$", text))
+        pt = float(l.get("pt") or 0)
+        is_title = bool(l.get("bold")) and pt >= 14 and len(text) <= 20
+        if is_num or is_title:
+            anchors.append(l)
+    return anchors
+
+
+def _detect_grid_anchors(elems: list[dict], height_emu: float = 6858000) -> list[dict] | None:
+    """宫格判定: 锚点按行聚类 (top 差≤600000 EMU), 任一行≥2 锚 → 宫格.
+
+    优先数字标记(01), 其次短粗体标题. 返回最终锚点集; 非宫格返回 None.
+    """
+    anchors = _grid_anchors(elems, height_emu)
+    if len(anchors) < 2:
+        return None
+    num_markers = [a for a in anchors if (a.get("text") or "").strip().isdigit()]
+    pool = num_markers if len(num_markers) >= 2 else anchors
+    pool_sorted = sorted(pool, key=lambda l: float(l.get("top", 0)))
+    rows: list[list[dict]] = []
+    for a in pool_sorted:
+        if rows and abs(float(a.get("top", 0)) - float(rows[-1][0].get("top", 0))) <= 600000:
+            rows[-1].append(a)
+        else:
+            rows.append([a])
+    if any(len(r) >= 2 for r in rows):
+        return pool
+    return None
+
+
+def _dist2(a: dict, b: dict) -> float:
+    return (float(a.get("left", 0)) - float(b.get("left", 0))) ** 2 + \
+           (float(a.get("top", 0)) - float(b.get("top", 0))) ** 2
+
+
+def compute_cell_timing(
+    layers: list[dict],
+    page_start: float,
+    page_dur: float,
+    *,
+    first_delay: float = 0.5,
+) -> list[dict] | None:
+    """宫格布局逐格显示 (2026-08-21): 每格 图+标题同现 → 正文, 格按行优先.
+
+    非宫格返回 None (调用方回退块级/口播). 页头先出, 页脚/游离元素后置.
+    """
+    elems = [l for l in layers if l["kind"] != "base"]
+    anchors = _detect_grid_anchors(elems)
+    if anchors is None:
+        return None
+    safe = _safe_deadline(page_dur)
+    anchor_ids = {id(a) for a in anchors}
+
+    # 非锚元素 → 最近锚点 (内容格); 游离元素(远)单独成块
+    cells: dict[int, list[dict]] = {id(a): [a] for a in anchors}
+    loose: list[dict] = []
+    for l in elems:
+        if id(l) in anchor_ids:
+            continue
+        tr = float(l.get("top", 0)) / 6858000
+        if tr < 0.12 or tr > 0.85:  # 页头/页脚不入格、不入 loose (单独组)
+            continue
+        best = min(anchors, key=lambda a: _dist2(a, l))
+        if _dist2(best, l) > (1.2e6) ** 2:  # 距锚点过远 → 游离
+            loose.append(l)
+        else:
+            cells[id(best)].append(l)
+
+    # 宫格语义只在"格内有图"(图+标题同现)时有意义; 纯文字列块(如 01/02/03
+    # 三栏)回退给块级编排 — 否则 P3 这类会被错拆.
+    if not any(any(l["kind"] == "image" for l in c) for c in cells.values()):
+        return None
+
+    # 行优先序
+    ordered_cells: list[list[dict]] = []
+    anchors_sorted = sorted(anchors, key=lambda a: float(a.get("top", 0)))
+    rows: list[list[dict]] = []
+    for a in anchors_sorted:
+        if rows and abs(float(a.get("top", 0)) - float(rows[-1][0].get("top", 0))) <= 600000:
+            rows[-1].append(a)
+        else:
+            rows.append([a])
+    for row in sorted(rows, key=lambda r: float(r[0].get("top", 0))):
+        for a in sorted(row, key=lambda x: float(x.get("left", 0))):
+            ordered_cells.append(cells[id(a)])
+
+    # 时序: 页头 → 宫格 → 游离(位置序) → 页脚
+    header = sorted([l for l in elems if float(l.get("top", 0)) / 6858000 < 0.12],
+                    key=lambda l: float(l.get("top", 0)))
+    footer = sorted([l for l in elems if float(l.get("top", 0)) / 6858000 > 0.85],
+                    key=lambda l: float(l.get("top", 0)))
+    groups: list[list[dict]] = []
+    if header:
+        groups.append(header)
+    groups.extend(ordered_cells)
+    if loose:
+        groups.append(sorted(loose, key=lambda l: (float(l.get("top", 0)), float(l.get("left", 0)))))
+    if footer:
+        groups.append(footer)
+
+    total = sum(len(g) for g in groups)
+    span = max(0.5, safe - first_delay)
+    cursor = first_delay
+    out: list[dict] = []
+    for g in groups:
+        n = max(len(g), 1)
+        g_span = span * n / total
+        has_img = any(l["kind"] == "image" for l in g)
+        # 格内序: 有图 → 图+锚同现后正文; 无图 → 顶部序
+        if len(anchors) == 1 and has_img:
+            seq = [l for l in g if l["kind"] != "body"] + [l for l in g if l["kind"] == "body"]
+        else:
+            seq = sorted(g, key=lambda l: (float(l.get("top", 0)), float(l.get("left", 0))))
+        if has_img:
+            # 图+标题同现: 同时间戳
+            img = [l for l in seq if l["kind"] == "image"]
+            tit = [l for l in seq if l["kind"] == "text" and id(l) in anchor_ids]
+            body = [l for l in seq if l["kind"] == "text" and id(l) not in anchor_ids]
+            steps = []
+            if img or tit:
+                steps.append(img + tit)  # 同现
+            steps.extend([[b] for b in body])
+            # 展开: 同现组内同 start
+            group_times: list[tuple[float, list[dict]]] = []
+            t_cursor = cursor
+            for st in steps:
+                group_times.append((t_cursor, st))
+                t_cursor += g_span / max(1, len(steps))
+            for t, st in group_times:
+                for l in st:
+                    out.append({**l, "start_sec": round(page_start + min(t, safe), 3)})
+        else:
+            for i, l in enumerate(seq):
+                t = cursor + i * g_span / n
+                out.append({**l, "start_sec": round(page_start + min(t, safe), 3)})
+        cursor += g_span
+    return out
+
+
+def compute_block_timing(
+    layers: list[dict],
+    page_start: float,
+    page_dur: float,
+    *,
+    first_delay: float = 0.5,
+    within_gap: float = 0.3,
+) -> list[dict]:
+    """按信息块逐级显示 (2026-08-21): 页头 → 列块(左→右) → 页脚.
+
+    每块一个时间片 (按元素数比例分配), 块内元素 top→bottom 错峰.
+    全局保证: 最晚入场 ≤ 页长 - 5 (留 5s 静止阅读). 确定性, 不依赖口播匹配
+    (块序是版式语义, 三栏稿口播常一次提及所有块).
+    """
+    elems = [l for l in layers if l["kind"] != "base"]
+    if not elems:
+        return []
+    safe = _safe_deadline(page_dur)
+    blocks = _group_into_blocks(elems)
+    total = sum(len(b) for b in blocks)
+    span = max(0.5, safe - first_delay)
+    cursor = first_delay
+    out: list[dict] = []
+    for block in blocks:
+        n = len(block)
+        block_span = span * n / total
+        block_elems = sorted(block, key=lambda l: (float(l.get("top", 0)), float(l.get("left", 0))))
+        for i, l in enumerate(block_elems):
+            t = cursor + (i * block_span / max(1, n))
+            out.append({**l, "start_sec": round(page_start + min(t, safe), 3)})
+        cursor += block_span
+    return out
+
+
+def compute_page_timing(
+    layers: list[dict],
+    narration: str,
+    page_start: float,
+    page_dur: float,
+) -> list[dict]:
+    """统一入场编排 (2026-08-21):
+    - 宫格布局 (数字标记/短粗体标题形成≥2格) → 逐格: 图+标题同现→正文
+    - 结构化页 (内容带 ≥2 列, 如三栏信息块稿) → 块级逐级 (页头→列→页脚)
+    - 单列/简单页 → 口播匹配 (标题随口播说到时入场)
+    """
+    cell = compute_cell_timing(layers, page_start, page_dur)
+    if cell is not None:
+        return cell
+    if _content_columns(layers) >= 2:
+        return compute_block_timing(layers, page_start, page_dur)
+    timed = compute_element_timing(narration, layers, page_start, page_dur)
+    if timed:
+        return timed
+    return compute_block_timing(layers, page_start, page_dur)  # 空口播兜底
+
+
+def export_element_draft(
+    draft_name: str,
+    pages: list[dict],
+    audio_path: str | Path | None = None,
+    *,
+    canvas: tuple[int, int] = (1920, 1080),
+    stagger: float = 0.30,
+) -> dict[str, Any]:
+    """元素级剪映草稿: 每页 base 层 + 逐元素透明层, 各自 video 轨, 渐显错峰.
+
+    pages: [{
+        start_sec: float, duration_sec: float,
+        layers: [ {kind: 'base'|'text'|'image', file: str, text?: str, role?: str} ]
+    }]
+    - base 层 → 'main' 轨 (无入场动画), 页间 上移 转场
+    - text/image 层 → e0..eK 轨, 按角色序错峰, 渐显入场 (全画布透明层, 动画安全)
+    - 轨道按全稿最大元素数建, 跨页复用 (时序不重叠)
+    """
+    width, height = canvas
+    folder = draft_mod.DraftFolder(str(_drafts_dir()))
+    script = folder.create_draft(draft_name, width, height, allow_replace=True)
+
+    # 轨道: voice/sfx 底, main(base) 中, e0..eK 元素, caption 最上 (后来居上)
+    max_elements = max((len([l for l in pg.get("layers", []) if l["kind"] != "base"]) for pg in pages), default=0)
+    track_specs = [draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
+                   draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
+                   draft_mod.TrackSpec(draft_mod.TrackType.video, "main")]
+    track_specs += [draft_mod.TrackSpec(draft_mod.TrackType.video, f"e{i}") for i in range(max_elements)]
+    track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"))
+    script.append_tracks(track_specs)
+
+    # audio 轨: 整段 TTS (若顶层给 audio_path), 或逐页 audio_file 段
+    if audio_path and Path(audio_path).exists():
+        dur = float(_probe_duration(audio_path) or 0)
+        if dur > 0:
+            script.add_segment(draft_mod.AudioSegment(str(audio_path), _trange_sec(0, dur)), "voice")
+
+    mat_cache: dict[str, draft_mod.VideoMaterial] = {}
+    n_base = n_elem = 0
+    n_audio = 0
+
+    def _photo(file: str) -> draft_mod.VideoMaterial:
+        m = mat_cache.get(file)
+        if m is None:
+            m = draft_mod.VideoMaterial(file)
+            mat_cache[file] = m
+        return m
+
+    for pg in pages:
+        start_us = int(round(float(pg["start_sec"]) * _US))
+        dur_us = int(round(float(pg["duration_sec"]) * _US))
+        layers = pg.get("layers", [])
+
+        # 逐页音频段 (如有) → voice 轨
+        pg_audio = pg.get("audio_file")
+        if pg_audio and Path(pg_audio).exists():
+            a_dur = float(_probe_duration(pg_audio) or 0)
+            if a_dur > 0:
+                script.add_segment(
+                    draft_mod.AudioSegment(str(pg_audio), trange(start_us, int(round(a_dur * _US)))),
+                    "voice")
+                n_audio += 1
+
+        # base 层 → main 轨
+        base_layer = next((l for l in layers if l["kind"] == "base"), None)
+        if base_layer:
+            mat = _photo(base_layer["file"])
+            seg = draft_mod.VideoSegment(mat, trange(start_us, dur_us), volume=0)
+            if n_base > 0 and _BASE_TRANSITION is not None:
+                seg.add_transition(_BASE_TRANSITION)
+            script.add_segment(seg, "main")
+            n_base += 1
+
+        # 元素层 → e0..eK: 有口播时序(start_sec)用之, 否则按角色序错峰
+        elems = [l for l in layers if l["kind"] != "base"]
+        elems.sort(key=lambda l: (l.get("start_sec", 1e9), _ROLE_PRIORITY.get(l.get("role", "other"), 4), l.get("order", 0)))
+        page_dur_s = max(1.5, float(pg["duration_sec"]))
+        n = max(len(elems), 1)
+        step = min(stagger, page_dur_s / (n + 1.5))  # 自适应: 页短时压缩错峰
+        for idx, l in enumerate(elems):
+            if l.get("start_sec") is not None:
+                delay_us = int(round(max(0.0, float(l["start_sec"]) - pg["start_sec"]) * _US))
+            else:
+                delay_us = int(round(idx * step * _US))
+            remain_us = dur_us - delay_us
+            if remain_us < 200000:  # 至少留 0.2s 动画窗口
+                break
+            mat = _photo(l["file"])
+            seg = draft_mod.VideoSegment(
+                mat, trange(start_us + delay_us, max(remain_us, 200000)), volume=0)
+            if _ELEMENT_ENTRANCE is not None:
+                seg.add_animation(_ELEMENT_ENTRANCE)
+            script.add_segment(seg, f"e{idx}")
+            n_elem += 1
+
+    # 字幕轨 (每页口播稿, R9 v3 动态字幕 + 同帧音效)
+    cap_stats = _build_caption_track(script, pages, width, height)
+
+    script.save()
+    draft_dir = _drafts_dir() / draft_name
+    result = {
+        "draft_name": draft_name,
+        "draft_dir": str(draft_dir),
+        "canvas": f"{width}x{height}",
+        "base_segments": n_base,
+        "element_segments": n_elem,
+        "audio_segments": n_audio,
+        "caption_segments": cap_stats["text"],
+        "sfx_segments": cap_stats["sfx"],
+        "emphasis_words": cap_stats["emphasis"],
+        "max_tracks": 4 + max_elements,
+        "audio": bool(audio_path),
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    logger.info("[jy_export] 元素级草稿 %s -> %s (base=%d elem=%d caption=%d sfx=%d tracks=%d)",
+                draft_name, draft_dir, n_base, n_elem, cap_stats["text"], cap_stats["sfx"],
+                4 + max_elements)
+    return result
+
+
 # ── R9 自动编排 (2026-08-17): 分类→同帧语义音效 + 内联划重点(金/红) + 密度规则 ──
 # 知识来源: 45期协同三件套 / 音效语义库(用户标注) / 密度规则(用户口径) — 全确定性, 无 LLM
 # 视觉强调 v2: 砍掉独立强调轨, 改为字幕行内双色划重点 (解决与字幕/HF卡重合+截断)
@@ -622,15 +1324,34 @@ def sound_path(name: str) -> Path | None:
 
 def attach_sound(script: Any, track_name: str, sound_name: str, at_sec: float,
                  volume: float = 1.0) -> bool:
-    """往草稿音效轨挂一个音效. 缺文件时记日志返回 False (不阻塞导出)."""
+    """往草稿音效轨挂一个音效. 缺文件时记日志返回 False (不阻塞导出).
+
+    重叠防护 (2026-08-20, ID-054): sfx 轨既有 HF 转场音(whoosh) 又有字幕音效,
+    各自独立触发, 时长未对齐会互相覆盖 (字幕音效 4.27s 盖住 0.47s whoosh)。
+    挂载前查目标轨已有段, 新音效时长截断到不与任何已挂段重叠 (保底 0.1s)。
+    """
     p = sound_path(sound_name)
     if not p:
         logger.warning("[jy_export] 音效缺失, 跳过: %s", sound_name)
         return False
     dur = _probe_duration(p) or 1.0
+    start_us = int(round(at_sec * _US))
+    end_us = start_us + int(round(dur * _US))
+    # 查目标轨已挂段, 找最小可用的结束边界 (不越过任何已挂段的起点)
+    try:
+        track = script.tracks[track_name]
+        for seg in track.segments:
+            seg_start = seg.target_timerange.start
+            if start_us < seg_start < end_us:
+                end_us = seg_start
+    except (KeyError, AttributeError):
+        pass  # 轨道不存在/无法访问 → 保持原时长
+    if end_us - start_us < 100_000:  # <0.1s 无意义, 跳过
+        logger.info("[jy_export] 音效 %s 与已挂段重叠过密, 跳过 (%.2fs)", sound_name, at_sec)
+        return False
     script.add_segment(
         draft_mod.AudioSegment(
-            str(p), trange(int(round(at_sec * _US)), int(round(dur * _US))), volume=volume
+            str(p), trange(start_us, end_us - start_us), volume=volume
         ),
         track_name,
     )
