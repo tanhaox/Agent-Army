@@ -301,10 +301,18 @@ def _run_ppt_pipeline(job_id: str) -> None:
             audio_files: list[AudioFile] = []
             if cached_job:
                 # 缓存命中: 复用已有音频 + 按时长排时间线 (台词相同, 顺序一致)
-                seg_afs = sorted(
-                    [af for af in cached_job.audio_files if af.segment_id and af.duration],
-                    key=lambda af: af.id,
-                )
+                # 2026-08-21 修复: 之前按 af.id(UUID 随机序) 排序 → 缓存音频段被打乱
+                # (P3 装成 P12 的 011.wav, 字幕与音频错位 → "字幕丢失很多")。
+                # 正确序 = 缓存音频对应 segment 的 line_index (页序), 非 UUID.
+                seg_afs = [af for af in cached_job.audio_files if af.segment_id and af.duration]
+                if seg_afs:
+                    _line_map = {
+                        s.id: s.line_index
+                        for s in db.query(Segment).filter(
+                            Segment.id.in_([af.segment_id for af in seg_afs])
+                        ).all()
+                    }
+                    seg_afs.sort(key=lambda af: _line_map.get(af.segment_id, 0))
                 combined_af = next((af for af in cached_job.audio_files if af.segment_id is None), None)
                 combined_path = combined_af.file_path if combined_af else None
                 audio_files = seg_afs
@@ -391,9 +399,17 @@ def _run_ppt_pipeline(job_id: str) -> None:
             bound = _JOBS.get(job_id, {})
             skin = None
             if bound.get("book_id"):
-                from app.services.skin_pack_service import load_skin, apply_skin_to_slides
+                from app.services.skin_pack_service import load_skin, apply_skin_to_slides, extract_master
                 skin = load_skin(bound["book_id"])
                 if skin and bound.get("ep_index") == skin.master_ep:
+                    # 母本重渲染: 当前 pptx 即新母本 → 重新抽取皮肤包
+                    # (2026-08-21 修复: 旧皮肤是"上次上传的母本"抽的, 重跑 ep1 后作废,
+                    #   ep2-6 后续渲染应对齐新皮肤; 提取失败则沿用旧包, 不阻断)
+                    try:
+                        skin = extract_master(workdir, bound["book_id"], bound["ep_index"])
+                        _evt(job_id, f"母本重渲染, 已更新皮肤包 (第{bound['ep_index']}集为新母本)", "ok")
+                    except Exception as exc:
+                        _evt(job_id, f"母本皮肤更新失败(沿用旧包): {exc}", "warn")
                     skin = None  # 母本自身是源, 不 apply
                 if skin:
                     apply_skin_to_slides(slides, skin)

@@ -201,7 +201,8 @@ class _StyledTextSegment(TextSegment):
                  highlight_ranges: list[tuple[int, int]] | None = None,
                  red_ranges: list[tuple[int, int]] | None = None,
                  **kwargs):
-        kwargs.setdefault("style", draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0)))
+        kwargs.setdefault("style", draft_mod.TextStyle(
+            size=_SUBTITLE_SIZE, color=_SUBTITLE_COLOR, align=_SUBTITLE_ALIGN))
         super().__init__(text, timerange, **kwargs)
         self._hl_ranges = sorted(highlight_ranges or [])
         self._red_ranges = sorted(red_ranges or [])
@@ -601,10 +602,28 @@ _SENT_PAUSE = 0.35
 _READ_WINDOW = 5.0
 # 首帧免责字幕最小停留时长 (豆包统一约束: 右上角常驻≥20秒)
 _MIN_DISCLAIMER_SEC = 20.0
+def _jy_font(resource_id: str):
+    """自定义剪映字体 (pyJianYingDraft FontType 枚举没有的, 如思源黑体 ID 6740439840254333443)."""
+    _meta = type("FM", (), {"resource_id": resource_id})()
+    return type("CF", (), {"value": _meta})()
+
+
 # 剪映商用字体 (2026-08-21): pyJianYingDraft FontType 覆盖 797 个剪映授权字体, 配置化可随时换
-_JY_FONT_BADGE = draft_mod.FontType.风雅宋        # 系列角标: 雅致书卷气
-_JY_FONT_CAPTION = draft_mod.FontType.Aa全息黑体  # 台词字幕: 清晰可读
+_JY_FONT_BADGE = _jy_font("6740439840254333443")  # 思源黑体 (用户定稿, 非枚举)
+_JY_FONT_CAPTION = draft_mod.FontType.孤月体      # 台词字幕 (2026-08-21 用户定稿)
 _JY_FONT_DISCLAIMER = draft_mod.FontType.Aa全息黑体  # 免责小字: 清晰可读
+
+# 字幕样式 (2026-08-21 用户定稿): 孤月体 / 字号5 / 奶油色 #F9F3C4 / 居中 / 剪映面板Y=-934
+_SUBTITLE_COLOR = (0.976, 0.953, 0.769)  # #F9F3C4
+_SUBTITLE_ALIGN = 1  # 0=左 1=中 2=右
+# 位置换算 (2026-08-21 v2 修正): 剪映面板 y 正向上(负向下), transform_y 正向下(负向上) →
+#   transform_y = -面板y/1958。用户定稿 字幕(0,-934) → transform_y=+0.477。
+#   (v1 误用 -0.477 → 面板 y=+934 跑到屏幕顶上方 → "字幕丢失+偏上", 本版翻号)
+_CAPTION_TRANSFORM_Y = 0.477
+# 免责: 用户定稿剪映面板(1022, 993) 右上角 → (1022/2474, -993/1958)=(0.413, -0.507)
+_DISCLAIMER_TRANSFORM = (0.413, -0.507)
+# 角标: 用户定稿剪映面板(-479, 962) 左上角 → (-479/2474, -962/1958)=(-0.194, -0.491), 字号5
+_BADGE_TRANSFORM = (-0.194, -0.491)
 
 # 白字可读性机制 (2026-08-21): 字幕/角标/免责是白字, 白底页面会看不见 →
 # 加深色描边 + 阴影, 任何底色都清晰. 描边/阴影可独立调.
@@ -782,7 +801,7 @@ def _build_caption_track(
                     shadow=_CAPTION_SHADOW,
                     highlight_ranges=hl,
                     red_ranges=rr,
-                    clip_settings=ClipSettings(transform_y=-0.75),
+                    clip_settings=ClipSettings(transform_y=_CAPTION_TRANSFORM_Y),
                 )
                 if anim:
                     seg.add_animation(getattr(TextIntro, anim),
@@ -1080,7 +1099,7 @@ def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int
             font=_JY_FONT_DISCLAIMER,
             border=_DISCLAIMER_BORDER,
             style=draft_mod.TextStyle(size=2.8, color=(1.0, 1.0, 1.0), alpha=0.85),
-            clip_settings=ClipSettings(transform_x=0.32, transform_y=0.42),
+            clip_settings=ClipSettings(transform_x=_DISCLAIMER_TRANSFORM[0], transform_y=_DISCLAIMER_TRANSFORM[1]),
         )
         script.add_segment(seg, "disclaimer")  # 独立轨, 防与底部字幕同轨重叠
         return 1
@@ -1111,7 +1130,7 @@ def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indi
                 border=_BADGE_BORDER,
                 shadow=_BADGE_SHADOW,
                 style=draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0), alpha=0.95),
-                clip_settings=ClipSettings(transform_x=-0.42, transform_y=0.42),  # 左上角
+                clip_settings=ClipSettings(transform_x=_BADGE_TRANSFORM[0], transform_y=_BADGE_TRANSFORM[1]),  # 左上角
             )
             seg.add_animation(draft_mod.TextLoopAnim.闪烁)  # 呼吸闪烁
             script.add_segment(seg, "badge")
