@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .assets import DownloadLog, MaterialAsset, VideoAsset, VideoOutput
 from .base import Base, _new_uuid, _now
+from .book import BookProject, Episode
 from .content import (
     Article,
     AudioFile,
@@ -32,6 +33,8 @@ __all__ = [
     "MaterialPackage", "MaterialItem",
     # 角色 / 数字人
     "Role", "WorkflowSync", "DigitalHumanVideo", "Persona",
+    # 拆书项目
+    "BookProject", "Episode",
     # 导演台
     "DirectorJob", "DirectorSlot", "VisualRenderJob",
     # 素材 / 成品

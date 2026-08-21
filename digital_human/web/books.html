@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>拆书 · 书库 — 数字人口播流水线</title>
+  <link rel="stylesheet" href="/web/books.css">
+</head>
+<body>
+  <nav>
+    <div class="logo">Pipeline<span>Studio</span></div>
+    <a href="/web/books.html" class="active">拆书</a>
+    <a href="/web/index.html">新闻线索</a>
+    <a href="/web/writing.html">文字加工</a>
+    <a href="/web/audio.html">音频加工</a>
+    <a href="/web/director.html">导演控制台</a>
+    <a href="/web/library.html">视频库</a>
+    <a href="/web/templates.html">模板管理</a>
+    <a href="/web/visual_render.html">视觉渲染</a>
+    <a href="/web/voices.html">音色管理</a>
+    <a href="/web/roles.html">角色管理</a>
+    <a href="/web/personas.html">人物</a>
+    <div class="spacer"></div>
+    <a href="/docs" target="_blank">API Docs</a>
+  </nav>
+  <div class="container">
+    <div id="list-view">
+      <h1>拆书 · 书库 <span class="badge">6集系列</span></h1>
+      <div class="toolbar">
+        <button onclick="openCreate()">+ 新书</button>
+        <button class="secondary" onclick="loadAll()">刷新</button>
+        <button class="warn" id="btn-distill" onclick="startDistill()">批量蒸馏待处理</button>
+        <span id="distill-state" class="hint"></span>
+      </div>
+      <div class="panel" id="lib-panel"></div>
+      <div class="panel" id="distill-log" style="display:none">
+        <h2>蒸馏日志 <span class="badge" id="distill-live">LIVE</span>
+          <button class="sm" id="distill-done-btn" style="display:none;background:#16a34a;margin-left:0.6rem" onclick="dismissDistill()">✓ 确认完成</button>
+        </h2>
+        <pre class="script" id="distill-log-body" style="max-height:280px"></pre>
+      </div>
+      <div id="book-list"></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="create-modal">
+    <div class="modal">
+      <h2>新建拆书项目</h2>
+      <label>书名 (已蒸馏书籍) *</label>
+      <select id="c-title"><option value="">— 加载中… —</option></select>
+      <div class="hint">仅列本地已蒸馏的书 (含 .蒸馏.txt 精华)；未蒸馏的书请先在书库点「🔬 蒸馏」。</div>
+      <label>作者</label><input id="c-author">
+      <label>书页链接 (知海等, 爬简介/目录免搜索)</label><input id="c-url" placeholder="https://www.zhihailib.com/book/xxxxx">
+      <div class="row">
+        <div><label>商品链接 (小黄车)</label><input id="c-cart" placeholder="抖音侧挂车用"></div>
+        <div><label>卖点一句话</label><input id="c-sell"></div>
+      </div>
+      <div class="row" style="margin-top:1rem">
+        <button onclick="createBook()">创建</button>
+        <button class="secondary" onclick="closeModal('create-modal')">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="preview-modal">
+    <div class="modal">
+      <h2 id="pv-title">预览</h2>
+      <pre class="script" id="pv-body"></pre>
+      <div class="row" style="margin-top:1rem">
+        <button class="secondary" onclick="closeModal('preview-modal')">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/web/books.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', loadAll);
+  </script>
+</body>
+</html>

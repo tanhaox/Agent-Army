@@ -599,6 +599,8 @@ _BASE_TRANSITION = draft_mod.TransitionType.上移
 _SENT_PAUSE = 0.35
 # 动效完成后的静止阅读窗口: 所有元素最晚入场 ≤ 页末 - 此值
 _READ_WINDOW = 5.0
+# 首帧免责字幕最小停留时长 (豆包统一约束: 右上角常驻≥20秒)
+_MIN_DISCLAIMER_SEC = 20.0
 
 
 def _safe_deadline(page_dur: float) -> float:
@@ -1045,6 +1047,60 @@ def compute_page_timing(
     return compute_block_timing(layers, page_start, page_dur)  # 空口播兜底
 
 
+def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int:
+    """首帧免责字幕 (2026-08-21): 口播不念, 画面右上角小字, 停留≥20秒 (豆包统一约束).
+
+    字号比字幕(_SUBTITLE_SIZE=5)小两号 (~2.8), 白字半透明, 右上角.
+    时长 = max(第一页时长, 20s) — 第一页过短时延续到第二页.
+    """
+    if not pages or not disclaimer_text:
+        return 0
+    p1 = pages[0]
+    start_us = int(round(float(p1["start_sec"]) * _US))
+    dur_us = int(round(max(float(p1["duration_sec"]), _MIN_DISCLAIMER_SEC) * _US))
+    try:
+        seg = draft_mod.TextSegment(
+            disclaimer_text,
+            trange(start_us, max(dur_us, 1000)),
+            style=draft_mod.TextStyle(size=2.8, color=(1.0, 1.0, 1.0), alpha=0.85),
+            clip_settings=ClipSettings(transform_x=0.32, transform_y=0.42),
+        )
+        script.add_segment(seg, "caption")
+        return 1
+    except Exception as exc:
+        logger.warning("[jy_export] 首帧免责字幕失败: %s", exc)
+        return 0
+
+
+def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indices: list[int]) -> int:
+    """系列角标 (2026-08-21): 左上角, '静姐读书:《书名》第X集，更多请主页观看'.
+
+    在指定页(第2页/末页)全程亮起, 字号=字幕(_SUBTITLE_SIZE=5), 呼吸闪烁(闪烁 循环动画).
+    """
+    if not badge_text or not pages:
+        return 0
+    n = 0
+    for pi in page_indices:
+        if pi < 0 or pi >= len(pages):
+            continue
+        pg = pages[pi]
+        start_us = int(round(float(pg["start_sec"]) * _US))
+        dur_us = int(round(float(pg["duration_sec"]) * _US))
+        try:
+            seg = draft_mod.TextSegment(
+                badge_text,
+                trange(start_us, max(dur_us, 1000)),
+                style=draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0), alpha=0.95),
+                clip_settings=ClipSettings(transform_x=-0.42, transform_y=0.42),  # 左上角
+            )
+            seg.add_animation(draft_mod.TextLoopAnim.闪烁)  # 呼吸闪烁
+            script.add_segment(seg, "badge")
+            n += 1
+        except Exception as exc:
+            logger.warning("[jy_export] 系列角标失败: %s", exc)
+    return n
+
+
 def export_element_draft(
     draft_name: str,
     pages: list[dict],
@@ -1052,6 +1108,9 @@ def export_element_draft(
     *,
     canvas: tuple[int, int] = (1920, 1080),
     stagger: float = 0.30,
+    disclaimer: str | None = None,
+    book_title: str | None = None,
+    ep_index: int | None = None,
 ) -> dict[str, Any]:
     """元素级剪映草稿: 每页 base 层 + 逐元素透明层, 各自 video 轨, 渐显错峰.
 
@@ -1074,6 +1133,7 @@ def export_element_draft(
                    draft_mod.TrackSpec(draft_mod.TrackType.video, "main")]
     track_specs += [draft_mod.TrackSpec(draft_mod.TrackType.video, f"e{i}") for i in range(max_elements)]
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"))
+    track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "badge"))  # 系列角标(左上角)
     script.append_tracks(track_specs)
 
     # audio 轨: 整段 TTS (若顶层给 audio_path), 或逐页 audio_file 段
@@ -1142,6 +1202,18 @@ def export_element_draft(
 
     # 字幕轨 (每页口播稿, R9 v3 动态字幕 + 同帧音效)
     cap_stats = _build_caption_track(script, pages, width, height)
+    # 首帧免责字幕 (视觉化, 口播不念)
+    n_disclaimer = 0
+    if disclaimer:
+        n_disclaimer = _add_disclaimer(script, pages, disclaimer)
+    # 系列角标 (左上角, 第2页+末页, 呼吸闪烁)
+    n_badge = 0
+    if book_title:
+        badge_text = f"静姐读书：《{book_title}》第{ep_index or '?'}集，更多请主页观看。"
+        if len(pages) > 2:
+            n_badge = _add_series_badge(script, pages, badge_text, [1, len(pages) - 1])
+        elif pages:
+            n_badge = _add_series_badge(script, pages, badge_text, [0])
 
     script.save()
     draft_dir = _drafts_dir() / draft_name
@@ -1154,6 +1226,8 @@ def export_element_draft(
         "audio_segments": n_audio,
         "caption_segments": cap_stats["text"],
         "sfx_segments": cap_stats["sfx"],
+        "disclaimer": n_disclaimer,
+        "series_badge": n_badge,
         "emphasis_words": cap_stats["emphasis"],
         "max_tracks": 4 + max_elements,
         "audio": bool(audio_path),

@@ -452,10 +452,30 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 if not element_pages:
                     raise RuntimeError("jy2: 无元素层产出")
                 from app.services.jy_draft_service import export_element_draft
+                # 首帧免责字幕 (视觉化): 从书线合规配置读, 不上口播
+                disclaimer = ""
+                try:
+                    from app.services.book_service.distiller import load_book_rules
+                    disclaimer = (load_book_rules().get("opening_disclaimer") or "")
+                except Exception:
+                    disclaimer = ""
                 draft_name = f"PPT_{time.strftime('%Y%m%d_%H%M')}_{job_id[:8]}"
                 _evt(job_id, f"元素级编排 {len(element_pages)} 页 → 剪映草稿…", "info")
+                # 系列角标: 书名 + 集数 (左上角呼吸闪烁)
+                book_title = ""
+                ep_index = bound.get("ep_index")
+                if bound.get("book_id"):
+                    try:
+                        from app.models import BookProject
+                        bk = db.query(BookProject).filter(BookProject.id == bound["book_id"]).first()
+                        if bk:
+                            book_title = bk.book_title or ""
+                    except Exception:
+                        book_title = ""
                 try:
-                    draft = export_element_draft(draft_name, element_pages, canvas=(1920, 1080))
+                    draft = export_element_draft(draft_name, element_pages, canvas=(1920, 1080),
+                                                 disclaimer=disclaimer,
+                                                 book_title=book_title, ep_index=ep_index)
                     _JOBS[job_id]["draft"] = draft
                     _evt(job_id, f"元素级剪映草稿就绪: {draft['draft_name']} "
                                  f"(base{draft['base_segments']}+元素{draft['element_segments']}"
