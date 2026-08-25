@@ -82,11 +82,13 @@ def _llm_plan_phase(
             raw_text=prompt,
             model="pro",
             stream=False,
-            # 护栏 (2026-08-25): 此前不设上限不设格式 — 长稿输出截断 = JSON 解析失败
-            # = 整个 job 报废; json_object 废 ``` 围栏。max_tokens 16000: pro 的
-            # reasoning 吃 5-8K + slot 输出 2-4K, 8000 会被 reasoning 耗光 →
-            # content 空 → JSONDecodeError char 0 (15:49 failed 实测); 16000 实测可用。
-            max_tokens=16000,
+            # 护栏 (2026-08-25 v3): 此前不设上限不设格式 — 截断=job报废。
+            # max_tokens 32000 实测: v4-pro 对 31KB 规划 prompt 的 reasoning 失控
+            # (实测 13.5K~24.4K, 8000/16000 均被吃光 → content 空 → JSONDecodeError
+            # char 0, 15:49/16:00 两次 failed 实锤); 32000 下 reasoning 24433 +
+            # content 7307 finish=stop 正常完成。pro 为纯 reasoning 模型,
+            # enable_thinking=False 无效 (实测被忽略)。
+            max_tokens=32000,
             response_format={"type": "json_object"},
         )
         if is_cancelled and is_cancelled():
