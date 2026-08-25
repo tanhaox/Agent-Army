@@ -4,11 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>视频库</title>
-  <link rel="stylesheet" href="/web/library.css">
+  <link rel="stylesheet" href="/web/library.css?v=3">
 </head>
 <body>
   <nav>
     <div class="logo">Video<span>Lib</span></div>
+    <a href="/web/books.html">拆书</a>
     <a href="/web/index.html">新闻线索</a>
     <a href="/web/writing.html">文字加工</a>
     <a href="/web/audio.html">音频加工</a>
@@ -73,6 +74,7 @@
       <span class="result-count" id="result-count"></span>
       <button class="tagging-btn" id="scan-import-btn" onclick="scanImport()" title="扫描 materials 目录，自动导入未入库的视频文件">📥 扫描导入</button>
       <button class="tagging-btn" id="import-folder-btn" onclick="openImportFolderModal()" title="选择 materials 下某个子文件夹，导入其中未入库的视频并批量添加标签">📂 导入</button>
+      <button class="tagging-btn" id="pexels-toggle-btn" onclick="togglePexelsPanel()" title="搜索 Pexels 在线素材，预览后勾选入库（与本地搜索独立）">🌐 在线搜索</button>
       <button class="tagging-btn" id="tagging-start-btn" onclick="startTagging()" title="使用本地 AI 模型分析视频画面，自动生成多维标签">🤖 AI 打标</button>
       <span class="tagging-count" id="tagging-count" title="AI 已打标 / 总数"></span>
     </div>
@@ -89,6 +91,23 @@
       <button onclick="batchSetPeople('people')">有人</button>
       <button onclick="batchSetPeople('none')">无人</button>
       <button class="del" onclick="batchDelete()">删除</button>
+    </div>
+
+    <!-- P线在线搜索面板 (2026-08-25): 独立于本地搜索, Pexels 元数据预览 → 勾选入库 -->
+    <div class="pexels-panel hidden" id="pexels-panel">
+      <div class="pexels-bar">
+        <span class="pexels-title">🌐 P线在线搜索</span>
+        <input type="text" id="pexels-query" placeholder="英文关键词, 如 city skyline night" onkeydown="if(event.key==='Enter')pexelsSearch()">
+        <select id="pexels-orientation">
+          <option value="any">不限方向</option>
+          <option value="landscape" selected>横屏</option>
+          <option value="portrait">竖屏</option>
+        </select>
+        <button class="tagging-btn" onclick="pexelsSearch()">🔍 搜索</button>
+        <button class="tagging-btn" id="pexels-import-btn" onclick="pexelsImport()" disabled>📥 入库所选 (0)</button>
+        <span class="pexels-status" id="pexels-status"></span>
+      </div>
+      <div class="pexels-grid" id="pexels-results"></div>
     </div>
 
     <!-- Assets Grid -->
@@ -206,6 +225,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/web/library.js?v=4"></script>
+  <script src="/web/library.js?v=7"></script>
 </body>
 </html>

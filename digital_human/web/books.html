@@ -33,6 +33,16 @@
         <span id="distill-state" class="hint"></span>
       </div>
       <div class="panel" id="lib-panel"></div>
+      <div class="panel" id="pool-panel">
+        <h2>📚 源头书选题池 <span class="badge need">书库缺失</span></h2>
+        <div class="hint">已拆书引用的源头书里，书库尚未入库 → 下一批拆书候选（按被引用次数排序）。补电子书进书库即可蒸馏开拆。</div>
+        <div id="pool-body" class="hint" style="margin-top:0.5rem">加载中…</div>
+      </div>
+      <div class="panel" id="board-panel">
+        <h2>🏆 源头书引用榜 <span class="badge">跨书汇总</span></h2>
+        <div class="hint">每拆一本书就累积 —— 被反复引用的源头书/理论 = 有分量、读者信任。📕书 / 🔹理论 / 👤人物。</div>
+        <div id="board-body" class="hint" style="margin-top:0.5rem">加载中…</div>
+      </div>
       <div class="panel" id="distill-log" style="display:none">
         <h2>蒸馏日志 <span class="badge" id="distill-live">LIVE</span>
           <button class="sm" id="distill-done-btn" style="display:none;background:#16a34a;margin-left:0.6rem" onclick="dismissDistill()">✓ 确认完成</button>
@@ -46,14 +56,12 @@
   <div class="modal-bg" id="create-modal">
     <div class="modal">
       <h2>新建拆书项目</h2>
-      <label>书名 (已蒸馏书籍) *</label>
+      <label>书名 (全流程蒸馏完成) *</label>
       <select id="c-title"><option value="">— 加载中… —</option></select>
-      <div class="hint">仅列本地已蒸馏的书 (含 .蒸馏.txt 精华)；未蒸馏的书请先在书库点「🔬 蒸馏」。</div>
-      <label>作者</label><input id="c-author">
-      <label>书页链接 (知海等, 爬简介/目录免搜索)</label><input id="c-url" placeholder="https://www.zhihailib.com/book/xxxxx">
+      <div class="hint">仅列「蒸馏txt + L0 + 全面向」跑完的书；作者/卖点自动从蒸馏带入，无需手填。</div>
       <div class="row">
-        <div><label>商品链接 (小黄车)</label><input id="c-cart" placeholder="抖音侧挂车用"></div>
-        <div><label>卖点一句话</label><input id="c-sell"></div>
+        <div><label>商品链接 (小黄车, 可选)</label><input id="c-cart" placeholder="抖音侧挂车用"></div>
+        <div><label>卖点 (可选, 留空用自动)</label><input id="c-sell"></div>
       </div>
       <div class="row" style="margin-top:1rem">
         <button onclick="createBook()">创建</button>

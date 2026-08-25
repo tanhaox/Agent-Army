@@ -168,9 +168,17 @@ def _extract_indextts_params(params: dict[str, Any] | None) -> dict[str, Any]:
         "indextts_top_p": params.get("top_p", 0.8) if params else 0.8,
         "indextts_top_k": params.get("top_k", 30) if params else 30,
         "indextts_temperature": params.get("temperature", 0.8) if params else 0.8,
+        # 服务端切分预算 (2026-08-25 120→300): 我们每批 ≤150 字, 但 2.5 服务端按
+        # max_text_tokens_per_segment 再切(120 token ≈ 120 汉字) → 每批被切 2~3 段,
+        # 切点落逗号处, 段间拼接静音 ~0.5s (006.wav 实测)。300 > 批上限 → 整批一次
+        # infer, 句间韵律/停顿由模型整段生成, 不再机器拼接。api_server 上限 600 安全。
         "indextts_max_text_tokens": (
-            params.get("max_text_tokens_per_segment", 120) if params else 120
+            params.get("max_text_tokens_per_segment", 300) if params else 300
         ),
+        # IndexTTS2.5 语速控制 (2026-08-25): 2.5 基线比 2 慢 ~26% (实测中位 4.8 vs 6.5 字/s),
+        # duration_factor=时长系数, <1 加速; 默认由 app.yaml defaults.indextts_duration_factor
+        # 经 tts_service 注入 params, 此处 1.0 为缺省兜底 (旧版 2 服务忽略该字段).
+        "indextts_duration_factor": params.get("duration_factor", 1.0) if params else 1.0,
     }
 
 
@@ -202,7 +210,8 @@ def _make_engine_callbacks(
             top_k=p["indextts_top_k"], temperature=p["indextts_temperature"],
             max_text_tokens_per_segment=p["indextts_max_text_tokens"],
             seed=p["seed"],
-            emo_vector=p.get("emo_vector"), emo_alpha=p.get("emo_alpha", 1.0)),
+            emo_vector=p.get("emo_vector"), emo_alpha=p.get("emo_alpha", 1.0),
+            duration_factor=p.get("indextts_duration_factor", 1.0)),
     }
 
 

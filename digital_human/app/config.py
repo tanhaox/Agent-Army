@@ -80,6 +80,9 @@ class DefaultsConfig:
     base_url_fish: str
     base_url_f5: str
     base_url_indextts: str
+    # IndexTTS2.5 语速 (2026-08-25): 2.5 基线比 2 慢 ~26% (实测中位 4.8 vs 6.5 字/s),
+    # 0.75 ≈ 拉回旧版听感; 音色 config_json.params.duration_factor 显式值优先于此默认。
+    indextts_duration_factor: float
     base_url_comfyui: str
     comfyui_output_dir: str
     comfyui_input_dir: str
@@ -90,12 +93,16 @@ class DefaultsConfig:
     hf_render_timeout_sec: int
     hf_visual_root: str
     hf_template_root: str
+    # L0 蒸馏产物根目录 (2026-08-22): 项目内 data/l0, 随项目迁移可盘查
+    l0_output_root: str
     # IndexTTS2 / 对齐 / 导演 2.0
     indextts_timeout_sec: int
     whisper_model_size: str
     whisper_device: str
     director_output_root: str
     composition_output_root: str
+    # PPT 出片产线 (2026-08-20): 工作根目录 (上传/解析/渲染中间产物)
+    ppt_work_root: str
     # Pexels 素材 resolve 工具 (ID-003)
     pexels_api_key_env: str
     materials_dir: str
@@ -123,6 +130,8 @@ class DefaultsConfig:
     # 本地素材内容质量硬底线 (2026-08-16 治理③): VLM 质量分低于此值出局;
     # 0=关闭。未打分素材暂放行 (asset_quality_scan 渐进收紧)
     local_asset_min_quality: int
+    # 拆书项目 (2026-08-19): 书库目录扫描 (精华/原书, 文件名=书名, txt+epub 自动识别)
+    book_source_dir: str
     # Pexels 下载即质检 (2026-08-16 治理③闭环): 下载后 VLM 打分;
     # 视觉模型不可用时 fail-open 放行
     pexels_download_quality_gate: bool
@@ -247,6 +256,7 @@ def load_config(path: Path | str | None = None) -> Config:
         base_url_fish=defaults_raw.get("base_url_fish", "http://127.0.0.1:7860"),
         base_url_f5=defaults_raw.get("base_url_f5", "http://127.0.0.1:7861"),
         base_url_indextts=defaults_raw.get("base_url_indextts", "http://127.0.0.1:7862"),
+        indextts_duration_factor=float(defaults_raw.get("indextts_duration_factor", 0.75)),
         base_url_comfyui=defaults_raw.get("base_url_comfyui", "http://127.0.0.1:8188"),
         comfyui_output_dir=defaults_raw.get(
             "comfyui_output_dir", "E:/AI/ComfyUI_windows_portable/ComfyUI/output"
@@ -267,6 +277,7 @@ def load_config(path: Path | str | None = None) -> Config:
         hf_template_root=defaults_raw.get(
             "hf_template_root", "E:/AI/digital_human/hf_prep"
         ),
+        l0_output_root=defaults_raw.get("l0_output_root", "data/l0"),
         # Pexels 素材 resolve 工具 (ID-003)
         pexels_api_key_env=defaults_raw.get("pexels_api_key_env", "PEXELS_API_KEY"),
         materials_dir=defaults_raw.get("materials_dir", "E:/数字人计划/materials"),
@@ -295,6 +306,7 @@ def load_config(path: Path | str | None = None) -> Config:
         ),
         p_line_local_collision=defaults_raw.get("p_line_local_collision", "strict"),
         local_asset_min_quality=int(defaults_raw.get("local_asset_min_quality", 4)),
+        book_source_dir=defaults_raw.get("book_source_dir", "G:/Desktop/畅销书"),
         pexels_download_quality_gate=bool(defaults_raw.get("pexels_download_quality_gate", True)),
         pexels_quality_gate_mode=defaults_raw.get("pexels_quality_gate_mode", "async"),
         # IndexTTS2 / 对齐 / 导演 2.0
@@ -307,6 +319,7 @@ def load_config(path: Path | str | None = None) -> Config:
         composition_output_root=defaults_raw.get(
             "composition_output_root", "E:/数字人计划/composition"
         ),
+        ppt_work_root=defaults_raw.get("ppt_work_root", "E:/数字人计划/ppt"),
     )
 
     # 硅基流动 (可选, 缺失时用空值替代)

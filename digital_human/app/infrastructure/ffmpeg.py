@@ -44,7 +44,12 @@ def run_ffmpeg(cmd: list[str], *, timeout: int = 300) -> None:
     from app.services.proc_registry import register_subprocess, unregister_subprocess
 
     is_win = platform.system() == "Windows"
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if is_win else 0
+    # CREATE_NO_WINDOW: ffmpeg 是控制台程序, 无 CREATE_NO_WINDOW 会从服务器进程
+    # spawn 时弹 cmd 窗口 (2026-08-22 与 HF chrome-headless-shell 同因)
+    creation_flags = (
+        subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        if is_win else 0
+    )
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -65,6 +70,7 @@ def run_ffmpeg(cmd: list[str], *, timeout: int = 300) -> None:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                 capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         else:
             proc.kill()

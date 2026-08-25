@@ -200,6 +200,7 @@ class PersonaCreate(BaseModel):
     fixed_opening: str | None = Field(default=None, max_length=200)
     fixed_ending: str | None = Field(default=None, max_length=200)
     host_id: str | None = Field(default=None, description="绑定 Host ID; 缺省由迁移/后端自动绑定")
+    target_reader: str | None = Field(default=None, max_length=500, description="目标读者画像 (账号人设级, 书级缺省继承)")
 
 
 class PersonaUpdate(BaseModel):
@@ -213,6 +214,7 @@ class PersonaUpdate(BaseModel):
     fixed_opening: str | None = Field(default=None, max_length=200)
     fixed_ending: str | None = Field(default=None, max_length=200)
     host_id: str | None = None
+    target_reader: str | None = Field(default=None, max_length=500)
 
 
 class PersonaOut(BaseModel):
@@ -229,7 +231,29 @@ class PersonaOut(BaseModel):
     fixed_opening: str | None = None
     fixed_ending: str | None = None
     host_id: str | None = None
+    target_reader: str | None = None
     voice: VoiceOut | None = None
     role: RoleOut | None = None
     created_at: datetime
     updated_at: datetime
+
+
+# ── P线在线搜索 (2026-08-25): 素材库页预览式搜索 + 勾选入库 ──
+class PexelsOnlineSearchRequest(BaseModel):
+    """在线搜索请求 — 只返回元数据预览, 不触发下载."""
+    query: str = Field(..., min_length=1, max_length=256)
+    orientation: str | None = Field(default="any", pattern=r"^(landscape|portrait|any)$")
+    per_page: int = Field(default=40, ge=1, le=80)  # 对齐 Pexels API 单页上限
+    page: int = Field(default=1, ge=1)               # 翻页 (2026-08-25)
+
+
+class PexelsImportItem(BaseModel):
+    """待入库候选 — 搜索结果的 video dict 原样回传 (含 video_files 供选流)."""
+    video: dict
+
+
+class PexelsImportRequest(BaseModel):
+    """勾选入库请求 — 批量下载选中的 Pexels 候选."""
+    query: str = Field(default="", max_length=256)  # 用于打标/溯源 raw_query
+    prefer_resolution: str | None = Field(default=None, pattern=r"^(UHD|FHD|HD|SD)$")
+    items: list[PexelsImportItem] = Field(..., min_length=1, max_length=40)

@@ -32,7 +32,14 @@ def _load_prompt_template(prompt_template: str | None) -> str:
 
     candidate = PROJECT_ROOT / "config" / f"{prompt_template}.txt"
     if candidate.exists():
-        return candidate.read_text(encoding="utf-8").strip()
+        base = candidate.read_text(encoding="utf-8").strip()
+        # 2026-08-22: 全系统统一限流词注入 (config/compliance_common.json — 拆书/新闻线/未来系统共用)
+        try:
+            from .compliance import build_redline_prompt
+            base += "\n\n" + build_redline_prompt()
+        except Exception:
+            pass
+        return base
     return prompt_template
 
 
@@ -51,12 +58,12 @@ class LLMService:
     def __init__(self, cfg):
         self.cfg = cfg
 
-    def _post_with_retry(self, url, *, headers, json, stream):
-        """POST with connection-level retry. 见类 docstring 的重试范围约定。"""
+    def _post_with_retry(self, url, *, headers, json, stream, timeout=120):
+        """POST with connection-level retry. 见类 docstring 的重试范围约定."""
         last_exc = None
         for attempt in range(self._MAX_RETRIES + 1):
             try:
-                return requests.post(url, headers=headers, json=json, stream=stream, timeout=120)
+                return requests.post(url, headers=headers, json=json, stream=stream, timeout=timeout)
             except self._RETRYABLE as exc:
                 last_exc = exc
                 if attempt < self._MAX_RETRIES:
@@ -74,6 +81,36 @@ class LLMService:
             model = self.cfg.default_model
         aliases = {"flash": self.cfg.model_flash, "pro": self.cfg.model_pro}
         return aliases.get(model, model)
+
+    def chat(self, system: str, user: str, model: str | None = None,
+             temperature: float = 0.7, timeout: int = 300) -> str:
+        """通用单轮对话 (非流式) — 拆书编排等结构化调用入口.
+
+        timeout 默认 300s: pro 长稿生成常超 120s。
+        """
+        if not self.cfg.api_key:
+            raise RuntimeError(
+                "DeepSeek API key is not configured. "
+                "Set the DEEPSEEK_API_KEY environment variable before starting the server."
+            )
+        payload: dict[str, Any] = {
+            "model": self._resolve_model(model),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "temperature": temperature,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
+        response = self._post_with_retry(url, headers=headers, json=payload,
+                                         stream=False, timeout=timeout)
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
 
     def rewrite_article(
         self,

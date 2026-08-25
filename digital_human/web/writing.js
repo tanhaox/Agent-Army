@@ -129,6 +129,12 @@ async function loadLatest() {
     setStatus('status-rewrite', `已加载稿件: ${currentArticle.title || currentArticle.id}`, false, true);
     showBanner();
     toggle('btn-rewrite', true);
+    // 2026-08-22: 直开本页同样自动调取该文章已有脚本 (与 article_id 跳入行为一致)
+    try {
+      const scripts = await api('GET', '/scripts?limit=50');
+      const mine = scripts.filter(s => s.article_id === currentArticle.id);
+      if (mine.length) await fetchScript(mine[0].id);
+    } catch (_) { /* 静默 */ }
     // 顺带绑定该文章最新素材包 (等价于新闻线索页跳转, 2026-08-15)
     try {
       const pkgs = await api('GET', `/materials/packages?article_id=${currentArticle.id}`);
@@ -170,6 +176,19 @@ async function loadHosts() {
       }
     });
     if (!defaultSelected && personas.length) select.selectedIndex = 0;
+    // 模板联动 (2026-08-25): 后端"人物即账号"会用 persona.prompt_template 覆盖模板下拉 —
+    // 选人物时同步把模板下拉切到该人物的模板, 所见即所得, 消除"选了被静默覆盖"。
+    const _syncTemplate = () => {
+      const pid = select.value;
+      const p = personas.find(x => x.id === pid);
+      const tplSel = document.getElementById('rewrite-template');
+      if (p && p.prompt_template && tplSel) {
+        tplSel.value = p.prompt_template;
+        if (typeof checkPersonaLock === 'function') checkPersonaLock();
+      }
+    };
+    select.addEventListener('change', _syncTemplate);
+    _syncTemplate();  // 初始默认人物也同步
   } catch (e) {
     console.error('加载数字人失败', e);
     const opt = document.createElement('option');
@@ -197,6 +216,8 @@ async function loadPromptTemplates() {
       opt.textContent = t.name;
       select.appendChild(opt);
     });
+    // 默认选中老谭科技七层模板（不存在时保持第一个）
+    select.value = 'laotan-tech_7layer_v2';
   } catch (e) {
     console.error('加载提示词模板失败', e);
     const select = document.getElementById('rewrite-template');
@@ -245,7 +266,12 @@ function renderProjectDir(projectDir) {
 }
 
 async function saveScript() {
-  if (!currentScript) return;
+  if (!currentScript) {
+    // 2026-08-22: 原静默 return 导致"保存无反应 + 去生成音频灰按钮" 的困惑。
+    // 显式提示下一步, 让用户知道该先洗稿/调取脚本。
+    setStatus('status-rewrite', '尚无脚本可保存 — 请先「开始洗稿」或从上方下拉调取已有脚本', true);
+    return;
+  }
   const text = document.getElementById('script-text').value.trim();
   try {
     // 2026-08-12: 改造后编辑区显示改造稿, 保存写回 boosted_text (TTS 用改造稿)
@@ -263,7 +289,7 @@ async function saveScript() {
 async function boostScript() {
   if (!currentScript) return;
   toggle('btn-boost', false);
-  setStatus('status-boost', '爆品改造中（P2预埋→P3节奏→P4精修→P1电击→P5情绪标注）…');
+  setStatus('status-boost', '爆品改造中（P-L反问目录→P4精修→P6拼音审计）…情绪标注在生成音频时自动跑');
   try {
     const { job_id } = await api('POST', `/scripts/${currentScript.id}/boost`);
     const source = new EventSource(`${API}/jobs/${job_id}/events`);
@@ -276,7 +302,13 @@ async function boostScript() {
       if (data.type === 'boost_done') {
         source.close();
         if (data.boosted) {
-          setStatus('status-boost', '✅ 爆品改造完成', false, true);
+          // 拼音纠音 (2026-08-25): P6 审计结果随完成态展示, 易错词由词表在 TTS 自动标注
+          const fixes = data.pinyin_fixes?.length
+            ? ` · 🔊 拼音纠音 ${data.pinyin_fixes.length} 处 (${data.pinyin_fixes.join('、')})` : '';
+          // P7 流量评审 (2026-08-25): 五维评级常驻, 短板提醒
+          const audit = data.flow_overall
+            ? ` · 📊 流量评审 ${data.flow_overall} (评论率${data.flow_comment || '?'}${data.flow_weaknesses?.length ? `, 短板: ${data.flow_weaknesses[0]}` : ''})` : '';
+          setStatus('status-boost', `✅ 爆品改造完成${fixes}${audit}`, false, true);
           fetchScript(currentScript.id);
         } else {
           setStatus('status-boost', '改造未执行', true);
@@ -386,8 +418,21 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       showBanner();
       toggle('btn-rewrite', true);
-      setStatus('status-rewrite', currentPackageId
-        ? '已就绪 — 洗稿将注入素材包' : '已就绪 — 可直接洗稿（无素材包）');
+      // 2026-08-22: 带 article_id 进入时自动调取该文章已有脚本 — 否则 currentScript=null,
+      // "保存编辑"静默失效 + "去生成音频"一直禁用 (用户反馈灰按钮的根因)。
+      // 新闻线索页跳转只传 article_id/package_id, 不带 script_id。
+      let autoLoaded = false;
+      try {
+        const scripts = await api('GET', '/scripts?limit=50');
+        const mine = scripts.filter(s => s.article_id === articleId);
+        if (mine.length) {
+          await fetchScript(mine[0].id);
+          autoLoaded = true;
+        }
+      } catch (_) { /* 无脚本或列表失败: 静默, 用户走「开始洗稿」 */ }
+      setStatus('status-rewrite', autoLoaded
+        ? (currentPackageId ? '已调取该文章已有脚本（洗稿将重新生成，含素材包）' : '已调取该文章已有脚本，可编辑/保存/生成音频')
+        : (currentPackageId ? '已就绪 — 洗稿将注入素材包' : '已就绪 — 可直接洗稿（无素材包）'));
     } catch (e) {
       setStatus('status-rewrite', '加载稿件失败: ' + e.message, true);
     }

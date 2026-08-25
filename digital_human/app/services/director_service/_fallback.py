@@ -48,7 +48,11 @@ def replace_failed_slot(
                 elif slot.workflow in ("hf_chart", "hf_title"):
                     family_priorities = [("h", "hf_chart"), ("c", "host"), ("p", "broll_pexels")]
                 elif slot.workflow == "broll_pexels":
-                    family_priorities = [("p", "broll_pexels"), ("c", "host"), ("h", "hf_chart")]
+                    # H 线降级目标按数据形态选 (2026-08-25): render_config 带 quote
+                    # (引用卡数据) → hf_quote; 否则图表线 hf_chart。拿 quote 数据跑
+                    # hf_chart 会渲染空卡 (render_config 无 chart 输入)。
+                    h_wf = "hf_quote" if (slot.params_json or {}).get("render_config", {}).get("quote") else "hf_chart"
+                    family_priorities = [("p", "broll_pexels"), ("c", "host"), ("h", h_wf)]
                 else:
                     family_priorities = []
                 # 只保留启用管线内的工作流 (head 过滤), slot.workflow 置首避免跳过最佳替代

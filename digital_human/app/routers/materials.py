@@ -134,9 +134,10 @@ def _run_package_job(
                 _publish(job_id, {"type": "material_error", "package_id": pkg.id, "error": pkg.error_message})
                 return
             pkg.audit_json = audit
-            # 审计 item_tags 回填到条目 layer_tags (编号=过滤后 ok_items 顺序)
+            # 审计 item_tags 回填到条目 layer_tags (编号=过滤后 ok_items 顺序);
+            # item_tags 缺键容错 (2026-08-25): LLM 偶发漏输出该字段, 不应炸整包
             for i, item in enumerate(ok_items, start=1):
-                item.layer_tags = audit["item_tags"].get(str(i)) or None
+                item.layer_tags = (audit.get("item_tags") or {}).get(str(i)) or None
             covered = sum(1 for l in audit["layers"].values() if l["covered"])
             pkg.status = "audited"
             db2.commit()

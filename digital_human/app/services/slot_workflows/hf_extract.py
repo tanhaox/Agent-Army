@@ -92,6 +92,8 @@ def _score_metrics(metrics: list[dict]) -> list[dict]:
 def _extract_hf_content(text: str, title_max: int = 16) -> dict:
     """从口播文本提取标题卡内容 (2026-08-01, 修复黑底白字标题卡根因).
 
+    入口先剥拼音标注 (2026-08-25): <行|HANG2> 只服务 TTS, 渲染进 HF 卡即污染.
+
     HF 标题卡模板 (news-magazine-v1) 有大标题/副题/metrics/chart 设计,但此前
     把整句口播(含 || 停顿符)硬塞进 title,metrics/chart 用口播占位垃圾填充,
     导致渲染结果=黑底一行白字。本函数:
@@ -103,13 +105,16 @@ def _extract_hf_content(text: str, title_max: int = 16) -> dict:
 
     返回 dict: {title, subtitle, metrics, chart} 全部为模板友好结构。
     """
-    text = (text or "").strip()
+    from app.services.pinyin_fix import strip_pinyin_marks
+
+    text = strip_pinyin_marks((text or "").strip())
     chunks = [c.strip() for c in re.split(r"\|\||\n", text) if c.strip()]
     if not chunks:
         return {"title": "数据展示", "subtitle": "", "metrics": [], "chart": {"type": "bar", "items": []}}
 
-    title = _pick_title(chunks, title_max)
-    subtitle = _clean_fragment(chunks[1])[:32] if len(chunks) > 1 else ""
+    # 大小字分层 (2026-08-25): 大字=定性锚点(名词性短语), 小字=张力短语 —
+    # 候选全部来自本 slot 口播分句 (语义锚定, 禁外部造句); 无合格锚点回退旧策略。
+    title, subtitle = _pick_title_and_sub(chunks, title_max)
 
     metrics, chart_items = _extract_numbers(chunks)
 
@@ -119,6 +124,46 @@ def _extract_hf_content(text: str, title_max: int = 16) -> dict:
         "metrics": _score_metrics(metrics)[:4],
         "chart": {"type": "bar", "unit": "", "items": chart_items[:5]},
     }
+
+
+# 定性锚点判定 (2026-08-25): 名词性短语 4~10 字, 非问句, 无句尾语气词,
+# 不以代词/连词开头 — "美军航母困局"✅ / "他们为什么不回港"❌
+_VERB_TAIL = re.compile(r"[了吗呢吧啊呀]$")
+_PRON_START = ("那", "这", "但", "可", "而", "所", "于", "难道", "他", "她", "它", "你", "我")
+
+
+def _is_anchor_phrase(s: str) -> bool:
+    t = re.sub(_OPENING_PREFIX, "", _clean_fragment(s)).rstrip("，。！？；、,.!?;:？")
+    if not (4 <= len(t) <= 10):
+        return False
+    if "？" in s or "?" in s:
+        return False
+    if _VERB_TAIL.search(t):
+        return False
+    return not t.startswith(_PRON_START)
+
+
+def _pick_title_and_sub(chunks: list[str], title_max: int) -> tuple[str, str]:
+    """大字=定性锚点, 小字=张力短语 (title 之外的最短分句, 3~16 字)。"""
+    anchor_idx = None
+    for i, c in enumerate(chunks[:4]):
+        if _is_anchor_phrase(c):
+            anchor_idx = i
+            break
+    if anchor_idx is None:
+        return (
+            _pick_title(chunks, title_max).rstrip("，。！？；、,.!?;:？").strip(),
+            _clean_fragment(chunks[1])[:32] if len(chunks) > 1 else "",
+        )
+    title = re.sub(_OPENING_PREFIX, "", _clean_fragment(chunks[anchor_idx]))
+    title = title.rstrip("，。！？；、,.!?;:？").strip()
+    others = [
+        (_clean_fragment(c), i)
+        for i, c in enumerate(chunks)
+        if i != anchor_idx and 3 <= len(_clean_fragment(c)) <= 16
+    ]
+    sub = min(others, key=lambda x: len(x[0]))[0] if others else ""
+    return title, sub[:32]
 
 
 # ── 多行台词分行 (hf_opening, 2026-08-11) ─────────────────────────────────────
@@ -207,6 +252,9 @@ def build_opening_lines(text: str, max_chars: int = 12) -> dict:
     Returns:
         {"lines": [...], "red_words": [...]}
     """
+    from app.services.pinyin_fix import strip_pinyin_marks
+
+    text = strip_pinyin_marks(text or "")
     lines = _split_lines_semantic(text, max_chars)
     red_words = _pick_red_words(text)
     # 至少 2 行 (第一行冲击词, 后续兑现), 最多 4 行

@@ -229,41 +229,18 @@ def _skin_bg_hex(skin: SeriesSkinPack) -> str:
 
 
 def apply_skin_to_slides(slides: list[Slide], skin: SeriesSkinPack) -> list[Slide]:
-    """把母本皮肤应用到漂移集 (不改坐标, 只改背景/色/字号). 就地改.
+    """保留原 PPT 文字色与页面背景 (2026-08-22, 用户反馈改版).
 
-    映射 (2C 全局皮肤, 不逐页对齐):
-    - background: 全页 override 为母本背景 b64
-    - color: 按本页字号 rank 映射母本 color_tokens (bold 块优先 primary),
-      **映射后按背景对比度自动调整** (2026-08-21: 防止母本色板套上后
-      棕字配棕底等不可读 — 暗底提亮/亮底压暗, 保色相)
-    - fontsize: 不改 (豆包主档 14/16/32 跨集本就一致, 改了反而拉伸失真)
-    - image: 不改 (搜图沿用各集)
+    此前母本皮肤强制覆盖文字色 + 全页背景, 实测破坏原稿配色:
+      - bold 全映射 color_tokens[0] (深棕) → 第3/6/9张暗底奶油大字被改深棕
+        (用户口径"大字颜色丢失")
+      - 10pt 正文按字号 rank 映射到橙色 token, 再经对比度提亮 → 白字,
+        浅底不可读 (用户口径"部分文字颜色丢失")
+      - 全页背景被换成母本背景 → 暗底页(3/6/9)变亮底, 版面观感与原 PPT 不一
+    用户口径: 颜色须与原 PPT 一致 → 皮肤**不再改 tb.color / s.background_b64**。
+    皮肤仍提供 font_family / animation_profile (build 函数经 skin 参数取用,
+    不影响配色)。系列视觉统一如需保留, 应在源 PPT 层面统一版式, 而非渲染强改色。
     """
-    # 读母本背景文件 → b64 (供 build_slide_html 内联)
-    bg_b64 = _read_bg_as_b64(skin)
-    if not bg_b64:
-        return slides  # 背景读不到则不 apply (graceful)
-    bg_hex = _skin_bg_hex(skin)
-
-    for s in slides:
-        s.background_b64 = bg_b64
-        # 本页字号降序排 rank
-        page_sizes = sorted(
-            {tb.font_size_pt for tb in s.text_blocks if tb.font_size_pt},
-            reverse=True,
-        )
-        size_rank = {sz: i for i, sz in enumerate(page_sizes)}
-        for tb in s.text_blocks:
-            # color 映射
-            if skin.color_tokens:
-                if tb.bold:
-                    tb.color = skin.color_tokens[0]  # bold 优先 primary
-                elif tb.font_size_pt in size_rank:
-                    tb.color = _token_by_rank(
-                        tb.color, skin.color_tokens, size_rank[tb.font_size_pt])
-            # 对比度兜底: 映射后若与背景对比度不足 → 自动调整
-            if tb.color:
-                tb.color = _adjust_for_contrast(tb.color, bg_hex, _MIN_CONTRAST)
     return slides
 
 

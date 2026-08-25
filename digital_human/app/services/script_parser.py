@@ -12,6 +12,12 @@ SegmentType = Literal["opening", "hook", "body", "cta", "ending", "references"]
 
 _SENTENCE_DELIMS = "。！？；"
 
+# 拆书弹性时间标签: 【A-B秒｜段名】, 如 【0-22秒｜钩子】. 生成稿结构标记, 不发音.
+_LABEL_RE = re.compile(r"【\d+-\d+秒｜[^】]+】")
+# 拆书六段名 (与 orchestrator._LABEL_BASE 对齐)
+_BOOK_LABELS = ["钩子", "回顾+引入", "核心概念拆解（一）", "核心概念拆解（二）",
+                "核心概念拆解（三）", "总结+下期预告"]
+
 # 句子有效字数下限: 低于此值的短句 (如 "您好。" "哎哟！") 合并进相邻句,
 # 避免产生 <2s 的碎音频/碎镜头 (中文口播约 4-5 字/秒)
 _MIN_SENTENCE_CHARS = 10
@@ -184,6 +190,44 @@ def _parse_control_chars(text: str) -> dict[str, Any]:
         "exclamations": text.count("！"),
         "questions": text.count("？"),
     }
+
+
+def clean_episode_script(script_text: str) -> tuple[str, list[str]]:
+    """拆书逐集稿清洗 (2026-08-20): 剥离【A-B秒｜段名】时间标签行 + 校验六段完整.
+
+    生成稿的六段弹性标签是结构标记, 进音频会读出"零到二十二秒,钩子" → 必须剥离.
+    同时校验六段是否齐全/有序/无重复, 缺失或重复记入 issues 供人工处理.
+    返回 (清洗后文本, issues). 标签行从文本移除, 不影响 parse_script 后续拆句.
+    """
+    issues: list[str] = []
+    lines = script_text.splitlines()
+    kept: list[str] = []
+    found: list[str] = []  # 按出现顺序记录标签段名
+    for line in lines:
+        m = _LABEL_RE.match(line.strip())
+        if m:
+            seg_name = m.group(0).split("｜")[-1].rstrip("】")
+            found.append(seg_name)
+            continue  # 标签行不进语音
+        kept.append(line)
+
+    # 六段校验: 齐全 / 有序 / 无重复
+    if not found:
+        issues.append("缺少六段时间标签 (结构异常, 建议重新生成)")
+    else:
+        if len(found) != len(set(found)):
+            dup = [n for n in found if found.count(n) > 1]
+            issues.append(f"时间标签重复: {dict.fromkeys(dup)}")
+        missing = [n for n in _BOOK_LABELS if n not in found]
+        if missing:
+            issues.append(f"缺少时间标签段: {missing}")
+        ordered = [n for n in found if n in _BOOK_LABELS]
+        base_order = [n for n in _BOOK_LABELS if n in found]
+        if ordered != base_order:
+            issues.append("时间标签顺序异常 (建议重新生成)")
+
+    cleaned = "\n".join(kept).strip()
+    return cleaned, issues
 
 
 def parse_script(

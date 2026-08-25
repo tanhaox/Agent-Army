@@ -28,6 +28,8 @@ class DirectorSlotPlan(BaseModel):
     duration_sec: float | None = None
     text_context: str | None = None
     segment_id: str | None = None
+    # hf_opening/hf_quote 执行层 (slot_executor + hf.py) 已支持, 2026-08-25 补进 Literal —
+    # 此前缺位导致 quote 类 slot 在 pydantic 校验即被拒/被解析层洗成 broll/hf_chart。
     visual_type: Literal[
         "host",
         "broll_pexels",
@@ -35,6 +37,8 @@ class DirectorSlotPlan(BaseModel):
         "hf_chart",
         "hf_title",
         "mixed_host_broll",
+        "hf_opening",
+        "hf_quote",
     ]
     workflow: Literal[
         "host",
@@ -43,6 +47,8 @@ class DirectorSlotPlan(BaseModel):
         "hf_chart",
         "hf_title",
         "mixed_host_broll",
+        "hf_opening",
+        "hf_quote",
     ]
     params: dict[str, Any] = Field(default_factory=dict)
     camera_angle: int = Field(default=1, ge=1, le=4)
@@ -64,6 +70,9 @@ class DirectorJobCreate(BaseModel):
     audio_file_id: str | None = None
     view_group_index: int = 0
     pipelines: str | None = None  # 逗号分隔启用的管线, e.g. "c,h". 默认全开.
+    # 画幅覆盖 (2026-08-24): 洗稿时选错可在导演页改; 与 script 现值不同则同步写回
+    # script.video_format, plan 线程继承该值 → 整条产线 (规划/slot 渲染/合成/J线) 跟随。
+    video_format: Literal["portrait", "landscape", "square"] | None = None
 
 
 class DirectorSlotOut(BaseModel):
@@ -103,6 +112,8 @@ class DirectorJobOut(BaseModel):
     view_group_index: int = 0
     status: str
     plan_json: dict[str, Any]
+    # 剪映草稿名 (2026-08-25): J 线导出后常驻显示
+    jy_draft_name: str | None = None
     total_duration_sec: float | None
     error_message: str | None
     created_at: datetime

@@ -790,3 +790,141 @@ async function loadTaggingCount() {
 loadDimensions();
 loadTaggingCount();
 loadAssets();
+
+// ── P线在线搜索 (2026-08-25): 与本地搜索独立的在线入口, 预览 → 勾选入库 ──
+let _pexelsItems = [];
+const _pexelsSelected = new Set();
+
+// 外部 API 数据进 HTML 前转义 (Pexels 摄影师名/url 等)
+function _pEsc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function togglePexelsPanel(force) {
+  const p = document.getElementById('pexels-panel');
+  const show = force !== undefined ? force : p.classList.contains('hidden');
+  p.classList.toggle('hidden', !show);
+  if (show) document.getElementById('pexels-query').focus();
+}
+
+let _pexelsPage = 1;
+const _PEXELS_PER_PAGE = 40;
+
+async function pexelsSearch(page) {
+  const query = document.getElementById('pexels-query').value.trim();
+  if (!query) { toast('请输入关键词', 'error'); return; }
+  _pexelsPage = Math.max(1, page || 1);
+  const orientation = document.getElementById('pexels-orientation').value || 'any';
+  const status = document.getElementById('pexels-status');
+  status.textContent = _pexelsPage > 1 ? `搜索中 (第 ${_pexelsPage} 页)…` : '搜索中…';
+  try {
+    const r = await fetch(`${API}/pexels/search`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, orientation, per_page: _PEXELS_PER_PAGE, page: _pexelsPage }),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${r.status}`); }
+    const data = await r.json();
+    _pexelsItems = data.items || [];
+    _pexelsSelected.clear();
+    renderPexelsResults();
+    const hasMore = _pexelsItems.length >= _PEXELS_PER_PAGE;  // 满页 = 大概率还有下一页
+    status.textContent = `Pexels 返回 ${_pexelsItems.length} 条 · 第 ${_pexelsPage} 页`;
+    renderPexelsPager(hasMore);
+    document.getElementById('pexels-results').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    status.textContent = '';
+    toast('在线搜索失败: ' + e.message, 'error');
+  }
+}
+
+function renderPexelsPager(hasMore) {
+  let pager = document.getElementById('pexels-pager');
+  if (!pager) {
+    pager = document.createElement('div');
+    pager.id = 'pexels-pager';
+    pager.style.cssText = 'display:flex;gap:0.5rem;align-items:center;justify-content:center;padding:0.4rem 0 0.2rem;';
+    document.getElementById('pexels-results').after(pager);
+  }
+  pager.innerHTML = `
+    <button class="tagging-btn" onclick="pexelsSearch(${_pexelsPage - 1})" ${_pexelsPage <= 1 ? 'disabled' : ''}>← 上一页</button>
+    <span style="font-size:0.75rem;color:var(--text-muted,#8892a6);">第 ${_pexelsPage} 页</span>
+    <button class="tagging-btn" onclick="pexelsSearch(${_pexelsPage + 1})" ${hasMore ? '' : 'disabled'}>下一页 →</button>`;
+}
+
+// 从 Pexels video_files 挑预览直链: 最小宽度的 mp4 (流量友好), 无则 null 回退静态图
+function _pPreviewSrc(video) {
+  const mp4s = ((video && video.video_files) || [])
+    .filter(f => (f.file_type || '').includes('mp4') && f.link)
+    .sort((a, b) => (a.width || 99999) - (b.width || 99999));
+  return mp4s.length ? mp4s[0].link : null;
+}
+function _pPlay(card) { const v = card.querySelector('video'); if (v) v.play().catch(() => {}); }
+function _pStop(card) {
+  const v = card.querySelector('video');
+  if (v) { v.pause(); try { v.currentTime = 0; } catch (_) {} }
+}
+
+function renderPexelsResults() {
+  const grid = document.getElementById('pexels-results');
+  if (!_pexelsItems.length) {
+    grid.innerHTML = '<div class="pexels-empty">无结果 — 换个英文关键词试试</div>';
+    updatePexelsImportBtn();
+    return;
+  }
+  grid.innerHTML = _pexelsItems.map(it => {
+    const blocked = it.in_library || it.disliked;
+    const badge = it.in_library ? ' · 已入库' : (it.disliked ? ' · 已拉黑' : '');
+    // 悬停播放预览 (2026-08-25): 有 mp4 直链 → <video> hover 播放; 否则回退静态图
+    const src = _pPreviewSrc(it.video);
+    const media = src
+      ? `<video muted loop playsinline preload="none" disablepictureinpicture controlslist="nodownload noremoteplayback" poster="${_pEsc(it.image)}" src="${_pEsc(src)}"></video>`
+      : `<a href="${_pEsc(it.url)}" target="_blank" rel="noopener" title="在 Pexels 打开"><img src="${_pEsc(it.image)}" loading="lazy" alt=""></a>`;
+    return `
+    <div class="pexels-card ${blocked ? 'pexels-dim' : ''}" onmouseenter="_pPlay(this)" onmouseleave="_pStop(this)" title="悬停播放预览${src ? '' : '（此素材无直链, 点击跳 Pexels）'}">
+      <label class="pexels-check"><input type="checkbox" onchange="togglePexelsSelect(${it.pexels_id}, this.checked)" ${_pexelsSelected.has(it.pexels_id) ? 'checked' : ''} ${blocked ? 'disabled' : ''}></label>
+      ${media}
+      <a class="pexels-ext" href="${_pEsc(it.url)}" target="_blank" rel="noopener" title="在 Pexels 打开">↗</a>
+      <div class="pexels-meta">
+        <span>${it.duration || 0}s · ${it.width || '?'}×${it.height || '?'}${badge}</span>
+        <span class="pexels-author">${_pEsc(it.photographer)}</span>
+      </div>
+    </div>`;
+  }).join('');
+  updatePexelsImportBtn();
+}
+
+function togglePexelsSelect(pid, on) {
+  if (on) _pexelsSelected.add(pid); else _pexelsSelected.delete(pid);
+  updatePexelsImportBtn();
+}
+
+function updatePexelsImportBtn() {
+  const btn = document.getElementById('pexels-import-btn');
+  btn.textContent = `📥 入库所选 (${_pexelsSelected.size})`;
+  btn.disabled = _pexelsSelected.size === 0;
+}
+
+async function pexelsImport() {
+  if (!_pexelsSelected.size) return;
+  const items = _pexelsItems
+    .filter(it => _pexelsSelected.has(it.pexels_id))
+    .map(it => ({ video: it.video }));
+  const btn = document.getElementById('pexels-import-btn');
+  btn.disabled = true; btn.textContent = '⏳ 入库中…';
+  try {
+    const r = await fetch(`${API}/pexels/import`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: document.getElementById('pexels-query').value.trim(), items }),
+    });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${r.status}`); }
+    const data = await r.json();
+    const reasons = [...new Set((data.skipped || []).map(s => s.reason))].join('; ');
+    toast(`入库 ${data.imported.length} 条${data.skipped.length ? `，跳过 ${data.skipped.length}（${reasons}）` : ''} · 剩余配额 ${data.quota_remaining}`, 'success');
+    await pexelsSearch(_pexelsPage);   // 刷新当前页预览 (已入库条目置灰)
+    _assetPage = 0;
+    await loadAssets();            // 本地素材列表同步
+  } catch (e) {
+    toast('入库失败: ' + e.message, 'error');
+    updatePexelsImportBtn();
+  }
+}

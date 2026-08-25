@@ -189,10 +189,26 @@ def _handle_fallbacks(
 
     def _walk(slot: DirectorSlot) -> None:
         cur = slot
+        tried: set[str] = set()
         while cur.status == "failed":
             new_slot = replace_failed_slot(db, cur, enabled_pipelines=enabled_pipelines)
             if new_slot.id == cur.id:
                 break
+            # 死循环防护 (2026-08-20): 管线部分启用时 fallback 链可互相引用
+            # (broll_pexels↔hf_chart, hf_title↔hf_chart↔host), 若不拦截会无限
+            # 替换 slot. 同链已试过该 workflow → 强制降级到链尾兜底 black_placeholder.
+            if new_slot.workflow in tried:
+                logger.warning(
+                    "[execute] slot %s fallback 死循环: %s 已试过, 强制降级 black_placeholder",
+                    slot.id, new_slot.workflow,
+                )
+                new_slot.workflow = "black_placeholder"
+                new_slot.visual_type = "black_placeholder"
+                params = new_slot.params_json or {}
+                params["fallback_reason"] = "loop_guard_black"
+                new_slot.params_json = params
+                db.commit()
+            tried.add(new_slot.workflow)
             if new_slot.workflow in ("host", "mixed_host_broll"):
                 if c_disabled:
                     # C 线禁用: 不拉起 ComfyUI, 就地降级到启用管线内的最佳替代

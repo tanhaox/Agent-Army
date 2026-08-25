@@ -61,10 +61,12 @@ async def upload_ppt(
     file: UploadFile = File(...),
     book_id: str | None = Form(None),
     ep_index: int | None = Form(None),
+    voice_id: str | None = Form(None),
 ):
     """上传 pptx → 解析 → 返回 {job_id, slides 概要}.
 
     book_id/ep_index (2026-08-21): 绑定拆书系列, 供系列皮肤包对齐.
+    voice_id (2026-08-22): 前端选的音色, 传入产线 TTS (此前固定用书账号音色静姐).
     """
     if not file.filename.lower().endswith(".pptx"):
         raise HTTPException(400, "仅支持 .pptx 文件")
@@ -84,7 +86,7 @@ async def upload_ppt(
 
     _JOBS[job_id] = {
         "status": "uploaded", "slides": len(slides),
-        "book_id": book_id, "ep_index": ep_index,
+        "book_id": book_id, "ep_index": ep_index, "voice_id": voice_id,
         "events": [{"ts": time.strftime("%H:%M:%S"), "level": "ok",
                     "msg": f"解析成功: {len(slides)} 页"}],
     }
@@ -276,18 +278,27 @@ def _run_ppt_pipeline(job_id: str) -> None:
             db.refresh(script)
 
             # ── 2. TTS: 复用 audio 链路 ──
+            # 音色选择 (2026-08-22): 前端选的 voice_id 优先 (PPT 一键成片);
+            # 否则回退书账号 persona 音色 (静读书/静姐)。
             voice = None
-            persona_v = db.query(Persona).filter(Persona.host_id == host.id).first()
-            if persona_v and persona_v.voice_id:
-                voice = db.get(Voice, persona_v.voice_id)
+            sel_voice_id = _JOBS.get(job_id, {}).get("voice_id")
+            if sel_voice_id:
+                voice = db.get(Voice, sel_voice_id)
+            if not voice:
+                persona_v = db.query(Persona).filter(Persona.host_id == host.id).first()
+                if persona_v and persona_v.voice_id:
+                    voice = db.get(Voice, persona_v.voice_id)
             if not voice:
                 voice = db.query(Voice).filter(Voice.host_id == host.id).first()
             voice_id = voice.id if voice else None
 
             # TTS 缓存 key (2026-08-21): 音色+全段台词哈希, 稿没变复用音频免重跑合成
+            # 引擎因子 (2026-08-25): IndexTTS2→2.5 后语速/音色风格全变, 旧缓存复用会
+            # 拿到 2 时代音频与 2.5 新段混拼; key 掺引擎版号, 升引擎自动失效全部缓存。
             import hashlib as _hl
             cache_key = _hl.sha256(
-                (str(voice_id or "") + "\x00" + "\x00".join(seg.text for seg in segments)).encode()
+                ("indextts2.5" + "\x00" + str(voice_id or "") + "\x00"
+                 + "\x00".join(seg.text for seg in segments)).encode()
             ).hexdigest()
             cached_job = (
                 db.query(AudioJob)
@@ -413,7 +424,7 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     skin = None  # 母本自身是源, 不 apply
                 if skin:
                     apply_skin_to_slides(slides, skin)
-                    _evt(job_id, f"已套用母本皮肤 (第{bound['ep_index']}集对齐第{bound['book_id']}母本)", "ok")
+                    _evt(job_id, f"母本皮肤载入 (保留原稿配色/背景, 仅字体动画 — 2026-08-22 改)", "ok")
             clips_dir = workdir / "clips"
             clips_dir.mkdir(parents=True, exist_ok=True)
             mode = bound.get("render_mode", "jy2")

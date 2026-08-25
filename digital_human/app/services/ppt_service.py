@@ -43,6 +43,7 @@ class TextBlock:
     color: str | None  # hex
     bold: bool = False
     shape_id: int = 0  # parse 时按 shape 迭代序赋 (动画 targeting)
+    align: int = 0  # 0=左 1=中 2=右 (2026-08-21: 标题/小节号居中)
 
 
 @dataclass
@@ -149,6 +150,22 @@ def _bg_image(slide, prs) -> str | None:
         return None
 
 
+def _text_align(shape) -> int:
+    """段落对齐 → 0左/1中/2右 (标题/小节号常居中, 2026-08-21)."""
+    from pptx.enum.text import PP_ALIGN
+    try:
+        if not (shape.has_text_frame and shape.text_frame.paragraphs):
+            return 0
+        al = shape.text_frame.paragraphs[0].alignment
+        if al == PP_ALIGN.CENTER:
+            return 1
+        if al == PP_ALIGN.RIGHT:
+            return 2
+    except Exception:
+        pass
+    return 0
+
+
 def _custgeom_to_svg(path_el) -> str:
     """PPT custGeom 路径 → SVG path d. moveTo/cubicBezTo/lineTo/close → M/C/L/Z."""
     from pptx.oxml.ns import qn
@@ -172,7 +189,9 @@ def _custgeom_to_svg(path_el) -> str:
                 parts.append("Q%s,%s %s,%s" % (
                     pts[0].get("x"), pts[0].get("y"),
                     pts[1].get("x"), pts[1].get("y")))
-        elif tag == "lineTo":
+        elif tag in ("lnTo", "lineTo"):
+            # lnTo = 直线段 (自由形状图标高频, 2026-08-22 修复: 原只认 lineTo,
+            # 漏了 lnTo → 图标直线部分全部丢失, 只剩贝塞尔曲线 → 残缺"识别物")
             pt = child.find(qn("a:pt"))
             if pt is not None:
                 parts.append("L%s,%s" % (pt.get("x"), pt.get("y")))
@@ -295,6 +314,7 @@ def parse_pptx(path: str | Path) -> list[Slide]:
                         width=shape.width, height=shape.height,
                         font_size_pt=sz_pt, color=color, bold=bold,
                         shape_id=sid,
+                        align=_text_align(shape),
                     )
                     text_blocks.append(tb)
                 if shape.shape_type == 13:  # PICTURE
@@ -408,7 +428,7 @@ def build_slide_html(slide: Slide, *, skin=None, width: int = 1920, height: int 
                 f'style="position:absolute;left:{px_left(b.left)}px;top:{px_top(b.top)}px;'
                 f'width:{px_w(b.width)}px;height:{px_h(b.height)}px;'
                 f'font-size:{fs}px;line-height:1.3;color:{color};'
-                f'{"font-weight:700;" if b.bold else ""}'
+                f'{"font-weight:700;" if b.bold else ""}text-align:{ {0:"left",1:"center",2:"right"}.get(b.align, "left") };'
                 f'overflow:hidden;word-wrap:break-word;white-space:pre-wrap;box-sizing:border-box;'
                 f'{anim_style}">{_esc(b.text)}</div>'
             )
@@ -481,11 +501,12 @@ def build_base_html(slide: Slide, width: int = 1920, height: int = 1080) -> str:
 def build_text_element_html(tb: TextBlock, width: int = 1920, height: int = 1080) -> str:
     """单文字块透明层 HTML: 块在自身坐标渲染 (像素级), 供剪映叠层逐级入场."""
     fs = _pt_to_px(tb.font_size_pt) if tb.font_size_pt else 28
+    align = {0: "left", 1: "center", 2: "right"}.get(tb.align, "left")
     div = (
         f"<div style='position:absolute;left:{_px_left(tb.left)}px;top:{_px_top(tb.top)}px;"
         f"width:{_px_w(tb.width)}px;height:{_px_h(tb.height)}px;"
         f"font-size:{fs}px;line-height:1.3;color:{_css_color(tb.color)};"
-        f"{'font-weight:700;' if tb.bold else ''}"
+        f"{'font-weight:700;' if tb.bold else ''}text-align:{align};"
         f"font-family:'Noto Sans SC','Source Han Sans SC','Microsoft YaHei','PingFang SC',sans-serif;"
         f"overflow:hidden;word-wrap:break-word;white-space:pre-wrap;box-sizing:border-box'>"
         f"{_esc(tb.text)}</div>"

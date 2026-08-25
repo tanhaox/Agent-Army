@@ -191,6 +191,10 @@ P4_PROMPT = """你是{persona}的【最终精修师】。你拿到的是一篇�
 - **身份段原样保留**：输入稿的身份段（通常是"我是XX，专盯[赛道品类]"格式）必须 1:1 原样保留，**禁止改成"大家好，我是XX""在这个不确定的时代"等任何旧版开场**。
 - **结尾原样保留**：输入稿的结尾（通常是金句+点赞/收藏+下期预告三件套）必须 1:1 原样保留，**禁止改成"听懂逻辑，少走弯路。我是XX，下期见"等任何旧版结尾**。
 - **钩子原样保留**：开头钩子段 1:1 原样，禁止重写。
+- **金句去重 (2026-08-25)**：全稿同一句金句只出现一次 — 收尾定调金句禁止与中段已用过的重复，中段和结尾各给不同的金句。
+- **首句锁死**：输出稿的第一句 = 输入稿的第一句（逐字），身份段保持它在输入稿中的
+  位置（通常在第 3-5 句），**禁止把身份段移动到第一句** — 首屏开场卡吃第一句，
+  第一句必须是钩子才有标题感。
 
 # ⚖️ 信息守恒铁律
 - **逐段对应**：输入稿每一段都必须有对应输出，禁止删段、禁止合并。输出段落数 ≥ 输入段落数。
@@ -224,13 +228,18 @@ P4_PROMPT = """你是{persona}的【最终精修师】。你拿到的是一篇�
 P5_PROMPT = """你是{persona}的【情绪标注师】。你拿到的是【最终定稿】。你的唯一任务：**不动任何一个字**，把定稿按"情绪起伏"切成段落，并给每段标注「情绪 + 强度档」。
 
 # 🎭 情绪基调（整篇一个主基调，禁止频繁切换）
-整篇以**惊讶(surprised)**为主基调（叙述/铺垫/爆点/转折/身份段都用惊讶）。
-serious(揭秘)、happy(升华) 仅用于**关键大模块**，全篇情绪切换 ≤2-3次。
-**禁止用"平静"**（平淡会让人划走，低强度段用惊讶/低档替代）。
+主基调按内容气质定，先判断本篇属于哪类：
+- **严肃分析类**（地缘/军事/政治/经济风险/社会争议）：全篇 **serious(紧张/严肃)** 为主基调。
+  "惊讶"只许用在真正的数据/事实爆点段，全篇≤2段、强度≤4 — 满篇惊讶会让严肃分析
+  听起来像看热闹，毁人设。
+- **轻快叙事类**（科技新品/趣味见闻/生活消费）：可用惊讶为主基调，但叙述/铺垫段用低档(1-3)。
+无论哪类：身份段（"大家好，我是XX…"固定开场白）恒用主基调低档(1-2)，禁止惊讶。
+禁止用"平静"（平淡会让人划走）；严肃稿的"防平淡"靠 serious 低档的紧张感，不靠惊讶。
+happy(升华) 仅用于结尾价值收割模块，全篇情绪切换 ≤2-3次。
 
 # 🎚️ 强度档（每段必填，1-7）
 1=最弱(平缓叙述) → 7=最强(高亢冲击)，每档差0.05。
-主体用惊讶低档（叙述/身份段1-3档），关键段4-7档。
+叙述/铺垫段低档(1-3)，关键模块4-6档，全篇≤1段可用7档。
 相邻段强度差≤2档，形成情绪坡度。
 
 # 📐 段落划分规则（关键：大模块，禁止切太细）
@@ -244,6 +253,58 @@ serious(揭秘)、happy(升华) 仅用于**关键大模块**，全篇情绪切�
 
 # 📋 输出格式（每段一行）
 [情绪/强度] 段落文字（原文1:1，含||）"""
+
+
+# P7 流量评审 (2026-08-25): 复刻豆包五维测评框架 — 发布前仪表盘, 只评审不改稿。
+# 基准值来自地缘/深度口播赛道实测均值, 评审结果供人决策是否再修, 不自动改稿。
+P7_PROMPT = """你是短视频口播稿的【流量评审师】。你拿到一篇待发布的最终稿，从算法与用户视角做发布前测评。只评审，不重写。
+
+# 赛道基准（深度口播, 3分钟左右）
+- 平均停留: 同类均值 20s ｜ 完播率: 均值 18% ｜ 点赞率: 均值 2.5%
+- 评论率: 普通深度稿 0.6% ｜ 收藏率: 均值 0.4%
+- 五维权重: 停留 > 评论 > 完播 > 收藏 > 点赞
+
+# 逐维检查点
+- **停留**: 开篇钩子冲突度（具体人物/画面细节 > 宏观陈述）；每~30秒是否换解读维度、无空窗；中段纯科普/参数连续陈述是否超60字无解读
+- **完播**: 时长是否落在 2:40~3:10 黄金区；结尾是否有价值落地（不烂尾）；是否有定位式关注锚点收口（"专注拆解…不看热闹只挖本质"级, 唤醒关注/追更）
+- **点赞**: 情绪层次是否叠加（共情/反差/自豪/反思 至少三层）；金句/灵魂反问密度（约每200字一个可复述爆点）；是否有三连排比（中文口播情绪推进器）
+- **评论**: 是否预埋冲突点（官方vs现实/官方内部两套说辞打架/滤镜vs真相）、思辨点（A还是B式二选一）、主动引导、跨界延伸（职场/管理/认知拓宽评论人群）
+- **结构技法**: 是否有锚点物件贯穿（一个具象小物件开头切入-中段回扣-结尾升华, 一物三用）；人物线是否闭环且中后段回扣（不是开头道具）
+- **收藏**: 是否落地可复用底层逻辑（普通人能带走的管理/认知干货，而非纯吃瓜）
+
+只输出 JSON，不要其他文字：
+{
+  "avg_stay": {"estimate": "28s-35s", "grade": "优秀偏上", "reason": "≤50字"},
+  "completion": {"estimate": "22%-28%", "grade": "中等偏上", "reason": "≤50字"},
+  "like": {"estimate": "3.5%-5%", "grade": "高互动", "reason": "≤50字"},
+  "comment": {"estimate": "1.2%-1.8%", "grade": "爆款级潜质", "reason": "≤50字"},
+  "collect": {"estimate": "0.8%-1.3%", "grade": "精准高价值", "reason": "≤50字"},
+  "strengths": ["≤3条, 每条≤40字"],
+  "weaknesses": ["≤3条, 每条≤40字, 按流量影响排序"],
+  "optimizations": ["≤4条可落地微调, 不改核心内容, 每条≤50字"],
+  "overall": "A+ / A / A- / B+ / B"
+}"""
+
+
+# P-L 反问目录注入 (2026-08-25, geo 专属独立 P 层): LLM 只产反问目录文本 (几十字),
+# 插入由代码确定性完成 — 初版让 LLM 复述全文再插入, 输出 token 逼近上限截断 →
+# 长度护栏误杀静默回退 (实测两次未插入), 故改为"生成+确定性插入"两段式。
+P_LOOP_PROMPT = """你是{persona}的【反问目录设计者】。下面是一篇结构完整的口播稿。你的唯一任务：为它设计一组**连环反问目录**——只输出反问本身，不要复制稿件，不要任何解释。
+
+# 设计要求
+- 3~5 问，共 60~100 字。它是全文的口播目录：每一问对应后文一个模块（背景沿革/硬事实/一线人物/横向对照等，按本稿实际结构），观众听到后面会对应收回答案——必须先通读全文，禁止问后文没有的内容。
+- 句式递进不平行："为什么X？"→"难道只是Y？"→"那这笔账，最后记在谁头上？"
+- 最后一问必须落到观众自身利益（为结尾价值层埋线）。
+- 每问独立成句，问句之间用换行分隔。
+
+# 示例骨架（只参考句式，禁止照抄）
+林肯号为什么宁可烂在海上也不回港？
+是伊朗逼的，还是自家的算盘？
+超期部署这笔账，最后记在谁头上？
+这事儿跟咱们，又有什么关系？
+
+# 输出
+只输出 3~5 行反问，每行一问。不要序号、不要引号、不要解释。"""
 
 
 
@@ -387,54 +448,79 @@ def clean_boosted_text(text: str) -> str:
 
 
 def _resolve_llm_cfg():
-    """获取 LLM 配置. 首选硅基流动, fallback DeepSeek (2026-08-14)."""
+    """获取 LLM 配置. 首选 DeepSeek, fallback 硅基流动 (2026-08-22).
+
+    2026-08-22: 硅基流动余额不足返 402 (解构报"解析失败"根因), 弃用为默认;
+    与 llm_service / director_service 的 deepseek 主用对齐.
+    """
     from ..config import get_config, load_config
     try:
         cfg = get_config()
     except RuntimeError:
         cfg = load_config()
-    # 硅基流动优先
-    if cfg.siliconflow.api_key:
-        return cfg.siliconflow
-    return cfg.deepseek
+    # DeepSeek 优先
+    if cfg.deepseek.api_key:
+        return cfg.deepseek
+    return cfg.siliconflow
+
+
+def _post_chat(cfg, model: str, prompt: str, *, json_mode: bool, max_tokens: int,
+               temperature: float, enable_thinking: bool) -> str:
+    """单次 LLM 请求 → content 文本. 抛异常由调用方处理."""
+    import requests
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "enable_thinking": enable_thinking,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+    resp = requests.post(url, headers=headers, json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
 
 
 def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retries: int = 2,
-          model: str | None = None, temperature: float = 0.5) -> str:
+          model: str | None = None, temperature: float = 0.5,
+          enable_thinking: bool | None = None) -> str:
     """调用 LLM. 默认 flash; 传 model="pro" 或用洗稿模板时外部指定 model.
     返回文本; 抛异常由调用方处理.
 
     重试: reasoning 模型偶发空输出/截断, 空响应时重试 up to retries 次.
     temperature: 判定/审计类任务 (素材审计) 传 0.2 求稳定 (2026-08-15).
+    2026-08-22: 大 prompt(素材审计~40K)+thinking 关闭 → DeepSeek reasoning 模型
+    返回空 content (flash/pro 实测全空; enable_thinking=True 才正常, ~48s)。
+    - enable_thinking=True: 单次带 thinking 请求 (素材审计直接用, 跳过空重试)。
+    - None (默认): 先 thinking 关 (快路径), 普通重试仍空则补一轮 thinking 开启兜底。
     """
     import time
-    import requests
 
     cfg = _resolve_llm_cfg()
     resolved = cfg.model_flash if model is None else (cfg.model_pro if model == "pro" else model)
     last_err: Exception | None = None
+
+    if enable_thinking is not None:
+        # 显式 thinking 开关: 单次调用 (调用方自带重试, 如审计 3 次循环)
+        content = _post_chat(cfg, resolved, prompt, json_mode=json_mode,
+                             max_tokens=max_tokens, temperature=temperature,
+                             enable_thinking=enable_thinking)
+        if content and content.strip():
+            return content
+        raise RuntimeError("empty LLM response")
+
     for attempt in range(retries + 1):
         try:
-            payload: dict[str, Any] = {
-                "model": resolved,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "stream": False,
-                "max_tokens": max_tokens,
-                # 关闭 reasoning 思考链 (DeepSeek-V4-Flash 复杂 prompt 失控思考,
-                # 单步 110s+→15s 提速 7x); 非 reasoning provider 会忽略此字段
-                "enable_thinking": False,
-            }
-            if json_mode:
-                payload["response_format"] = {"type": "json_object"}
-            headers = {
-                "Authorization": f"Bearer {cfg.api_key}",
-                "Content-Type": "application/json",
-            }
-            url = f"{cfg.base_url.rstrip('/')}/chat/completions"
-            resp = requests.post(url, headers=headers, json=payload, timeout=120)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content = _post_chat(cfg, resolved, prompt, json_mode=json_mode,
+                                 max_tokens=max_tokens, temperature=temperature,
+                                 enable_thinking=False)
             if content and content.strip():
                 return content
             last_err = RuntimeError("empty LLM response")
@@ -444,6 +530,17 @@ def _call(prompt: str, *, json_mode: bool = False, max_tokens: int = 4000, retri
             last_err = exc
             if attempt < retries:
                 time.sleep(2 * (attempt + 1))
+    # 兜底: 空响应 (thinking 关导致) → 带 thinking 再试一轮, max_tokens 放大
+    # (thinking 的 reasoning 占预算, 原 max_tokens 会被耗尽 → content 空; 2026-08-22)
+    if last_err is not None and "empty LLM response" in str(last_err):
+        try:
+            content = _post_chat(cfg, resolved, prompt, json_mode=json_mode,
+                                 max_tokens=max(8000, max_tokens), temperature=temperature,
+                                 enable_thinking=True)
+            if content and content.strip():
+                return content
+        except Exception:
+            pass
     if last_err:
         raise last_err
     return ""
@@ -661,8 +758,14 @@ def _strip_p3_head(text: str) -> str:
 
 
 def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
-    """Parse P5 output: [emotion/strength] text -> [{"emotion":..., "strength":..., "text":...}]"""
+    """Parse P5 output: [emotion/strength] text -> [{"emotion":..., "strength":..., "text":...}]
+
+    emotion 归一为 EMOTIONS 英文 key (2026-08-25): P5 常输出中文情绪名 (惊讶/严肃),
+    下游 resolve_emotion 只认英文 key — 此前中文全部 KeyError 被静默丢弃, 整篇恒 calm。
+    """
     import re
+
+    from .emotion_dict import normalize_emotion_key
     segs = []
     pattern = re.compile(r"^\[(\w+)/(\d+)\]\s*(.*)")
     for line in text.splitlines():
@@ -672,21 +775,29 @@ def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
         m = pattern.match(line)
         if m:
             segs.append({
-                "emotion": m.group(1),
+                "emotion": normalize_emotion_key(m.group(1)),
                 "strength": int(m.group(2)),
                 "text": m.group(3).strip(),
             })
     return segs if segs else None
 
 
-def annotate_emotions(text: str, persona_name: str = "老谭") -> str | None:
+def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None = None) -> str | None:
     """独立 P5 情绪标注 (2026-08-14, 供"保存编辑"后重跑, 不经 run_boost).
 
     输入口播稿全文 + 人设名 → 调 P5_PROMPT 标段落级情绪 → 返回 "[情绪/强度] 文本\\n..."
     字符串(落 emotion_annotations 给 TTS/IndexTTS). 失败返回 None (调用方保留旧标注或置空).
+    track (2026-08-25): 赛道 geo/tech — geo(地缘/国际)强制 serious 主基调 (满篇惊讶=逗逼感,
+    2.5 表现力放大后实测毁人设), 注入赛道硬规则防 LLM 自选错基调.
     """
     try:
-        prompt = P5_PROMPT.replace("{persona}", persona_name) + "\n\n【最终定稿】\n" + text
+        prompt = P5_PROMPT.replace('{persona}', persona_name)
+        if (track or "").strip().lower() == "geo":
+            prompt = (
+                "【赛道硬规则 · 优先级最高】本篇为地缘/国际赛道严肃分析: 主基调必须 serious, "
+                "惊讶(surprised)全篇≤2段且强度≤4, 身份段 serious/1-2。\n\n" + prompt
+            )
+        prompt += "\n\n【最终定稿】\n" + text
         raw = _call(prompt, max_tokens=4000)
         segs = _parse_emotion_annotations(raw)
         if segs:
@@ -727,7 +838,7 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
     p2_text: str | None = None
     p3_text: str | None = None
     p4_text: str | None = None
-    p5_annotated: str | None = None
+    loop_block: str | None = None  # P-L 反问目录文本 (geo; 定稿后代码插入)
 
     # ── P2: 预埋争议+关注 ──
     def _run_p2() -> None:
@@ -786,6 +897,19 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
                 _emit("boost_p4_error", f"精修输出过短({len(p4_text)}字<{int(len(input_text)*0.88)}字)，已回退原稿防压缩")
                 p4_text = input_text
             _emit("boost_p4_done", "全篇精修完成")
+            # 首句保序护栏 (2026-08-25): P4 偶发把身份段挪到第一句 → 首屏 opening 卡
+            # 变成"大家好我是老谭"自我介绍, 标题感全失 (实测)。输出稿开头必须仍是
+            # 原稿开头(钩子), 否则视为越权重组 → 回退原稿。
+            import re as _re
+            _orig_head = _re.sub(r"^\[[^\]]+\]\s*", "", original.strip())[:12]
+            _p4_head = _re.sub(r"^\[[^\]]+\]\s*", "", (p4_text or "").strip())[:12]
+            if _orig_head and _p4_head != _orig_head:
+                logger.warning(
+                    "[boost] P4 首句移位 (原稿开头 %r, 精修稿开头 %r), 回退原稿",
+                    _orig_head, _p4_head,
+                )
+                _emit("boost_p4_error", "精修把开头钩子移位（首屏标题感会丢），已回退原稿")
+                p4_text = input_text
         except Exception as exc:
             logger.warning("[boost] P4 failed: %s", exc)
             _emit("boost_p4_error", f"全篇精修失败：{str(exc)[:100]}")
@@ -813,34 +937,72 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
             logger.warning("[boost] P1 failed: %s", exc)
             _emit("boost_p1_error", f"开场专家失败：{str(exc)[:100]}")
 
-    # ── P5: 情绪标注 ──
-    def _run_p5() -> None:
-        nonlocal p5_annotated
-        _emit("boost_p5_start", "情绪标注：惊讶基调 + 强度 1-7")
-        try:
-            p5_prompt = P5_PROMPT.replace('{persona}', persona_name) + "\n\n【最终定稿】\n" + final_text
-            raw5 = _call(
-                p5_prompt,
-                max_tokens=4000,
-            )
-            segs = _parse_emotion_annotations(raw5)
-            if segs:
-                p5_annotated = "\n".join(f"[{s['emotion']}/{s['strength']}] {s['text']}" for s in segs)
-                _emit("boost_p5_done", f"情绪标注完成：{len(segs)} 段")
-            else:
-                p5_annotated = raw5
-                _emit("boost_p5_error", "情绪标注解析失败，保留 raw")
-        except Exception as exc:
-            logger.warning("[boost] P5 failed: %s", exc)
-            _emit("boost_p5_error", f"情绪标注失败：{str(exc)[:100]}")
+    # (P5 情绪标注已于 2026-08-25 拆离 run_boost — 移至 audio.py 生成音频时刻,
+    #  与 TTS 同源文本现场标注。独立函数 annotate_emotions 保留供其调用。)
 
-    # ═══════ 执行流水线 (2026-08-14: 砍 P1-P3 + _splice) ═══════
+    # ── P-L: 反问目录 (2026-08-25, geo 专属独立层) ──
+    # 两段式: LLM 只产 3~5 行反问存 _loop_block, 插入在 final_text 定稿后由代码执行
+    # (P4 精修碰不到反问层, 免疫"精修时被当冗余删除")。tech 线跳过 (对照组)。
+    def _run_loop() -> None:
+        nonlocal loop_block
+        _emit("boost_loop_start", "反问目录：通读全文，设计连环反问")
+        try:
+            loop_prompt = P_LOOP_PROMPT.replace('{persona}', persona_name) + "\n\n【口播稿全文】\n" + original
+            raw_loop = _call(loop_prompt, max_tokens=600)
+            import re as _re2
+            qlines = []
+            for ln in (raw_loop or "").splitlines():
+                ln = _re2.sub(r"^[\s\d\.、·\-\*\"'“”]+", "", ln.strip())
+                ln = _re2.sub(r"[\"'“”\s]+$", "", ln)
+                if ln.endswith("？") or ln.endswith("?"):
+                    qlines.append(ln)
+            if not (3 <= len(qlines) <= 6):
+                logger.warning("[boost] P-L bad question count %d: %s", len(qlines), (raw_loop or "")[:80])
+                _emit("boost_loop_error", f"反问目录产出异常（{len(qlines)} 问, 需 3~6）, 跳过注入")
+                loop_block = None
+                return
+            loop_block = "\n".join(qlines)
+            _emit("boost_loop_done", f"反问目录完成（{len(qlines)} 问, 定稿后注入）")
+        except Exception as exc:
+            logger.warning("[boost] P-L failed: %s", exc)
+            _emit("boost_loop_error", f"反问目录失败：{str(exc)[:100]}")
+            loop_block = None
+
+    def _insert_loop_block(text: str) -> str:
+        """确定性插入反问目录: 身份段组末尾 (优先 '剥开看' 引导词, 次选 '确定的逻辑。')。"""
+        import re as _re3
+        if not loop_block or loop_block in text:
+            return text
+        anchor = None
+        for key in ("这事儿咱们得剥开看", "剥开看", "确定的逻辑"):
+            i = text.find(key)
+            if i != -1:
+                end = text.find("。", i)
+                anchor = end + 1 if end != -1 else i + len(key)
+                break
+        if anchor is None:
+            m = _re3.search(r"大家好[^。]*。", text)
+            anchor = m.end() if m else 0
+        return text[:anchor] + "\n" + loop_block + "\n" + text[anchor:]
+
+    # ═════ 执行流水线 (2026-08-25: P-L 反问注入 → P4 精修; P5 已拆离) ═════
     # 7层洗稿已是完整爆款结构; P1(电击开场)/P2(预埋)/P3(呼吸点) 是旧六模块逻辑,
     # 跑7层稿只会覆盖钩子/身份段/结尾. 实证(_test_7layer_ab A/B)确认 P1-P3 零增益纯破坏.
-    # 现仅保留: P4(逐句表达精修, 1:1锁定7层结构) → P5(情绪锚点给 IndexTTS).
-    _emit("boost_start", "爆品改造开始（P4精修→P5情绪标注）")
+    # 现行: P-L(geo: 反问目录注入, 独立层) → P4(逐句表达精修, 1:1锁定结构)。
+    # P5 拆离 (2026-08-25): 移到 audio.py _do_tts 入口, 与 TTS 输入同源文本现场标注 —
+    # 消灭"改稿后旧标注错配"窗口, boost 回归纯内容职责。annotate_emotions 保留供调用。
+    _track = ""
+    try:
+        _track = (getattr(script.article, "track", "") or "") if script.article else ""
+    except Exception:
+        pass
+    _emit("boost_start", "爆品改造开始（P-L反问目录→P4精修）" if _track == "geo" else "爆品改造开始（P4精修）")
 
-    # P4 精修 (_run_p4 内部 fallback 链 p3/p2/original 全 None → 取 original 洗稿稿)
+    # P-L 反问目录 (geo 专属; 失败不阻断, P4 走原稿)
+    if _track == "geo":
+        _run_loop()
+
+    # P4 精修 (输入 = P-L 产物或原稿; P4 失败回退原稿, 不卡死)
     _run_p4()
 
     # final = P4 精修稿 (P4 失败回退原稿, 不卡死)
@@ -851,13 +1013,62 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
     # 剥离内部标注 (层标题/锚点/清单残留)
     final_text = clean_boosted_text(final_text)
 
-    # P5 情绪标注 (产 emotion_annotations → IndexTTS 情绪合成)
-    _run_p5()
+    # P-L 反问目录注入 (2026-08-25): 定稿后确定性插入 — P4 精修碰不到反问层,
+    # 免疫被当冗余删除; _insert_loop_block 内含幂等保护 (已存在则不重复插)。
+    final_text = _insert_loop_block(final_text)
+
+    # ── P6: 拼音纠音审计 (2026-08-25) ──
+    # 生僻字/多音字由 config/tts_pinyin_map.json 词表在 TTS 入口自动标 <字|PINYIN>
+    # (替代旧的"昇腾→生疼"同音换字)。此处只扫描提示, 让用户知道哪些词被照顾到;
+    # 踩到新坑直接往词表加一行, 无需改代码。
+    pinyin_fixes: list[str] = []
+    try:
+        from .pinyin_fix import scan_pinyin_hits
+        pinyin_fixes = scan_pinyin_hits(final_text)
+        if pinyin_fixes:
+            _emit("boost_pinyin_done", f"拼音纠音 {len(pinyin_fixes)} 处: {'、'.join(pinyin_fixes)}")
+        else:
+            _emit("boost_pinyin_done", "拼音纠音: 本稿无已知易错词")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[boost] pinyin scan failed: %s", exc)
+
+    # ── P7: 流量评审 (2026-08-25 复刻豆包五维框架) ── 只评审不改稿, 报告供人决策
+    flow_audit: dict[str, Any] | None = None
+    try:
+        flow_audit = audit_flow_metrics(final_text)
+        if flow_audit:
+            _emit("boost_p7_done",
+                  f"流量评审 {flow_audit.get('overall', '?')}: "
+                  f"评论率{flow_audit.get('comment', {}).get('estimate', '?')} · "
+                  f"短板: {'; '.join(flow_audit.get('weaknesses', [])[:2])}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[boost] P7 audit failed: %s", exc)
 
     return {
         "boosted_text": final_text,
         "boost_titles": [],  # P1 砍掉, 不再产标题候选
-        "p5_annotated": p5_annotated,
+        "p5_annotated": None,  # P5 已拆离 (2026-08-25 → audio.py 生成时现场标), 字段留兼容
         "p4_ok": p4_text is not None,
-        "p5_ok": p5_annotated is not None,
+        "p5_ok": False,
+        "loop_ok": loop_block is not None,  # P-L 反问目录 (geo) 是否注入成功
+        "pinyin_fixes": pinyin_fixes,
+        "flow_audit": flow_audit,
     }
+
+
+def audit_flow_metrics(text: str) -> dict[str, Any] | None:
+    """P7 独立入口: 五维流量评审 (停留/完播/点赞/评论/收藏 + 优势/短板/微调建议)。
+
+    框架复刻豆包测评标准 (2026-08-25): 逐维给"预估值+档位+50字理由", 输出结构化
+    JSON。失败返回 None (评审是仪表盘, 不许阻断产线)。
+    """
+    try:
+        raw = _call(P7_PROMPT + "\n\n【待评审最终稿】\n" + text, json_mode=True, max_tokens=2500)
+        data = _extract_json(raw)
+        if isinstance(data, dict) and data.get("overall"):
+            return data
+        logger.warning("[boost] P7 parse failed: %s", str(raw)[:100])
+        return None
+    except Exception as exc:
+        logger.warning("[boost] P7 audit call failed: %s", exc)
+        return None

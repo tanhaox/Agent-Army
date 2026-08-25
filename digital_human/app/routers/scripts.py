@@ -90,6 +90,12 @@ def update_script(script_id: str, payload: ScriptUpdate, db: Session = Depends(g
     if payload.script_text is not None or payload.boosted_text is not None:
         from ..models import AudioJob
 
+        # 旧情绪标注基于旧稿, 改稿即失效 → 清空 (防前端误显示)。
+        # 情绪标注已移至生成音频时刻现场跑 (2026-08-25, audio.py _do_tts 入口,
+        # 与 TTS 同源文本), 不再有异步重跑/错配窗口。
+        if payload.boosted_text is not None and script.emotion_annotations:
+            script.emotion_annotations = None
+
         stale = (
             db.query(AudioJob)
             .filter(AudioJob.script_id == script_id, AudioJob.status == "completed")
@@ -103,32 +109,8 @@ def update_script(script_id: str, payload: ScriptUpdate, db: Session = Depends(g
 
     db.commit()
 
-    # 2026-08-14: 编辑最终稿后后台重跑 P5 情绪标注
-    # (boosted_text 改了, 旧 emotion_annotations 基于旧稿, TTS 情绪会对不上; 后台跑不阻塞保存)
-    if payload.boosted_text is not None:
-        import threading
-        _new_text = payload.boosted_text
-        _sid = script_id
-
-        def _rerun_p5() -> None:
-            import logging
-            _lg = logging.getLogger(__name__)
-            with db_session() as _db:
-                try:
-                    _s = _db.query(Script).filter(Script.id == _sid).first()
-                    _persona = "老谭"
-                    if _s and _s.host:
-                        _persona = (getattr(_s.host, "stamp_name", None) or _s.host.name) or "老谭"
-                    from ..services.boost_service import annotate_emotions
-                    _emo = annotate_emotions(_new_text, _persona)
-                    if _s:
-                        _s.emotion_annotations = _emo
-                        _db.commit()
-                    _lg.info("[p5-rerun] script %s emotion 重标注完成 (len=%d)", _sid[:8], len(_emo or ""))
-                except Exception as _e:
-                    _lg.warning("[p5-rerun] script %s failed: %s", _sid[:8], _e)
-
-        threading.Thread(target=_rerun_p5, name=f"p5-rerun-{_sid[:8]}", daemon=True).start()
+    # (2026-08-25: 保存后异步重跑 P5 的逻辑已删除 — 情绪标注移至生成音频时刻
+    #  现场跑 (audio.py _do_tts), 与 TTS 输入同源, 改稿错配窗口不复存在。)
 
     db.refresh(script)
     return script
@@ -352,6 +334,11 @@ def _run_boost_background(script_id: str, job_id: str) -> None:
                 "p3_ok": boost.get("p3_ok"),
                 "p4_ok": boost.get("p4_ok"),
                 "p5_ok": bool(boost.get("p5_annotated")),
+                "pinyin_fixes": boost.get("pinyin_fixes") or [],
+                # P7 流量评审摘要 (2026-08-25): 五维测评, 完成态常驻显示
+                "flow_overall": (boost.get("flow_audit") or {}).get("overall"),
+                "flow_comment": ((boost.get("flow_audit") or {}).get("comment") or {}).get("estimate"),
+                "flow_weaknesses": (boost.get("flow_audit") or {}).get("weaknesses") or [],
             })
         except Exception as exc:
             logger.exception("[boost] background failed for %s: %s", script_id, exc)

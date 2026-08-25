@@ -131,6 +131,8 @@ class Persona(Base):
     brand_tag: Mapped[str | None] = mapped_column(String(64), default=None)
     fixed_opening: Mapped[str | None] = mapped_column(Text, default=None)
     fixed_ending: Mapped[str | None] = mapped_column(Text, default=None)
+    # 目标读者画像 (2026-08-20): 账号人设级属性, 书级缺省继承. 静读书=拆书受众.
+    target_reader: Mapped[str | None] = mapped_column(Text, default=None)
     # 显式账号绑定: Persona ↔ Host 1:1 (修复弱关联断裂)
     host_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("hosts.id"), default=None

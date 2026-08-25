@@ -71,3 +71,27 @@ def open_output_folder(job_id: str, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.exception("open folder failed")
         raise HTTPException(status_code=500, detail=f"打开文件夹失败: {exc}")
+
+
+@download_router.post("/jobs/{job_id}/export-script-txt")
+def export_script_txt(job_id: str, db: Session = Depends(get_db)):
+    """独立生成 洗稿.txt (2026-08-19): 合成按钮的后半段稿件功能独立成按钮.
+
+    不跑合成: 直接把 job.script.script_text 写进合成目录 (_job_root, 与合成时
+    落点一致) 并打开目录。无稿件文本 → 409。
+    """
+    job = _job_or_404(db, job_id)
+    text = getattr(getattr(job, "script", None), "script_text", None)
+    if not text:
+        raise HTTPException(status_code=409, detail="该任务无稿件文本")
+    from app.services.composition_service.common import _job_root
+    from app.services.composition_service.output import _write_script_txt
+
+    root = _job_root(job)
+    root.mkdir(parents=True, exist_ok=True)
+    _write_script_txt(job, root)
+    try:
+        os.startfile(str(root))
+    except Exception as exc:
+        logger.warning("[export-script-txt] open folder failed: %s", exc)
+    return {"status": "ok", "path": str(root / "洗稿.txt"), "folder": str(root)}

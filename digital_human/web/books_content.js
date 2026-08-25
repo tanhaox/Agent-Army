@@ -13,36 +13,50 @@ function renderPage(b) {
   if (linkStory) linkStory.style.display = has_roadmap ? '' : 'none';
 
   $('#page-content').innerHTML = `
+    <div id="l0-panel" class="panel" style="display:none"></div>
     <div class="panel">
-      <h2>步骤1 · 输入补全 <span class="badge">tier: ${esc(tier('全书核心主张'))}</span></h2>
+      <h2>输入补全 <span class="badge distilled">蒸馏自动填充</span>
+        <button class="sm secondary" style="float:right" onclick="syncL0()">🔄 同步蒸馏</button></h2>
       <div class="kv"><span class="k">类型</span>${esc(field('书籍类型') || '-')}</div>
       <div class="kv"><span class="k">核心主张</span>${esc(field('全书核心主张') || '-')}</div>
       <div class="kv"><span class="k">概念</span>${esc((field('关键概念清单') || []).join(' / '))}</div>
       <div class="kv"><span class="k">金句</span>${esc((field('核心金句') || []).slice(0,2).join(' / '))}</div>
       <div class="kv"><span class="k">目标读者</span>${esc(field('目标读者画像') || '-')} ${(inp['目标读者画像']||{}).tier === 'persona' ? '<span class="badge">来自人设</span>' : ''}</div>
-      ${needs.length ? `<div class="kv red"><span class="k">待补</span>${needs.join('、')}（点【补全输入】或人工补）</div>` : ''}
-      <div class="toolbar" style="margin-top:0.8rem">
-        <button class="sm" onclick="run('assess', this)">预评估 (Gate 0)</button>
-        <button class="sm" style="${s1_ok ? '' : 'background:#16a34a'}" onclick="run('complete', this)">补全</button>
-        <button class="sm warn" onclick="run('confirm-input', this)" ${s1_ok ? '' : 'disabled title="需先完成【补全】"'}>确认1 → 评论层+素材</button>
-      </div>
+      ${needs.length ? `<div class="kv red"><span class="k">待补</span>${needs.join('、')}</div>` : ''}
       ${(() => { const r = (b.input_json || {}).risk_assessment; if (!r) return '';
         const icon = { green: '🟢', yellow: '🟡', red: '🔴' }[r.tier] || '❓';
         return `<div class="kv" style="margin-top:0.5rem">${icon} <b>${r.tier}</b>${r.abandon ? ' <span class="red">建议放弃</span>' : ''}
           ｜雷区: ${esc((r.risk_points || []).join(' / ')) || '-'}
           ｜安全操作: ${esc((r.min_safe_ops || []).slice(0, 3).join(' / ')) || '-'}</div>`; })()}
+      <div class="hint" style="margin-top:0.5rem">以上由 L0 蒸馏 + facing 自动产出（内核/概念/金句/合规），无需手动补全/预评估。点【同步蒸馏】重跑 facing 后刷新。</div>
     </div>
 
     <div class="panel">
-      <h2>步骤2 · 评论层 + 素材</h2>
-      <div class="kv"><span class="k">评论层</span>${(inp.comment_layer || []).length} 条读者反应</div>
-      <div class="kv"><span class="k">素材</span>${(inp.materials || []).length} 条</div>
-      <div class="hint" style="margin-top:0.5rem">点【确认1】生成读者反应清单 + 素材包，供逐集创作戳痛点/制造共鸣。</div>
+      <h2>评论层 + 素材</h2>
+      <div class="kv"><span class="k">评论层</span>${(inp.comment_layer || []).length} 条读者反应 <span class="badge distilled">蒸馏自动</span></div>
+      <div class="kv"><span class="k">素材</span>${(inp.materials || []).length} 条${(inp.materials || []).length ? '' : '（书外素材搜索待接入）'}</div>
       ${(inp.comment_layer || []).length ? `
         <details style="margin-top:0.7rem"><summary style="cursor:pointer;font-size:0.85rem;color:#93c5fd">查看评论层内容</summary>
         <div style="margin-top:0.5rem">${(inp.comment_layer || []).map(c =>
-          `<div class="kv" style="font-size:0.82rem">[${esc(c.type || '')}] ${esc(c.comment || '')}</div>`).join('')}</div></details>` : ''}
+          `<div class="kv" style="font-size:0.82rem">[${esc(c.type || '')}${c.unit_id ? ' · ' + esc(c.unit_id) : ''}] ${esc(c.comment || '')}</div>`).join('')}</div></details>` : ''}
+    </div>
+
+    <div class="panel" id="source-panel">
+      <h2>📖 源头书单 <span class="badge distilled">自动</span></h2>
+      <div class="hint">本书引用的源头书/理论 —— 可作粉丝书单、内容关联（"作者还在《XX》里讲过…"，涨粉/复购）。</div>
+      <div id="source-body" class="hint" style="margin-top:0.5rem">加载中…</div>
     </div>`;
+}
+
+// 2026-08-22: 蒸馏自动填充 — 触发 /auto-fill (幂等), 同步 facing → input_json/评论层/总纲
+async function syncL0() {
+  const btn = document.querySelector('#l0-panel [onclick*="syncL0"]') || document.createElement('span');
+  try {
+    const r = await api('/books/' + BOOKS.cur.id + '/auto-fill', { method: 'POST' });
+    toast((r.auto_filled || []).join('、') || '已同步（无新增）', 'success');
+    await loadBook(BOOKS.cur.id);
+    loadL0(BOOKS.cur.id);
+  } catch (e) { toast('同步失败: ' + e.message, 'error'); }
 }
 
 function goStory(e) {
@@ -50,8 +64,89 @@ function goStory(e) {
   if (BOOKS.cur) location.href = '/web/books_story.html?book_id=' + BOOKS.cur.id;
 }
 
+// 源头书单 (2026-08-23): 本书引用的源头书/理论 → 粉丝书单/内容关联
+async function loadSources(id) {
+  const el = $('#source-panel');
+  if (!el) return;
+  let data;
+  try { data = await api('/books/' + id + '/source-list'); } catch (_) { return; }
+  const srcs = data.sources || [];
+  if (!srcs.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  $('#source-body').innerHTML = srcs.map(s => {
+    const okAuthor = s.author && !['未知', '未提及', '无', '不详'].includes(s.author);
+    return `<div class="kv" style="font-size:0.82rem"><span class="k">${s.type === 'book' ? '📕' : '🔹'}</span>《${esc(s.name)}》` +
+      (okAuthor ? ' · ' + esc(s.author) : '') +
+      ` <span class="hint">第${(s.chapters || []).join('、')}章</span></div>`;
+  }).join('');
+}
+
+// ── L0 蒸馏 + 第二层 facing 面板 (2026-08-22 UI 融合) ─────────────
+async function loadL0(id) {
+  const el = document.getElementById('l0-panel');
+  if (!el) return;
+  let data;
+  try { data = await api('/books/' + id + '/l0'); }
+  catch (_) { return; }
+  if (!data.distilled) {
+    el.style.display = '';
+    el.innerHTML = '<h2>🧠 L0 分析 <span class="badge need">未蒸馏</span></h2>' +
+      '<div class="hint">该书尚未跑 L0 蒸馏（元信息/排版强调/概念/金句/引用源头提取）。' +
+      '命令行：<code>python -m app.services.book_service.l0 &lt;书路径&gt;</code></div>';
+    return;
+  }
+  const f = data.facing || {};
+  const tierIcon = { green: '🟢', yellow: '🟡', red: '🔴' };
+  const m = data.meta || {};
+  let h = `<h2>🧠 L0 分析 <span class="badge distilled">已蒸馏</span></h2>`;
+  h += `<div class="kv" style="font-size:0.82rem"><span class="k">来源</span>${esc(m.author || '-')} · ${esc(m.publisher || '-')} · ${esc(m.pub_date || '-')} · ${data.chapters} 章</div>`;
+  if (f.kernel) {
+    h += `<div class="kv"><span class="k">内核</span>${esc(f.kernel.one_liner || '-')}</div>`;
+  }
+  if (f.units && f.units.units) {
+    h += `<div class="kv"><span class="k">建议集数</span><b>${f.units.units.length} 集</b>（按内容自适应）· 单元：${f.units.units.map(u => esc(u.title)).join(' / ').slice(0, 80)}</div>`;
+  }
+  if (f.quotes && f.quotes.quotes) {
+    const g = f.quotes.quotes.filter(q => q.type === '格言型').length;
+    const s = f.quotes.quotes.length - g;
+    h += `<div class="kv"><span class="k">金句</span>${f.quotes.quotes.length} 条（格言 ${g} / 情境 ${s}）</div>`;
+  }
+  if (f.compliance) {
+    h += `<div class="kv"><span class="k">合规</span>${tierIcon[f.compliance.book_tier] || '❓'} ${esc(f.compliance.book_tier || '-')}` +
+      (f.compliance.safe_angles && f.compliance.safe_angles.length ? ` ｜安全角度：${esc(f.compliance.safe_angles.slice(0, 2).join(' / '))}` : '') + `</div>`;
+  }
+  if (f.readers && f.readers.readers) {
+    h += `<div class="kv"><span class="k">读者痛点</span>${f.readers.readers.length} 条</div>`;
+  }
+  const missing = Object.keys({ kernel: 1, units: 1, quotes: 1, compliance: 1, readers: 1 })
+    .filter(k => !f[k]);
+  if (missing.length) h += `<div class="hint">待跑面向：${missing.join(' / ')}（python -m app.services.book_service.facing）</div>`;
+  el.style.display = '';
+  el.innerHTML = h;
+}
+
+// 建书后台准备轮询 (2026-08-23): L0/facing 未就绪时后台跑, 这里轮询到 ready 后刷新
+async function pollPrep(id) {
+  let st;
+  try { st = await api('/books/' + id + '/prep'); } catch (_) { return; }
+  if (!st || st.status !== 'preparing') return;
+  toast('蒸馏准备中: ' + (st.note || st.step || 'L0/facing…'), 'info');
+  const t = setInterval(async () => {
+    let s;
+    try { s = await api('/books/' + id + '/prep'); } catch (_) { return; }
+    if (s.status === 'ready') {
+      clearInterval(t);
+      toast('蒸馏完成 ✓', 'success');
+      await loadBook(id); loadL0(id); loadSources(id);
+    } else if (s.status === 'error') {
+      clearInterval(t);
+      toast('蒸馏失败: ' + (s.note || ''), 'error');
+    }
+  }, 5000);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const id = new URLSearchParams(location.search).get('book_id');
-  if (id) await loadBook(id);
+  if (id) { await loadBook(id); loadL0(id); loadSources(id); pollPrep(id); }
   else $('#page-content').innerHTML = '<div class="hint">未指定书，从 <a href="/web/books.html">书库</a> 选择</div>';
 });

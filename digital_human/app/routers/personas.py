@@ -48,6 +48,7 @@ def create_persona(body: PersonaCreate, db: Session = Depends(get_db)):
         fixed_opening=body.fixed_opening,
         fixed_ending=body.fixed_ending,
         host_id=body.host_id,
+        target_reader=body.target_reader,
     )
     db.add(persona)
     db.commit()
@@ -90,9 +91,9 @@ def update_persona(persona_id: str, body: PersonaUpdate, db: Session = Depends(g
             raise HTTPException(status_code=404, detail=f"Host {body.host_id} not found")
         persona.host_id = body.host_id or None
 
-    # 品牌/开结尾: 显式传值直接写入 (空串经 Pydantic 为 None, 不覆盖已有值);
+    # 品牌/开结尾/读者画像: 显式传值直接写入 (空串经 Pydantic 为 None, 不覆盖已有值);
     # 传 null 用于显式清空 (与 Host PUT 语义一致)
-    for attr in ("brand_name", "stamp_name", "brand_tag", "fixed_opening", "fixed_ending"):
+    for attr in ("brand_name", "stamp_name", "brand_tag", "fixed_opening", "fixed_ending", "target_reader"):
         val = getattr(body, attr)
         if val is not None:
             setattr(persona, attr, val or None)

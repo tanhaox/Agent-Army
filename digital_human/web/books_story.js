@@ -13,10 +13,10 @@ function renderPage(b) {
   const any_draft = eps.some(e => e.status === 'draft');
   const EP_BADGE = { pending:'待生成', generating:'生成中', draft:'待确认', confirmed:'已确认' };
 
-  // 总纲表格 (内联编辑): 列 = 集/主题/对应书中内容/核心任务/承上/启下/概念
+  // 总纲表格 (内联编辑): 列 = 集/主题/对应书中内容/核心任务/卖点/承上/启下/概念
   const roadmapTable = eps.length ? `
     <table id="roadmap-table"><tr>
-      <th>集</th><th>主题</th><th>对应书中内容</th><th>核心任务</th><th>承上</th><th>启下</th><th>概念</th>
+      <th>集</th><th>主题</th><th>对应书中内容</th><th>核心任务</th><th>卖点</th><th>承上</th><th>启下</th><th>概念</th>
     </tr>${eps.map(e => {
       const r = e.roadmap || {};
       return `<tr>
@@ -24,6 +24,7 @@ function renderPage(b) {
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="主题">${esc(r.主题 || '')}</td>
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="对应书中内容">${esc(r.对应书中内容 || '')}</td>
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="核心任务">${esc(r.核心任务 || '')}</td>
+        <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="卖点">${esc(r.卖点 || '')}</td>
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="承上">${esc(r.承上 || '')}</td>
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="启下">${esc(r.启下 || '')}</td>
         <td class="td-edit" contenteditable="true" data-ep="${e.ep}" data-field="概念">${esc((r.概念 || []).join('、'))}</td>
@@ -54,14 +55,18 @@ function renderPage(b) {
     </div>`;
   }).join('');
 
+  // 系列预告 (E1 导读带整体系列介绍, 2026-08-22)
+  const seriesPreview = eps.find(e => e.ep === 1)?.roadmap?.系列预告 || '';
+
   $('#page-content').innerHTML = `
     <div class="panel">
       <h2>步骤3 · 多集总纲 <span class="badge">${roadmap_ok ? eps.length + ' 集' : ''}</span> <span class="hint">单元格可直接编辑，加入你的个人视角</span></h2>
+      ${seriesPreview ? `<div class="kv" style="background:rgba(30,58,138,0.15);padding:0.5rem 0.75rem;border-radius:6px;margin-bottom:0.6rem;font-size:0.85rem">📺 <b>系列预告</b>：${esc(seriesPreview)}</div>` : ''}
       ${roadmapTable}
       <div class="toolbar" style="margin-top:0.8rem">
-        <button class="sm" style="${roadmap_ok ? '' : 'background:#16a34a'}" onclick="run('roadmap', this)" ${s3_ok || roadmap_ok ? '' : 'disabled title="需先完成【确认1】"'}>生成总纲 (pro, ~1-3min)</button>
+        <button class="sm secondary" onclick="syncStoryL0()" title="从蒸馏 facing-units 自动编排总纲">🔄 同步蒸馏</button>
         ${roadmap_ok ? `<button class="sm" style="background:#16a34a" onclick="saveRoadmap()">💾 保存修改</button>` : ''}
-        <button class="sm warn" onclick="run('confirm-roadmap', this)" ${roadmap_ok ? '' : 'disabled title="需先生成总纲"'}>确认2 → 进入逐集</button>
+        <button class="sm warn" onclick="run('confirm-roadmap', this)" ${roadmap_ok ? '' : 'disabled title="需先生成总纲（蒸馏后自动）"'}>确认2 → 进入逐集</button>
       </div>
     </div>
 
@@ -88,6 +93,16 @@ function renderPage(b) {
     </div>`;
 
   if (eps.length) loadProducePersonas(inp.persona_id);
+}
+
+// 2026-08-22: 总纲自动编排 — 从蒸馏 facing-units 生成 (免手动"生成总纲")
+async function syncStoryL0() {
+  if (!BOOKS.cur) return;
+  try {
+    const r = await api('/books/' + BOOKS.cur.id + '/auto-fill', { method: 'POST' });
+    toast((r.auto_filled || []).join('、') || '已同步（无新增）', 'success');
+    await loadBook(BOOKS.cur.id);
+  } catch (e) { toast('同步失败: ' + e.message, 'error'); }
 }
 
 // ── 人设下拉 (复用 writing.js loadHosts + checkPersonaLock 模式, 2026-08-20) ──

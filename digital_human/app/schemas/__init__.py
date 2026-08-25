@@ -28,6 +28,9 @@ from .articles import (
 from .assets import (
     ImportFolderRequest,
     MaterialAssetOut,
+    PexelsImportItem,
+    PexelsImportRequest,
+    PexelsOnlineSearchRequest,
     PersonaCreate,
     PersonaOut,
     PersonaUpdate,
@@ -134,6 +137,7 @@ __all__ = [
     "VideoAssetOut", "VideoAssetUpdate", "VideoAssetPreferenceRequest",
     "TaggingRunRequest", "TaggingProgressOut",
     "ImportFolderRequest",
+    "PexelsImportItem", "PexelsImportRequest", "PexelsOnlineSearchRequest",
     "ResolveItem", "ResolveResponse", "ResolveRequest", "MaterialAssetOut",
     "PersonaCreate", "PersonaUpdate", "PersonaOut",
     # format

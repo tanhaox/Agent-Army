@@ -152,8 +152,13 @@ def indextts_tts(
     emo_vector: list[float] | None = None,
     emo_alpha: float = 1.0,
     emo_audio_prompt: Path | str | None = None,
+    duration_factor: float = 1.0,
 ) -> Path:
-    """调 IndexTTS2 api_server (7862) /v1/tts. 响应是 wav bytes, 持久化到 output_path."""
+    """调 IndexTTS2 api_server (7862) /v1/tts. 响应是 wav bytes, 持久化到 output_path.
+
+    duration_factor (2026-08-25): IndexTTS2.5 语速控制 (0.5-2.0, 时长系数 <1 加速);
+    旧版 IndexTTS2 服务忽略该字段, 向后兼容.
+    """
     if master_audio is None or not master_audio.exists():
         raise RuntimeError(
             f"indextts requires master_audio_path, got {master_audio}"
@@ -162,6 +167,7 @@ def indextts_tts(
         text, master_audio, master_text, master_style, do_sample, top_p,
         top_k, temperature, max_text_tokens_per_segment, seed,
         use_emo_text, emo_text, emo_vector, emo_alpha, emo_audio_prompt,
+        duration_factor=duration_factor,
     )
     audio_bytes = _fetch_indextts_audio(base_url, payload)
     if not audio_bytes or len(audio_bytes) < 44:
@@ -186,6 +192,7 @@ def _build_indextts_payload(
     emo_vector: list[float] | None = None,
     emo_alpha: float = 1.0,
     emo_audio_prompt: Path | str | None = None,
+    duration_factor: float = 1.0,
 ) -> dict[str, Any]:
     payload = {
         "text": text,
@@ -201,6 +208,8 @@ def _build_indextts_payload(
         "use_emo_text": use_emo_text,
         "emo_text": emo_text,
         "emo_alpha": emo_alpha,
+        # IndexTTS2.5 语速 (2026-08-25): 旧版服务 pydantic 忽略未知字段, 安全透传
+        "duration_factor": duration_factor,
     }
     if emo_vector is not None:
         payload["emo_vector"] = emo_vector

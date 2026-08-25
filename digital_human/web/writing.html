@@ -9,6 +9,7 @@
 <body>
   <nav>
     <div class="logo">Pipeline<span>Studio</span></div>
+    <a href="/web/books.html">拆书</a>
     <a href="/web/index.html">新闻线索</a>
     <a href="/web/writing.html" class="active">文字加工</a>
     <a href="/web/audio.html">音频加工</a>
@@ -69,14 +70,14 @@
           <label>LLM 模型</label>
           <select id="rewrite-model" style="width:100%;padding:0.4rem 0.6rem;font-size:0.82rem;">
             <option value="flash">Flash（快）</option>
-            <option value="pro">Pro（强）</option>
+            <option value="pro" selected>Pro（强）</option>
           </select>
         </div>
         <div style="flex:0 0 140px;">
           <label>视频画幅</label>
           <select id="rewrite-format" style="width:100%;padding:0.4rem 0.6rem;font-size:0.82rem;">
-            <option value="portrait" selected>竖屏 9:16</option>
-            <option value="landscape">横屏 16:9</option>
+            <option value="portrait">竖屏 9:16</option>
+            <option value="landscape" selected>横屏 16:9</option>
             <option value="square">方形 1:1</option>
           </select>
         </div>

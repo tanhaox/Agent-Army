@@ -145,6 +145,12 @@ def _do_tts(job_id: str):
             query = query.filter(Segment.selected_for_host == True)
             segments = query.order_by(Segment.host_order).all()
 
+            # 段数据快照 (2026-08-25): 必须在下方 status=running 的 db.commit() 之前提取。
+            # commit 令 ORM expire; TTS 长任务 (GPU 冷启动+逐段合成) 期间若文稿被保存,
+            # _reparse_segments 删旧建新行, 旧对象 refresh 不到行 → "Segment has been
+            # deleted" → job 卡 failed 且 0 段完成 (audio 线实测)。之后全程只用纯数据。
+            seg_pairs: list[tuple[str, str]] = [(s.id, s.text) for s in segments]
+
             if not segments:
                 job.status = "failed"
                 job.error_message = "No segments to synthesize"
@@ -157,6 +163,41 @@ def _do_tts(job_id: str):
             db.commit()
 
             tts = get_tts()
+
+            # ── 情绪标注 (2026-08-25 从爆品改造拆出, 移至生成音频时刻) ──
+            # 单一事实源: 用与 TTS 完全同源的文本现场标注 → 不存在"改稿后旧标注
+            # 错配"窗口 (此前靠改稿清空+异步重跑兜)。失败落 calm 平滑降级。
+            # 耗时 ~10-30s, 藏在 TTS 引擎冷启动 (~2min) 里零感知。
+            emotion_segments: list | None = None
+            from ..services.pinyin_fix import apply_pinyin_marks
+            from ..services.boost_service import annotate_emotions, _parse_emotion_annotations
+            tts_text = apply_pinyin_marks("\n".join(t for _, t in seg_pairs))
+            _publish(job_id, {"type": "tts_service", "message": "情绪标注中…"})
+            try:
+                persona_name = "老谭"
+                if script and script.host:
+                    persona_name = (
+                        getattr(script.host, "stamp_name", None) or script.host.name
+                    ) or "老谭"
+                # 赛道注入 (2026-08-25): geo=地缘严肃分析 → serious 主基调
+                # (满篇惊讶在 2.5 上=逗逼感, 实测毁人设)
+                _track = (script.article.track if script and script.article else None) or None
+                raw_anno = annotate_emotions(tts_text, persona_name, track=_track)
+                parsed = _parse_emotion_annotations(raw_anno) if raw_anno else None
+                if parsed:
+                    emotion_segments = parsed
+                    script.emotion_annotations = raw_anno  # 写回供前端/诊断显示
+                    db.commit()
+                    _publish(job_id, {"type": "tts_service",
+                                      "message": f"情绪标注完成: {len(parsed)} 段"})
+                else:
+                    _publish(job_id, {"type": "tts_service",
+                                      "message": "情绪标注解析失败, 本篇走默认 calm"})
+            except Exception as exc:
+                logger.warning("[tts %s] emotion annotate failed, fallback calm: %s",
+                               job_id[:8], exc)
+                _publish(job_id, {"type": "tts_service",
+                                  "message": "情绪标注失败, 本篇走默认 calm"})
 
             def _progress(completed: int, total: int, text: str | None, audio_file: AudioFile | None = None) -> None:
                 job.completed_segments = completed
@@ -190,8 +231,8 @@ def _do_tts(job_id: str):
             manager = get_gpu_service_manager()
             with manager.session(backend, status_callback=_svc_notify):
                 result = tts.generate(
-                    job, segments, voice, progress_callback=_progress,
-                    emotion_annotations=getattr(script, "emotion_annotations", None),
+                    job, seg_pairs, voice, progress_callback=_progress,
+                    emotion_annotations=emotion_segments,  # 现场标注 (同源文本), 不读库
                 )
             # audio_files rows are already committed one-by-one inside _progress,
             # so no add_all here — a second add would double-insert (P0-1 related).

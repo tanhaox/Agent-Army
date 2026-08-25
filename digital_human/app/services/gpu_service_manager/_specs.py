@@ -3,7 +3,7 @@
 内置默认 (可被 config/app.yaml `tts_services.<key>` 覆盖):
   fish     E:/AI/tts/fish-speech       tools/api_server.py  :7860  /v1/health
   f5       E:/AI/tts/F5-TTS            f5-tts_infer-gradio  :7861  /
-  indextts E:/AI/tts/index-tts-windows api_server.py        :7862  /health
+  indextts E:/AI/tts/index-tts2.5     api_server.py        :7862  /health
   comfyui  E:/AI/ComfyUI_windows_portable main.py           :8188  /system_stats
 """
 from __future__ import annotations
@@ -44,19 +44,21 @@ _BUILTIN_SPECS: dict[str, dict[str, Any]] = {
         "env": {},
     },
     "indextts": {
-        "display_name": "IndexTTS2",
+        # 2026-08-24 升级 IndexTTS2.5 (多语言 zh/en/ja/es/ar + duration_factor + bf16 提速).
+        # 旧版回滚: cwd/env 改回 index-tts-windows 即可, 端口与接口不变.
+        "display_name": "IndexTTS2.5",
         "base_url": "http://127.0.0.1:7862",
         "health_path": "/health",
-        "cwd": "E:/AI/tts/index-tts-windows",
+        "cwd": "E:/AI/tts/index-tts2.5",
         "command": [
             ".venv/Scripts/python.exe", "api_server.py",
             "--port", "7862", "--host", "127.0.0.1",
         ],
-        # 与 启动_api_server.bat 一致: 清 PYTHONPATH + HF 镜像
+        # 与 api_server 内部一致: 清 PYTHONPATH + HF 镜像
         "env": {
             "PYTHONPATH": "",
             "HF_ENDPOINT": "https://hf-mirror.com",
-            "HF_HOME": "E:/AI/tts/index-tts-windows/.huggingface",
+            "HF_HOME": "E:/AI/tts/index-tts2.5/.huggingface",
         },
     },
     "comfyui": {

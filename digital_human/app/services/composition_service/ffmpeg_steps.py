@@ -148,7 +148,11 @@ def _loudnorm_measure(video_path: Path, target_lufs: float) -> dict[str, Any]:
     from app.services.proc_registry import register_subprocess, unregister_subprocess
 
     is_win = platform.system() == "Windows"
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if is_win else 0
+    # CREATE_NO_WINDOW (2026-08-22): ffmpeg 控制台程序, 缺它会从服务器进程 spawn 弹 cmd 窗口
+    creation_flags = (
+        subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        if is_win else 0
+    )
     proc = subprocess.Popen(
         cmd1,
         stdout=subprocess.PIPE,
@@ -167,6 +171,7 @@ def _loudnorm_measure(video_path: Path, target_lufs: float) -> dict[str, Any]:
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                     capture_output=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
                 proc.kill()

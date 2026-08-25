@@ -530,6 +530,9 @@ async function uploadPPT() {
     fd.append('file', file);
     if (ctx.book_id) fd.append('book_id', ctx.book_id);
     if (ctx.ep_index) fd.append('ep_index', ctx.ep_index);
+    // 2026-08-22: 前端选的音色传入 PPT 产线 (此前固定用书账号音色静姐)
+    const voiceId = document.getElementById('voice-select').value;
+    if (voiceId) fd.append('voice_id', voiceId);
     const resp = await fetch(API + '/ppt/upload', { method: 'POST', body: fd });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));

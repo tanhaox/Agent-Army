@@ -121,19 +121,32 @@ const KIND_BADGE = { essence: ['精华', ''], full: ['全书', 'need'], distille
 const EP_BADGE = { pending:'待生成', generating:'生成中', draft:'待确认', confirmed:'已确认' };
 
 async function loadBooks() {
-  BOOKS_LIST = (await api('/books')).books;
+  // 2026-08-22: 并发取 book-sources, 建"已蒸馏"映射 (绿标签判定)
+  const [bRes, srcRes] = await Promise.all([
+    api('/books'),
+    api('/book-sources').catch(() => ({ sources: [] })),
+  ]);
+  BOOKS_LIST = bRes.books;
+  const _bsrc = srcRes.sources || [];
+  const _bBase = fn => String(fn || '').replace(/\.蒸馏/, '').replace(/\.(txt|md|epub)$/i, '').replace(/\(zhihailib\.com\)/i, '').trim();
+  const _distilled = new Set(_bsrc.filter(s => s.kind === 'distilled').map(s => _bBase(s.filename)));
+  const _clean = t => String(t || '').replace(/\(zhihailib\.com\)/i, '').trim();  // 屏蔽 (zhihailib.com) 只显书名
   const JOB = { created:'待补全', input_review:'待确认输入', roadmap_review:'待确认总纲', writing:'逐集写作中', done:'全部完成', failed:'失败' };
+  const TIER_ICON = { green: '🟢', yellow: '🟡', red: '🔴' };  // 安全评级颜色图标 (2026-08-22)
   $('#book-list').innerHTML = BOOKS_LIST.map(b => {
     const eps = b.episodes || [];
     const nConf = eps.filter(e => e.status === 'confirmed').length;
     const prog = b.progress || { done: [false,false,false,false,false], current: 1 };
     const nDone = prog.done.filter(Boolean).length;
     const dots = prog.done.map(d => `<span class="dot ${d ? 'on' : ''}"></span>`).join('');
+    // 已蒸馏: source_path 指向蒸馏 或 书名匹配到蒸馏 txt
+    const hasDistill = (b.source_path && b.source_path.includes('蒸馏'))
+      || _distilled.has(_bBase(_clean(b.book_title)));
     return `
     <div class="book-card" onclick="location.href='/web/books_content.html?book_id=${b.id}'">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem">
-        <h3 style="margin:0 0 0.4rem">《${esc(b.book_title)}》 <span class="badge">${JOB[b.status] || b.status}</span></h3>
-        <button class="sm secondary" onclick="event.stopPropagation();deleteBook('${b.id}','${esc(b.book_title)}')" style="flex-shrink:0" title="删除本书">删除</button>
+        <h3 style="margin:0 0 0.4rem">${TIER_ICON[b.tier] || ''}《${esc(_clean(b.book_title))}》 <span class="badge">${JOB[b.status] || b.status}</span>${hasDistill ? '<span class="badge distilled">已蒸馏</span>' : ''}${b.l0_distilled ? '<span class="badge l0">L0</span>' : ''}</h3>
+        <button class="sm secondary" onclick="event.stopPropagation();deleteBook('${b.id}','${esc(_clean(b.book_title))}')" style="flex-shrink:0" title="删除本书">删除</button>
       </div>
       <div class="kv"><span class="k">作者</span>${esc(b.author || '-')}</div>
       <div class="kv"><span class="k">进度</span>${nDone}/5 步 <span class="mini-dots">${dots}</span> ${eps.length ? `· 逐集已确认 ${nConf}/${eps.length}` : '· 未生成总纲'}</div>
@@ -153,14 +166,21 @@ async function loadLib() {
   const srcs = r.sources || [];
   _libSrcs = srcs;
   // 按书名去 .蒸馏 后缀分组: {书名: [source,...]}
-  const base = fn => fn.replace(/\.蒸馏/, '').replace(/\.(txt|md|epub)$/i, '');
+  // 2026-08-22: base 同时去 (zhihailib.com) — full 文件名带域名后缀、蒸馏不带,
+  // 不去会导致"已蒸馏"的书匹配不上 → 仍显示可蒸馏按钮
+  const base = fn => fn.replace(/\.蒸馏/, '').replace(/\.(txt|md|epub)$/i, '').replace(/\(zhihailib\.com\)/i, '').trim();
+  // 2026-08-22: 屏蔽 (zhihailib.com) 后缀只显书名
+  const clean = n => String(n || '').replace(/\(zhihailib\.com\)/i, '').trim();
+  // 蒸馏状态全集 (可蒸馏判定用), 但蒸馏 txt 文档本身不再显示
+  const distilledBases = new Set(srcs.filter(s => s.kind === 'distilled').map(s => base(s.filename)));
+  // 2026-08-22: 书库只列"全书" (full) — 精华(essence)/蒸馏 文档不再显示
+  const visible = srcs.filter(s => s.kind === 'full');
   const groups = {};
-  srcs.forEach(s => { (groups[base(s.filename)] = groups[base(s.filename)] || []).push(s); });
-  // 可蒸馏判定: 复用后端逻辑 (full 形态且无 .蒸馏)
-  const isDistillable = s => s.kind === 'full' && !srcs.some(x =>
-    x.filename !== s.filename && x.kind === 'distilled' && base(x.filename) === base(s.filename));
+  visible.forEach(s => { (groups[base(s.filename)] = groups[base(s.filename)] || []).push(s); });
+  // 可蒸馏判定: full 形态且无 .蒸馏
+  const isDistillable = s => s.kind === 'full' && !distilledBases.has(base(s.filename));
 
-  // 组排序: 组内最新 mtime 降序 (新书/新蒸馏置顶); 记录组级信息
+  // 组排序 (2026-08-22): 未蒸馏置顶 / 已蒸馏沉底, 同类按 mtime 降序 — 自然分两类, 阅读方便
   const FOLD_MS = 30 * 24 * 3600 * 1000;  // 30 天折叠阈值
   const rows = Object.entries(groups).map(([name, list]) => {
     const maxMtime = Math.max(...list.map(s => s.mtime || 0));
@@ -169,34 +189,45 @@ async function loadLib() {
     // 有可蒸馏任务 → 不折叠 (新任务需可见); 否则超 30 天折叠
     const stale = !distillable && (Date.now() / 1000 - maxMtime) > FOLD_MS / 1000;
     return { name, list, maxMtime, hasFull, distillable, stale };
-  }).sort((a, b) => b.maxMtime - a.maxMtime);
+  }).sort((a, b) => {
+    const ad = distilledBases.has(a.name) ? 1 : 0;  // 已蒸馏 → 1 (沉底)
+    const bd = distilledBases.has(b.name) ? 1 : 0;
+    if (ad !== bd) return ad - bd;                   // 未蒸馏(0) 在前
+    return b.maxMtime - a.maxMtime;
+  });
 
   const nDistillable = rows.filter(x => x.distillable).length;
-  $('#lib-panel').innerHTML = `<h2>书库 (${rows.length} 本<span class="hint"> · ${nDistillable} 待蒸馏</span>)</h2>` +
+  const nDistilled = rows.filter(x => distilledBases.has(x.name)).length;
+  $('#lib-panel').innerHTML = `<h2>书库 (${rows.length} 本<span class="hint"> · ${nDistillable} 待蒸馏 · ${nDistilled} 已蒸馏</span>)</h2>` +
     rows.map(g => {
       const badges = g.list.map(s => {
         const [label, cls] = KIND_BADGE[s.kind] || ['?', ''];
         return `<span class="badge ${cls}">${label}</span>`;
       }).join('');
+      // 2026-08-22: 该书有蒸馏 txt → "全书"等 badge 后加绿色"已蒸馏"标签
+      const hasDistill = distilledBases.has(g.name);
       const sizeTxt = g.list.map(s => `${(s.size/1024).toFixed(0)}KB`).join(' / ');
       const previewBtn = g.list.find(s => s.kind !== 'full')
         ? `<button class="sm secondary" onclick="previewSrc('${esc(g.list[0].filename)}')">预览</button>` : '';
       const distillBtn = g.distillable
-        ? `<button class="sm" style="background:#7c3aed" data-distill="${esc(g.name)}">🔬 蒸馏</button>` : '';
+        ? `<button class="sm" style="background:#7c3aed" onclick="event.stopPropagation();distillSingleByTitle('${esc(g.name)}')">🔬 蒸馏</button>`
+        : (hasDistill ? `<button class="sm secondary" onclick="event.stopPropagation();distillSingleByTitle('${esc(g.name)}')" title="已蒸馏，点击重新蒸馏(覆盖现有蒸馏稿)">🔄 重蒸馏</button>` : '');
       const ts = g.maxMtime ? new Date(g.maxMtime * 1000).toLocaleDateString('zh-CN') : '';
+      const disp = clean(g.name);  // 显示名去 (zhihailib.com), data-distill 仍用原始 name 反查 path
       if (g.stale) {
         // 折叠: 单行, 点开展开
         return `<div class="lib-group stale">
           <div class="lib-group-head" onclick="this.parentElement.classList.toggle('open')">
-            <span class="fold-arrow">▶</span> <b>《${esc(g.name)}》</b> ${badges}
+            <span class="fold-arrow">▶</span> <b>《${esc(disp)}》</b> ${badges}${hasDistill ? '<span class="badge distilled">已蒸馏</span>' : ''}
             <span class="hint">${sizeTxt} · ${ts}</span>
+            <span style="flex:1"></span>${distillBtn}
           </div>
           <div class="lib-group-body">${previewBtn}</div>
         </div>`;
       }
       return `<div class="lib-group">
         <div class="lib-group-head">
-          <b>《${esc(g.name)}》</b> ${badges}
+          <b>《${esc(disp)}》</b> ${badges}${hasDistill ? '<span class="badge distilled">已蒸馏</span>' : ''}
           <span class="hint">${sizeTxt} · ${ts}</span>
           <span style="flex:1"></span>${distillBtn}${previewBtn}
         </div>
@@ -207,12 +238,15 @@ async function loadLib() {
 
 async function distillSingleByTitle(name) {
   // 从缓存源列表反查可蒸馏的 path (full 形态且无 .蒸馏)
-  const base = fn => fn.replace(/\.蒸馏/, '').replace(/\.(txt|md|epub)$/i, '');
+  // 2026-08-22: base 同步去 (zhihailib.com), 与 loadLib 分组键一致
+  const base = fn => fn.replace(/\.蒸馏/, '').replace(/\.(txt|md|epub)$/i, '').replace(/\(zhihailib\.com\)/i, '').trim();
   const cand = _libSrcs.find(s => s.kind === 'full' && base(s.filename) === base(name) + '');
   if (!cand) { toast('未找到该书源', 'error'); return; }
   const path = cand.path;
   const pname = name.replace(/ \([^)]*\)$/, '');  // 去 (zhihailib.com) 后缀显示
-  if (!confirm(`🔬 对《${pname}》启动本地蒸馏？\n\n将拉起本地 Gemma (占 17G 显存)，对该书全文蒸馏出精华稿。\n结束后自动释放显存。`)) return;
+  // 2026-08-22: 已蒸馏 → 提示覆盖
+  const hasD = _libSrcs.some(x => x.kind === 'distilled' && base(x.filename) === base(cand.filename));
+  if (!confirm(`🔬 对《${pname}》启动本地蒸馏？\n\n将拉起本地 Gemma (占 17G 显存)，对该书全文蒸馏出精华稿。\n结束后自动释放显存。${hasD ? '\n\n⚠️ 已存在蒸馏稿，重新蒸馏将覆盖！' : ''}`)) return;
   try {
     await api('/distill/start-single?path=' + encodeURIComponent(path), { method: 'POST' });
     toast(`《${pname}》蒸馏已启动`, 'info');
@@ -230,6 +264,26 @@ async function previewSrc(fn) {
   $('#pv-title').textContent = '预览: ' + r.filename;
   $('#pv-body').textContent = r.preview;
   $('#preview-modal').classList.add('active');
+}
+
+// 源头书选题池 (2026-08-23): 书库缺失的源头书 → 下一批拆书候选
+async function loadPool() {
+  const el = $('#pool-panel');
+  if (!el) return;
+  let pool = [];
+  try { pool = (await api('/book-sources/pool')).pool || []; } catch (_) {}
+  if (!pool.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  $('#pool-body').innerHTML = pool.map(c => {
+    const cited = (c.cited_by || []).map(x => `《${esc(x.book)}》第${(x.chapters || []).join('、')}章`).join(' · ');
+    const okAuthor = c.author && !['未知', '未提及', '无', '不详'].includes(c.author);
+    return `<div class="lib-group"><div class="lib-group-head">
+      <b>《${esc(c.name)}》</b>
+      ${okAuthor ? `<span class="hint">${esc(c.author)}</span>` : ''}
+      <span class="badge">★${c.weight} 被引用</span>
+      <span class="hint">${cited}</span>
+    </div></div>`;
+  }).join('');
 }
 
 function renderLog(events) {
@@ -343,18 +397,40 @@ async function startDistill() {
   pollDistill();
 }
 
-async function loadAll() { await loadLib(); await loadBooks(); await pollDistill(); }
+// 源头书引用榜 (2026-08-23): 跨书汇总 → 被反复引用的源头 = 有分量
+async function loadLeaderboard() {
+  const el = $('#board-panel');
+  if (!el) return;
+  let board = [];
+  try { board = (await api('/book-sources/leaderboard')).board || []; } catch (_) {}
+  if (!board.length) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const icon = c => c.type === 'book' ? '📕' : (c.type === 'person' ? '👤' : '🔹');
+  $('#board-body').innerHTML = board.map(c => {
+    const okAuthor = c.author && !['未知', '未提及', '无', '不详'].includes(c.author);
+    const cited = (c.cited_by || []).map(x => `《${esc(x.book)}》第${(x.chapters || []).join('、')}章`).join(' · ');
+    const libTag = c.in_library === true ? '<span class="badge distilled">已入库</span>'
+      : (c.in_library === false ? '<span class="badge need">可拆</span>' : '');
+    return `<div class="lib-group"><div class="lib-group-head">
+      <b>${icon(c)}《${esc(c.name)}》</b>
+      ${okAuthor ? `<span class="hint">${esc(c.author)}</span>` : ''}
+      <span class="badge">★${c.weight}</span>${libTag}
+      <span class="hint">${cited}</span>
+    </div></div>`;
+  }).join('');
+}
+
+async function loadAll() { await loadLib(); await loadBooks(); await loadPool(); await loadLeaderboard(); await pollDistill(); }
 
 async function openCreate() {
-  const srcs = (await api('/book-sources')).sources;
-  // 只列已蒸馏的书 (kind=distilled), value 存蒸馏文件路径, 显示书名 (去 .蒸馏 后缀)
-  const distilled = srcs.filter(s => s.kind === 'distilled');
+  // 2026-08-23: 只列全流程蒸馏完成的书 (蒸馏txt + L0 + 全面向), 防「建书空数据」
+  const r = (await api('/book-sources/ready')).ready || [];
   const sel = $('#c-title');
-  if (!distilled.length) {
-    sel.innerHTML = '<option value="">— 暂无已蒸馏的书，请先蒸馏 —</option>';
+  if (!r.length) {
+    sel.innerHTML = '<option value="">— 暂无全流程蒸馏完成的书 —</option>';
   } else {
-    sel.innerHTML = '<option value="">— 选择已蒸馏的书 —</option>' +
-      distilled.map(s => `<option value="${esc(s.path)}">${esc(s.book_title.replace(/\.蒸馏$/, ''))}</option>`).join('');
+    sel.innerHTML = '<option value="">— 选择全流程蒸馏完成的书 —</option>' +
+      r.map(s => `<option value="${esc(s.path)}">${esc(s.book_title)}</option>`).join('');
   }
   $('#create-modal').classList.add('active');
 }
@@ -364,22 +440,37 @@ function closeModal(id) { $(id).classList.remove('active'); }
 async function createBook() {
   const sel = $('#c-title');
   const srcPath = sel.value;
-  if (!srcPath) return alert('请选择已蒸馏的书');
+  if (!srcPath) return alert('请选择全流程蒸馏完成的书');
+  const btn = document.querySelector('#create-modal .modal button[onclick="createBook()"]');
+  if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
   // 书名: 从蒸馏文件路径取文件名去 .蒸馏.txt
   const fn = srcPath.split(/[\\/]/).pop() || '';
   const bookTitle = fn.replace(/\.蒸馏(\.txt)?$/, '') || '未命名';
+  // 2026-08-23: 作者/卖点自动从蒸馏带出, 弹窗只留商品链接(挂车)+卖点可选
   const body = {
     book_title: bookTitle.replace(/[《》]/g, ''),
-    author: $('#c-author').value || null,
     cart_url: $('#c-cart').value || null,
     selling_point: $('#c-sell').value || null,
-    source_path: srcPath,  // 蒸馏精华文件 = L0 来源, 核心字段提取锚定
-    source_url: $('#c-url').value || null,
+    source_path: srcPath,
   };
-  const r = await api('/books', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  closeModal('create-modal');
-  toast(`已创建《${bookTitle}》, 基于蒸馏精华`, 'success');
-  location.href = '/web/books_content.html?book_id=' + r.id;
+  try {
+    const r = await api('/books', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    closeModal('create-modal');
+    const prep = r.prep || {};
+    if (prep.status === 'preparing') {
+      // 后台跑 L0/facing, books_content 页轮询 /prep 等就绪
+      toast(`《${bookTitle}》已建，正在蒸馏 L0/facing（后台）…`, 'info');
+    } else if (prep.note) {
+      toast(`《${bookTitle}》已建，但${prep.note}`, 'error');
+    } else {
+      toast(`《${bookTitle}》已建 + 自动填充 ${(prep.filled || []).join('、') || '无'}`, 'success');
+    }
+    location.href = '/web/books_content.html?book_id=' + r.id;
+  } catch (e) {
+    toast('创建失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '创建'; }
+  }
 }
 
 // 删除拆书项目: 二次确认 (破坏性, 级联删 6 集 + 产线产物)

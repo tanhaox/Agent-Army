@@ -37,6 +37,8 @@ class DirectorJob(Base):
         String(32), default="planning"
     )  # planning / executing / reviewing / completed / failed
     plan_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # 剪映草稿名 (2026-08-25): J 线导出成功后记录, 详情页常驻显示, 剪映里按名找草稿
+    jy_draft_name: Mapped[str | None] = mapped_column(String(256), default=None)
     total_duration_sec: Mapped[float | None] = mapped_column(Float, default=None)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)
 

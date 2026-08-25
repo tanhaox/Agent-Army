@@ -130,6 +130,8 @@ def wash_subtitle_text(text: str) -> str:
     0. 剥情绪标签 (2026-08-17 bug 修复): manifest 文本带 P5 内联标签 [calm]/[serious]/
        [confident]/[surprised] 等 — 不剥则标签进字幕, 且 latin 正则把 calm/serious
        当专名抓成强调大字+挂音效 (三重污染), 必须第一道工序清除
+    0.5 剥拼音标注 (2026-08-25): <行|HANG2>/<铟|YIN1> (词表纠音 + 稿内手写临时标注)
+       只给 TTS 读, 字幕/观众可见文本一律还原裸字
     1. 'X点Y' 数字读法 → 'X.Y' (四点六 → 4.6)
     2. 拉丁字母后紧跟的中文数字 → 阿拉伯 + 空格 (Grok四点六/Grok4.6 → Grok 4.6;
        Mythos五 → Mythos 5)
@@ -137,7 +139,10 @@ def wash_subtitle_text(text: str) -> str:
     """
     import re
 
+    from .pinyin_fix import strip_pinyin_marks
+
     t = text.strip()
+    t = strip_pinyin_marks(t)
     t = re.sub(r"\[[a-zA-Z]+\]\s*", "", t)  # 剥 [calm]/[serious] 等情绪标签
     t = _num_to_cn_pattern(t)
     # latin + 中文数字 → latin + 空格 + 阿拉伯
@@ -376,11 +381,12 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     # ── HF 边界转场音 (v3): 画面切换同帧挂 title_in 族 whoosh, 纯音频不碰文字 ──
     n_boundary = 0
     _title_in_avail = [s for s in _TITLE_IN_SOUNDS if sound_path(s)]
-    for i, (ws, _we) in enumerate(hf_windows):
+    for i, (ws, we) in enumerate(hf_windows):
         if not _title_in_avail:
             break
+        # v2: whoosh 不超过其文字窗长 — 长音效跨窗会与后续字幕音效抢轨
         if attach_sound(script, "sfx", _title_in_avail[i % len(_title_in_avail)],
-                        ws / _US, volume=0.9):
+                        ws / _US, volume=0.9, max_sec=(we - ws) / _US):
             n_boundary += 1
 
     # ── text 轨: 逐段字幕 (洗 TTS 读法 + 超长断句, 时长按字数比例分配) ──
@@ -609,9 +615,9 @@ def _jy_font(resource_id: str):
 
 
 # 剪映商用字体 (2026-08-21): pyJianYingDraft FontType 覆盖 797 个剪映授权字体, 配置化可随时换
-_JY_FONT_BADGE = _jy_font("6740439840254333443")  # 思源黑体 (用户定稿, 非枚举)
+_JY_FONT_BADGE = draft_mod.FontType.孤月体       # 系列角标 (2026-08-22 用户定稿: 孤月体/5/70%)
 _JY_FONT_CAPTION = draft_mod.FontType.孤月体      # 台词字幕 (2026-08-21 用户定稿)
-_JY_FONT_DISCLAIMER = draft_mod.FontType.Aa全息黑体  # 免责小字: 清晰可读
+_JY_FONT_DISCLAIMER = draft_mod.FontType.孤月体   # 免责 (2026-08-22 用户定稿: 孤月体/5/70%)
 
 # 字幕样式 (2026-08-21 用户定稿): 孤月体 / 字号5 / 奶油色 #F9F3C4 / 居中
 _SUBTITLE_COLOR = (0.976, 0.953, 0.769)  # #F9F3C4
@@ -620,10 +626,16 @@ _SUBTITLE_ALIGN = 1  # 0=左 1=中 2=右
 #   transform_y=-0.75 (与 export_job_draft 一致, 用户认可该底部字幕位)。
 #   v2 曾按错误符号推断改 +0.477 → 字幕跑屏顶; 本版以 director 实测值定稿。
 _CAPTION_TRANSFORM_Y = -0.75
-# 免责: 用户定稿剪映面板(1022, 993) 右上 → (1022/2474, 993/1958)=(0.413, 0.507)
-_DISCLAIMER_TRANSFORM = (0.413, 0.507)
-# 角标: 用户定稿剪映面板(-479, 962) 左上 → (-479/2474, 962/1958)=(-0.194, 0.491), 字号5
-_BADGE_TRANSFORM = (-0.194, 0.491)
+# 免责: 剪映面板读数(498, 961) 右上 → transform = 读数/画布全尺寸(1920, 1080)
+# = (0.259, 0.890)。2026-08-22 v2: 此前误除剪映显示面板尺寸(2474×1958),
+# 读数仍按 transform×画布(1920,1080) 显示 → 免责跑偏到(386,530)。实测校准:
+# transform(0.201,0.491) → 剪映读数(386,530) = transform×(1920,1080)。
+_DISCLAIMER_TRANSFORM = (0.259, 0.890)
+# 角标: 剪映面板读数(-961, 961) 左上 → transform = (-961/1920, 961/1080)=(-0.501, 0.890)
+_BADGE_TRANSFORM = (-0.501, 0.890)
+# 免责/角标缩放 (2026-08-22 用户定稿: 剪映缩放 70%)
+_BADGE_SCALE = 0.7
+_DISCLAIMER_SCALE = 0.7
 
 # 白字可读性机制 (2026-08-21): 字幕/角标/免责是白字, 白底页面会看不见 →
 # 加深色描边 + 阴影, 任何底色都清晰. 描边/阴影可独立调.
@@ -1098,8 +1110,11 @@ def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int
             trange(start_us, max(dur_us, 1000)),
             font=_JY_FONT_DISCLAIMER,
             border=_DISCLAIMER_BORDER,
-            style=draft_mod.TextStyle(size=2.8, color=(1.0, 1.0, 1.0), alpha=0.85),
-            clip_settings=ClipSettings(transform_x=_DISCLAIMER_TRANSFORM[0], transform_y=_DISCLAIMER_TRANSFORM[1]),
+            style=draft_mod.TextStyle(size=5.0, color=(1.0, 1.0, 1.0), alpha=0.85),
+            clip_settings=ClipSettings(
+                transform_x=_DISCLAIMER_TRANSFORM[0], transform_y=_DISCLAIMER_TRANSFORM[1],
+                scale_x=_DISCLAIMER_SCALE, scale_y=_DISCLAIMER_SCALE,
+            ),
         )
         script.add_segment(seg, "disclaimer")  # 独立轨, 防与底部字幕同轨重叠
         return 1
@@ -1130,7 +1145,10 @@ def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indi
                 border=_BADGE_BORDER,
                 shadow=_BADGE_SHADOW,
                 style=draft_mod.TextStyle(size=_SUBTITLE_SIZE, color=(1.0, 1.0, 1.0), alpha=0.95),
-                clip_settings=ClipSettings(transform_x=_BADGE_TRANSFORM[0], transform_y=_BADGE_TRANSFORM[1]),  # 左上角
+                clip_settings=ClipSettings(
+                    transform_x=_BADGE_TRANSFORM[0], transform_y=_BADGE_TRANSFORM[1],  # 左上角
+                    scale_x=_BADGE_SCALE, scale_y=_BADGE_SCALE,
+                ),
             )
             seg.add_animation(draft_mod.TextLoopAnim.闪烁)  # 呼吸闪烁
             script.add_segment(seg, "badge")
@@ -1203,10 +1221,15 @@ def export_element_draft(
         if pg_audio and Path(pg_audio).exists():
             a_dur = float(_probe_duration(pg_audio) or 0)
             if a_dur > 0:
-                script.add_segment(
-                    draft_mod.AudioSegment(str(pg_audio), trange(start_us, int(round(a_dur * _US)))),
-                    "voice")
-                n_audio += 1
+                # 2026-08-22: 实测 a_dur 与 timings 窗口微差 (采样率/舍入) 逐页累积,
+                # 靠后的页 a_dur 超出本页窗口 → 与下一段重叠 → 草稿导出崩
+                # (SegmentOverlap)。段长钳制到本页窗口 min(a_dur, dur_us), 绝不重叠。
+                seg_us = min(int(round(a_dur * _US)), dur_us)
+                if seg_us >= 100000:  # ≥0.1s 才放 (防 0 时长段)
+                    script.add_segment(
+                        draft_mod.AudioSegment(str(pg_audio), trange(start_us, seg_us)),
+                        "voice")
+                    n_audio += 1
 
         # base 层 → main 轨
         base_layer = next((l for l in layers if l["kind"] == "base"), None)
@@ -1437,12 +1460,16 @@ def sound_path(name: str) -> Path | None:
 
 
 def attach_sound(script: Any, track_name: str, sound_name: str, at_sec: float,
-                 volume: float = 1.0) -> bool:
+                 volume: float = 1.0, max_sec: float | None = None) -> bool:
     """往草稿音效轨挂一个音效. 缺文件时记日志返回 False (不阻塞导出).
 
-    重叠防护 (2026-08-20, ID-054): sfx 轨既有 HF 转场音(whoosh) 又有字幕音效,
-    各自独立触发, 时长未对齐会互相覆盖 (字幕音效 4.27s 盖住 0.47s whoosh)。
-    挂载前查目标轨已有段, 新音效时长截断到不与任何已挂段重叠 (保底 0.1s)。
+    重叠防护 v2 (2026-08-25, 修 400 "New segment overlaps"): sfx 轨既有 HF
+    转场音(whoosh) 又有字幕音效, 各自独立触发。v1 (ID-054) 只把新段结尾
+    截到不越过既有段起点, 漏了"新起点落在既有段内部"(长 whoosh 跨入字幕
+    音效帧) → pyJianYingDraft SegmentOverlap 400。v2 双向:
+      1. 新起点落在既有段内部 → 整段跳过 (推迟挂载破坏同帧语义, 不如不放)
+      2. 既有段起点落在新段内部 → 截断新段结尾 (v1 原逻辑)
+    max_sec: 可选时长上限 (如 HF 边界音不超过其文字窗长度)。
     """
     p = sound_path(sound_name)
     if not p:
@@ -1451,15 +1478,23 @@ def attach_sound(script: Any, track_name: str, sound_name: str, at_sec: float,
     dur = _probe_duration(p) or 1.0
     start_us = int(round(at_sec * _US))
     end_us = start_us + int(round(dur * _US))
-    # 查目标轨已挂段, 找最小可用的结束边界 (不越过任何已挂段的起点)
+    # 查目标轨已挂段: 双向重叠防护
     try:
         track = script.tracks[track_name]
         for seg in track.segments:
-            seg_start = seg.target_timerange.start
-            if start_us < seg_start < end_us:
-                end_us = seg_start
+            s0 = seg.target_timerange.start
+            if s0 <= start_us < seg.target_timerange.end:
+                logger.info(
+                    "[jy_export] 音效 %s 起点 %.2fs 落在既有段 [%d,%d] 内, 跳过",
+                    sound_name, at_sec, s0, seg.target_timerange.end,
+                )
+                return False
+            if start_us < s0 < end_us:
+                end_us = s0
     except (KeyError, AttributeError):
         pass  # 轨道不存在/无法访问 → 保持原时长
+    if max_sec is not None:
+        end_us = min(end_us, start_us + int(round(max_sec * _US)))
     if end_us - start_us < 100_000:  # <0.1s 无意义, 跳过
         logger.info("[jy_export] 音效 %s 与已挂段重叠过密, 跳过 (%.2fs)", sound_name, at_sec)
         return False

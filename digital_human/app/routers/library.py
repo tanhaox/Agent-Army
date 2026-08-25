@@ -14,6 +14,8 @@ from app.database import get_db
 from app.models import VideoAsset, VideoOutput
 from app.schemas import (
     ImportFolderRequest,
+    PexelsImportRequest,
+    PexelsOnlineSearchRequest,
     VideoAssetOut,
     VideoAssetPreferenceRequest,
     VideoAssetUpdate,
@@ -242,3 +244,141 @@ def delete_output(output_id: str, remove_file: bool = True, db: Session = Depend
     db.delete(o)
     db.commit()
     return {"status": "ok", "deleted": output_id}
+
+
+# ── P线在线搜索 (2026-08-25): 素材库页独立于本地搜索的在线入口 ──
+# 与本地搜索的分工: 本地搜索只查 VideoAsset 表; 在线搜索直连 Pexels API
+# 返回元数据预览 (不下载), 用户勾选后调 /pexels/import 走 P线既有
+# 下载/打标/编号/去重/配额/质检链路入库.
+
+
+@router.post("/pexels/search")
+def pexels_online_search(body: PexelsOnlineSearchRequest, db: Session = Depends(get_db)):
+    """在线搜索 Pexels — 只返回预览元数据, 不消耗下载配额."""
+    from app.services.pexels_service import PexelsAuthError, pexels_service
+    from app.services.pexels_service._db import get_dislike_pexels_ids
+    from app.services.pexels_service._http import search_pexels
+
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(400, "query 不能为空")
+    try:
+        pexels_service._ensure_config()
+        videos = search_pexels(
+            pexels_service, query,
+            per_page=body.per_page, page=body.page, orientation=body.orientation or "any",
+        )
+    except PexelsAuthError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[library/pexels] online search failed: %s", exc)
+        raise HTTPException(502, f"Pexels 搜索失败: {exc}")
+
+    # 已入库/已拉黑标记 — 前端置灰防重复下载
+    existing_ids = {
+        pid for (pid,) in db.query(VideoAsset.pexels_id).filter(
+            VideoAsset.pexels_id.isnot(None)
+        ).all()
+    }
+    dislike_ids = get_dislike_pexels_ids(db)
+    items = []
+    for v in videos:
+        pid = v.get("id")
+        if not pid:
+            continue
+        items.append({
+            "pexels_id": pid,
+            "duration": v.get("duration"),
+            "width": v.get("width"), "height": v.get("height"),
+            "image": v.get("image"),
+            "url": v.get("url"),
+            "photographer": (v.get("user") or {}).get("name") or "",
+            "in_library": pid in existing_ids,
+            "disliked": pid in dislike_ids,
+            "video": v,  # 完整 dict 回传, import 时免二次拉取
+        })
+    return {"items": items, "query": query}
+
+
+@router.post("/pexels/import")
+def pexels_import(body: PexelsImportRequest, db: Session = Depends(get_db)):
+    """勾选入库 — 复用 P线下载链路: 配额闸门 + 厌恶拉黑 + pexels_id 去重 + 异步质检."""
+    from app.services.pexels_service import PexelsAuthError, pexels_service
+    from app.services.pexels_service._candidates import _widths_sorted
+    from app.services.pexels_service._db import (
+        get_dislike_pexels_ids,
+        get_quota_used_today,
+        increment_quota,
+        register_video_asset,
+        upsert_asset,
+    )
+    from app.services.pexels_service._http import download
+    from app.services.pexels_service.types import PexelsResolveError
+    from app.services.pexels_utils import pick_video_file
+
+    try:
+        pexels_service._ensure_config()
+    except PexelsAuthError as exc:
+        raise HTTPException(503, str(exc))
+
+    cfg = get_config().defaults
+    materials_dir = cfg.materials_dir
+    quota = cfg.pexels_daily_download_quota
+    remaining_quota = max(0, quota - get_quota_used_today(db))
+    dislike_ids = get_dislike_pexels_ids(db)
+    tags_str = ",".join(t.strip().lower() for t in body.query.split() if t.strip())
+
+    imported: list[dict] = []
+    skipped: list[dict] = []
+    for req_item in body.items:
+        video = req_item.video or {}
+        pid = video.get("id")
+        if not pid:
+            continue
+        if pid in dislike_ids:
+            skipped.append({"pexels_id": pid, "reason": "dislike 拉黑"})
+            continue
+        existing_va = db.query(VideoAsset).filter(VideoAsset.pexels_id == pid).first()
+        if existing_va is not None:
+            skipped.append({"pexels_id": pid, "reason": "已在素材库", "asset_no": existing_va.asset_no})
+            continue
+        if remaining_quota <= 0:
+            skipped.append({"pexels_id": pid, "reason": "今日下载配额已用尽"})
+            continue
+        chosen = pick_video_file(video.get("video_files", []), _widths_sorted(body.prefer_resolution or cfg.pexels_preferred_resolution))
+        if chosen is None or not chosen.get("link"):
+            skipped.append({"pexels_id": pid, "reason": "无可用视频流"})
+            continue
+        try:
+            local_path = download(pexels_service, chosen["link"], pid, materials_dir)
+        except PexelsResolveError as exc:
+            logger.warning("[library/pexels] download failed pexels_id=%s: %s", pid, exc)
+            skipped.append({"pexels_id": pid, "reason": f"下载失败: {exc}"})
+            continue
+        if local_path is None:
+            skipped.append({"pexels_id": pid, "reason": "下载失败"})
+            continue
+
+        from app.models import MaterialAsset
+        file_size = Path(local_path).stat().st_size
+        increment_quota(db, pid, file_size)
+        existing_ma = db.query(MaterialAsset).filter(MaterialAsset.pexels_id == pid).first()
+        upsert_asset(db, existing_ma, video, chosen, chosen["link"], local_path, tags_str)
+        register_video_asset(db, video, chosen, local_path, tags_str, raw_query=body.query)
+        db.commit()
+        remaining_quota -= 1
+        # 下载即质检 async 模式 (与 P线一致): 后台补打分, 不阻塞页面
+        try:
+            if getattr(cfg, "pexels_download_quality_gate", True):
+                from app.services.asset_quality import enqueue_quality_check
+                enqueue_quality_check(local_path)
+        except Exception:  # noqa: BLE001
+            logger.warning("[library/pexels] quality enqueue failed: %s", local_path)
+        va = db.query(VideoAsset).filter(VideoAsset.pexels_id == pid).first()
+        imported.append({"pexels_id": pid, "asset_no": va.asset_no if va else None})
+
+    logger.info(
+        "[library/pexels] import done: %d imported, %d skipped, quota_remaining=%d",
+        len(imported), len(skipped), remaining_quota,
+    )
+    return {"imported": imported, "skipped": skipped, "quota_remaining": remaining_quota}

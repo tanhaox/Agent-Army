@@ -18,7 +18,19 @@ __all__ = [
     "parse_new_row",
 ]
 
-_VALID_WORKFLOWS = {"host", "broll_pexels", "broll_local", "hf_chart", "hf_title", "mixed_host_broll"}
+# hf_opening/hf_quote 执行层已支持 (slot_executor 路由齐全), 此前漏在解析白名单外:
+# LLM 输出 hf_quote 会被 map_visual_type_to_workflow 洗成 hf_chart/broll_pexels,
+# 而 render_config 里的 quote 数据只有 _execute_hf_quote 认识 → 渲染空卡 (2026-08-25).
+_VALID_WORKFLOWS = {
+    "host", "broll_pexels", "broll_local", "hf_chart", "hf_title",
+    "mixed_host_broll", "hf_opening", "hf_quote",
+}
+
+
+def _quote_workflow(material_source: dict[str, Any], params: dict[str, Any] | None = None) -> bool:
+    """render_config 是否为引用卡数据形态 (quote/hot/name/role) → 该走 hf_quote."""
+    rc = (material_source or {}).get("render_config") or (params or {}).get("render_config") or {}
+    return isinstance(rc, dict) and bool(rc.get("quote")) and not rc.get("chart")
 
 
 def map_visual_type_to_workflow(visual_type: str, material_source: dict[str, Any]) -> str:
@@ -34,6 +46,9 @@ def map_visual_type_to_workflow(visual_type: str, material_source: dict[str, Any
     if mtype == "dynamic":
         if "标题" in category or "title" in category.lower():
             return "hf_title"
+        # 引用卡数据 (quote 键) → hf_quote, 而非默认 hf_chart (2026-08-25)
+        if _quote_workflow(material_source):
+            return "hf_quote"
         return "hf_chart"
     if (material_source or {}).get("file"):
         return "broll_local"
@@ -131,6 +146,13 @@ def parse_new_row(row: dict[str, Any], total_duration: float) -> DirectorSlotPla
     params = dict(row.get("params") or {})
     params.setdefault("intensity", map_intensity(row.get("intensity", "medium")))
     params.setdefault("emotion", map_emotion(row.get("emotion", "rising")))
+
+    # 数据感知校正 (2026-08-25): LLM 按提示词第 193 行格式填了 quote/hot/name/role,
+    # 但 workflow 误写成 broll/hf_title (提示词 200 行强化仍偶发不遵守) → 强制 hf_quote,
+    # 否则 quote 数据没有消费者: broll 拿整句话当搜索词必失败, hf_chart 渲染空卡.
+    if workflow in ("broll_pexels", "broll_local", "hf_title", "hf_chart") and \
+            _quote_workflow(row.get("material_source") or {}, params):
+        workflow = "hf_quote"
 
     return DirectorSlotPlan(
         slot_index=slot_index,

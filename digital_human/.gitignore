@@ -65,3 +65,6 @@ data/jy_bgm/
 
 # 地缘提示词优化循环批次(成稿与豆包点评, 本地)
 data/geo_batch/
+
+# 迁移备份目录 (纯代码快照, 不入库)
+digital_human_2/

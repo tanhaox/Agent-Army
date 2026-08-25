@@ -154,6 +154,16 @@ def create_job(body: DirectorJobCreate, db: Session = Depends(get_db)):
     audio_id = _resolve_audio_id(script, body.audio_file_id)
     _validate_audio(db, audio_id)
 
+    # 画幅覆盖 (2026-08-24): 显式传入且与现值不同 → 写回 script (单源真理),
+    # 后续 plan/slot 渲染/合成/J线全部继承新画幅; 相同则不动。
+    if body.video_format and body.video_format != script.video_format:
+        logger.info(
+            "[director] script %s video_format %s -> %s (create 覆盖)",
+            body.script_id, script.video_format, body.video_format,
+        )
+        script.video_format = body.video_format
+        db.commit()
+
     # 三态语义 (2026-08-07): None=全启用 / ""=全关 / "c,p"=部分启用, 与落库列 job.pipelines 一致。
     enabled: set[str] | None = _decode_pipelines(body.pipelines)
 

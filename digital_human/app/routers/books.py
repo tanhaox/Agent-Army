@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -182,6 +183,45 @@ async def distill_events(request: Request):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+@router.get("/book-sources/leaderboard")
+def source_leaderboard():
+    """源头书引用榜 (2026-08-23): 跨书汇总所有源头书/理论/人物, 按被引用广度排序.
+
+    数据来自 reference_library.leaderboard. book 类型标注 in_library (已入库/可拆候选).
+    """
+    from app.services.book_service.reference_library import leaderboard
+    return {"board": leaderboard()}
+
+
+@router.get("/book-sources/ready")
+def ready_book_sources():
+    """全流程蒸馏完成的书 (2026-08-23): 蒸馏txt + L0 章节 + 全 facing — 新书下拉只列这些.
+
+    防「只有蒸馏txt就建书 → auto_fill 静默空」; 未就绪的书需先跑蒸馏/L0/facing.
+    """
+    from app.services.book_service import distiller
+    from app.services.book_service.reader import clean_book_title
+    out = []
+    for s in scan_book_sources(get_config().defaults.book_source_dir):
+        if distiller.DISTILL_SUFFIX not in s["filename"]:
+            continue
+        title = clean_book_title(Path(s["filename"]).stem).replace(".蒸馏", "").strip()
+        if _book_l0_ready(title):
+            out.append({"path": s["path"], "book_title": title})
+    return {"ready": out}
+
+
+@router.get("/book-sources/pool")
+def source_pool():
+    """源头书选题池 (2026-08-23): 已拆书引用的源头书里, 书库缺失者 → 下一批拆书候选.
+
+    数据来自 reference_library.selection_pool (data/l0/selection_pool.json).
+    排序: 被几本书引用 → 引用章数; 候选补电子书进 book_source_dir 即可蒸馏开拆.
+    """
+    from app.services.book_service.reference_library import selection_pool
+    return {"pool": selection_pool()}
+
+
 @router.get("/book-sources/preview")
 def book_source_preview(filename: str):
     """书库文件预览 (前 1500 字). 路径限定 book_source_dir 防穿越."""
@@ -192,6 +232,120 @@ def book_source_preview(filename: str):
     return {"filename": filename, "preview": p.read_text(encoding="utf-8", errors="replace")[:1500]}
 
 
+def _book_l0_ready(book_title: str) -> bool:
+    """全流程蒸馏就绪: L0 章节 + 全部 facing 面向齐 (新书下拉/建书判定)."""
+    from app.services.book_service.facing import FACINGS
+    from app.services.book_service.l0 import _l0_dir
+    d = _l0_dir(book_title)
+    if not (d / "l0-chapter-v1.json").exists():
+        return False
+    return all((d / "facing" / spec["file"]).exists() for spec in FACINGS.values())
+
+
+def _book_source_file(book_title: str) -> str | None:
+    """书库里该书名对应的原始书源 (epub/txt/md, 排除蒸馏txt) — L0 要全文本.
+
+    目录名来自 clean_book_title(文件名stem), 蒸馏txt 会带 .蒸馏 后缀派生错目录, 故必须用原书.
+    """
+    from app.services.book_service.reader import clean_book_title, scan_book_sources
+    root = Path(get_config().defaults.book_source_dir)
+    base = book_title.strip("《》 \t\r\n")
+    for s in sorted(scan_book_sources(root), key=lambda x: -(x.get("mtime") or 0)):
+        if s.get("ext") not in ("txt", "md", "epub"):
+            continue
+        if "蒸馏" in s["filename"]:
+            continue
+        clean = clean_book_title(Path(s["filename"]).stem).strip("《》 \t\r\n")
+        if clean == base or (len(base) >= 4 and base in clean) or (len(clean) >= 4 and clean in base):
+            return s["path"]
+    return None
+
+
+def _prepare_l0_facing(book_title: str) -> dict:
+    """补跑缺失的 L0+facing (2026-08-23).
+
+    蒸馏txt 只表示 distiller 出过精华稿; L0/facing 是独立步骤, 缺了 auto_fill 静默空.
+    返回 {"ran":[...], "note":str|None}.
+    """
+    from app.services.book_service.facing import FACINGS, run_facings
+    from app.services.book_service.l0 import _l0_dir, run_l0
+    d = _l0_dir(book_title)
+    l0p = d / "l0-chapter-v1.json"
+    ran: list[str] = []
+    try:
+        if not l0p.exists():
+            src = _book_source_file(book_title)
+            if not src:
+                return {"ran": ran, "note": "书库找不到原始书源(epub/txt), 无法补跑 L0"}
+            run_l0(src)
+            ran.append("l0")
+        facing_dir = d / "facing"
+        missing = [name for name, spec in FACINGS.items()
+                   if not (facing_dir / spec["file"]).exists()]
+        if missing:
+            run_facings(d, facings=missing)
+            ran.append(f"facing({','.join(missing)})")
+    except Exception as exc:
+        logger.exception("[book] L0/facing 补跑失败")
+        return {"ran": ran, "note": f"补跑失败: {exc}"}
+    return {"ran": ran, "note": None}
+
+
+# ── 建书后台准备 (2026-08-23): L0+facing 未就绪时后台补跑, 前端轮询 /prep ──
+import threading as _threading
+_PREP: dict[str, dict] = {}  # book_id -> {status, step, note, ran}
+
+
+def _attach_douban(db: Session, book: BookProject) -> dict:
+    """豆瓣高赞短评+书评 → input_json.douban (2026-08-23). 秒级 HTTP, 失败静默.
+
+    短评=真实读者情绪/共识; 书评=笔记/深入分析. 搜不到的书优雅降级.
+    """
+    try:
+        from app.services.book_service.douban import book_highlights
+        r = book_highlights(book.book_title, limit=10)
+        if not r.get("subject"):
+            return {"status": "not_found"}
+        inp = dict(book.input_json or {})
+        inp["douban"] = {
+            "subject": r["subject"],
+            "comments": (r.get("comments") or [])[:10],
+            "reviews": [{"title": v.get("title", ""), "author": v.get("author", ""),
+                         "votes": v.get("votes", 0), "summary": v.get("summary", ""),
+                         "body": (v.get("body") or "")[:2000]} for v in (r.get("reviews") or [])],
+        }
+        book.input_json = inp
+        db.commit()
+        return {"status": "ok", "comments": len(inp["douban"]["comments"]),
+                "reviews": len(inp["douban"]["reviews"])}
+    except Exception as exc:
+        logger.warning("[book] 豆瓣抓取失败: %s", exc)
+        return {"status": "error", "note": str(exc)}
+
+
+def _run_prepare(book_id: str, book_title: str) -> None:
+    from app.database import _session_maker
+    try:
+        _PREP[book_id]["step"] = "l0"
+        prep = _prepare_l0_facing(book_title)
+        if prep.get("note"):
+            _PREP[book_id].update(status="error", note=prep["note"], ran=prep["ran"])
+            return
+        _PREP[book_id].update(ran=prep["ran"])
+        _PREP[book_id]["step"] = "fill"
+        with _session_maker() as db:
+            b = db.get(BookProject, book_id)
+            if b:
+                orch.auto_fill_from_l0(db, b)
+                _attach_douban(db, b)  # 2026-08-23: auto_fill 后抓豆瓣(防被 input_json 覆盖)
+        _PREP[book_id].update(status="ready", note=None)
+    except Exception as exc:
+        logger.exception("[book] 建书准备任务失败 %s", book_id)
+        _PREP[book_id].update(status="error", note=str(exc))
+    finally:
+        _PREP[book_id]["step"] = None
+
+
 @router.post("/books")
 def create_book(body: BookCreate, db: Session = Depends(get_db)):
     ensure_book_account(db)  # 幂等建书账号人设
@@ -199,7 +353,47 @@ def create_book(body: BookCreate, db: Session = Depends(get_db)):
     db.add(book)
     db.commit()
     db.refresh(book)
-    return {"id": book.id, "status": book.status}
+    # 2026-08-23: L0+facing 就绪 → 同步 auto_fill (快); 未就绪 → 后台补跑, 前端轮询 /prep
+    if _book_l0_ready(book.book_title):
+        try:
+            filled = orch.auto_fill_from_l0(db, book)
+        except Exception as exc:
+            logger.warning("[book] 创建后自动填充失败: %s", exc)
+            filled = []
+        # 作者兜底: 前端不再手填, 从 L0 meta 自动带
+        if not book.author:
+            try:
+                from app.services.book_service.l0 import _l0_dir
+                m = (json.loads((_l0_dir(book.book_title) / "l0-chapter-v1.json")
+                                 .read_text(encoding="utf-8")) or {}).get("meta") or {}
+                if m.get("author"):
+                    book.author = m["author"]
+                    db.commit()
+            except Exception:
+                pass
+        douban_res = _attach_douban(db, book)  # 2026-08-23: auto_fill 后抓豆瓣高赞
+        return {"id": book.id, "status": book.status,
+                "prep": {"status": "ready", "step": None, "note": None, "ran": [], "filled": filled},
+                "douban": douban_res}
+    _PREP[book.id] = {"status": "preparing", "step": "l0", "note": "L0/facing 蒸馏中…", "ran": []}
+    _threading.Thread(target=_run_prepare, args=(book.id, book.book_title), daemon=True).start()
+    return {"id": book.id, "status": book.status,
+            "prep": {"status": "preparing", "step": "l0", "note": "L0/facing 蒸馏中…", "ran": []}}
+
+
+@router.get("/books/{book_id}/prep")
+def book_prep(book_id: str, db: Session = Depends(get_db)):
+    """建书准备状态 (2026-08-23): preparing/l0/fill → ready|error; 前端轮询."""
+    _book_or_404(db, book_id)
+    return _PREP.get(book_id, {"status": "unknown", "step": None, "note": None, "ran": []})
+
+
+@router.post("/books/{book_id}/auto-fill")
+def auto_fill_l0(book_id: str, db: Session = Depends(get_db)):
+    """蒸馏(facing)就绪后手动触发自动填充 (幂等, 已填字段跳过)."""
+    b = _book_or_404(db, book_id)
+    filled = orch.auto_fill_from_l0(db, b)
+    return {"book_id": book_id, "auto_filled": filled}
 
 
 @router.get("/books")
@@ -208,10 +402,82 @@ def list_books(db: Session = Depends(get_db)):
     return {"books": [
         {"id": b.id, "book_title": b.book_title, "author": b.author,
          "status": b.status, "created_at": b.created_at.isoformat(),
+         # 2026-08-22: 安全评级 tier (green/yellow/red), books.html 标题前显示颜色图标
+         "tier": ((b.input_json or {}).get("risk_assessment") or {}).get("tier"),
+         # 2026-08-22: L0 蒸馏状态 (data/l0/{书名}/l0-chapter-v1.json 存在)
+         "l0_distilled": _l0_distilled(b.book_title),
          "progress": _book_progress(b),
          "episodes": [{"ep": e.ep_index, "title": e.title, "status": e.status}
                       for e in b.episodes]}
         for b in books]}
+
+
+def _l0_distilled(book_title: str) -> bool:
+    """L0 是否已蒸馏: data/l0/{书名}/l0-chapter-v1.json 存在."""
+    try:
+        from app.services.book_service.l0 import _l0_dir
+        return (_l0_dir(book_title) / "l0-chapter-v1.json").exists()
+    except Exception:
+        return False
+
+
+@router.get("/books/{book_id}/source-list")
+def book_source_list(book_id: str, db: Session = Depends(get_db)):
+    """书单体系 (2026-08-23): 本书引用的源头书/理论 → 粉丝书单/内容关联.
+
+    同源头多章引用合并章节号; 书名带副标题/书名号差异时宽松匹配 L0 的 book 字段.
+    """
+    from app.services.book_service.reference_library import book_sources, load_library
+    b = _book_or_404(db, book_id)
+    sources = book_sources(b.book_title)
+    if not sources:
+        for bk in (load_library().get("books") or {}):
+            if b.book_title in bk or bk in b.book_title:
+                sources = book_sources(bk)
+                if sources:
+                    break
+    merged: dict[str, dict] = {}
+    for s in sources:
+        nm = (s.get("name") or "").strip("《》 \t\r\n")  # L0 原始名带《》, 显示层剥掉
+        if nm in merged:
+            merged[nm]["chapters"] = sorted(set(merged[nm].get("chapters", [])) | set(s.get("chapters", [])))
+        else:
+            merged[nm] = dict(s, name=nm, chapters=list(s.get("chapters", [])))
+    return {"book_title": b.book_title, "sources": list(merged.values())}
+
+
+@router.get("/books/{book_id}/l0")
+def book_l0(book_id: str, db: Session = Depends(get_db)):
+    """L0 蒸馏 + 第二层 facing 产物摘要 (data/l0/{书名}/) — 供 UI 展示.
+
+    返回: {distilled, meta, chapters, frontmatter, facing:{kernel,units,quotes,cases,compliance,readers}}
+    """
+    b = _book_or_404(db, book_id)
+    from app.services.book_service.l0 import _l0_dir
+    d = _l0_dir(b.book_title)
+    l0_path = d / "l0-chapter-v1.json"
+    result: dict = {"distilled": l0_path.exists(), "meta": {}, "chapters": 0,
+                    "frontmatter": 0, "facing": {}}
+    if l0_path.exists():
+        try:
+            l0 = json.loads(l0_path.read_text(encoding="utf-8"))
+            result["meta"] = {k: (l0.get("meta") or {}).get(k)
+                              for k in ("author", "publisher", "pub_date")}
+            result["chapters"] = len(l0.get("chapters", []))
+            result["frontmatter"] = len(l0.get("frontmatter") or [])
+        except Exception:
+            pass
+    facing_map = {"kernel": "facing-kernel.json", "units": "facing-units.json",
+                  "quotes": "facing-quotes.json", "cases": "facing-cases.json",
+                  "compliance": "facing-compliance.json", "readers": "facing-readers.json"}
+    for name, f in facing_map.items():
+        p = d / "facing" / f
+        if p.exists():
+            try:
+                result["facing"][name] = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return result
 
 
 _STEP_LABELS = ["输入补全", "评论层+素材", "多集总纲", "逐集确认", "进产线"]

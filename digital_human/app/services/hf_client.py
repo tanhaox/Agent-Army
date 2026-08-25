@@ -15,6 +15,25 @@ class HFRenderError(RuntimeError):
     """Raised when the HF subprocess fails (non-zero exit or timeout)."""
 
 
+def _system_chrome() -> str | None:
+    """系统 Chrome GUI 程序路径 (2026-08-22: 替代 chrome-headless-shell 治弹窗).
+
+    GUI 子系统程序 spawn 时 Windows 从不创建 console 窗口; chrome-headless-shell
+    是 console 程序 → 服务器无 console 环境弹窗。返回 None 时沿用 hyperframes
+    默认 chrome-headless-shell (有弹窗但可渲染)。
+    """
+    import os
+    candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Google\Chrome\Application\chrome.exe"),
+    ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
 def render_visual(
     project_dir: Path,
     output_path: Path,
@@ -82,7 +101,29 @@ def render_visual(
     # 改用 Popen + 手动超时 + taskkill /F /T 杀进程树。
     import platform
     is_win = platform.system() == "Windows"
-    creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if is_win else 0
+    # 弹窗根因 (2026-08-22 实测): hyperframes CLI 用 Puppeteer 启动
+    # chrome-headless-shell.exe — **控制台程序**, 从无 console 的服务器进程 spawn
+    # 会新建可见 cmd 窗口 (每个 slot 一个, "完成 Slots 时疯狂跳窗")。
+    # 修复 (双层, 均已实测):
+    #   1) HYPERFRAMES_BROWSER_PATH → 系统 chrome.exe (GUI 子系统程序, spawn 从不建 console)
+    #   2) powershell -WindowStyle Hidden 隐藏 npx.cmd 层的 console
+    env = None
+    if is_win:
+        import shlex
+        chrome = _system_chrome()
+        if chrome:
+            env = dict(__import__("os").environ)
+            env["HYPERFRAMES_BROWSER_PATH"] = chrome
+        inner = " ".join(shlex.quote(str(c)) for c in cmd)
+        cmd = [
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-Command", f"& {inner}; exit $LASTEXITCODE",
+        ]
+    creation_flags = (
+        subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        if is_win else 0
+    )
 
     proc = subprocess.Popen(
         cmd,
@@ -93,6 +134,7 @@ def render_visual(
         encoding="utf-8",
         errors="replace",
         creationflags=creation_flags,
+        env=env,
     )
     # 2026-08-08: 登记到 proc_registry, 供 force-stop 按 job_id 杀整棵进程树.
     # 非 director 上下文 (visual_render 管线) 时线程无 job_id → 自动 no-op.
@@ -110,6 +152,7 @@ def render_visual(
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                     capture_output=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
                 proc.kill()

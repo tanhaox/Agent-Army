@@ -73,8 +73,30 @@ class TTSService:
             if saved and isinstance(saved, dict):
                 voice_params = saved
 
+        # IndexTTS2.5 语速默认注入 (2026-08-25): 2.5 基线比 2 慢 ~26%, 配置层校准;
+        # 音色显式配置 duration_factor 优先 (setdefault 不覆盖)。
+        if voice_params is None:
+            voice_params = {}
+        voice_params.setdefault(
+            "duration_factor", getattr(self.defaults, "indextts_duration_factor", 0.75)
+        )
+
+        # ── 段数据快照 (2026-08-25) ──
+        # TTS 是长任务 (GPU 冷启动 + 逐段合成数分钟)。期间文稿保存会 _reparse_segments
+        # 删旧建新行, 而 progress 回调的 db.commit() 令 ORM 对象 expire, 下次访问属性时
+        # refresh 不到行 → ObjectDeletedError ("Segment has been deleted", job 卡 failed).
+        # 因此: 调用方应在最后一次 db.commit() 前提取好 (id, text) 纯元组传入; 兼容直接
+        # 传 ORM Segment 的老路径 (ppt 线自建自用无并发风险) — 入口一次性提取, 之后不再触碰 ORM.
+        if segments and isinstance(segments[0], tuple):
+            seg_pairs: list[tuple[str, str]] = [(str(sid), txt) for sid, txt in segments]
+        else:
+            seg_pairs = [(s.id, s.text) for s in segments]
+
         # Build text preserving line breaks and control chars.
-        text = "\n".join(seg.text for seg in segments)
+        # 拼音纠音 (2026-08-25): 易错词 → <字|PINYIN> 标注, IndexTTS2/2.5 前端解析;
+        # 只改 TTS 输入, 文稿/字幕不受影响。替代旧的"错别字音频替换"事后补丁。
+        from .pinyin_fix import apply_pinyin_marks
+        text = apply_pinyin_marks("\n".join(t for _, t in seg_pairs))
 
         # Collect the AudioFile rows created as synthesis progresses. Each
         # completed segment yields exactly one row (via _manifest_callback),
@@ -85,11 +107,11 @@ class TTSService:
         def _manifest_callback(completed: int, total: int, text: str, manifest_seg: dict[str, Any] | None) -> None:
             if not progress_callback or not manifest_seg:
                 return
-            seg = segments[completed - 1]
+            seg_id = seg_pairs[completed - 1][0]
             file_path = output_dir / manifest_seg["file"]
             audio_file = AudioFile(
                 audio_job_id=job.id,
-                segment_id=seg.id,
+                segment_id=seg_id,
                 filename=manifest_seg["file"],
                 file_path=str(file_path),
                 duration=manifest_seg.get("duration"),
@@ -135,7 +157,11 @@ class TTSService:
             master_text=master_text,
             progress_callback=_manifest_callback,
             params=voice_params,
-            batch_max_chars=150,
+            # 句级批 (2026-08-25, 原 150): 一句一调, wav 粒度=parse_script 分句。
+            # 旧批合成(3-5 句合一次 API)是 IndexTTS2 慢速时代(RTF 1.81)的吞吐优化;
+            # 2.5 下批(150字)超服务端切分预算被按逗号再切+拼接静音(~0.5s 停顿, 006.wav
+            # 实测), 且句间韵律是机器拼接而非模型自然生成。max_chars=1 → 每行独立成批。
+            batch_max_chars=1,
             emotion_segments=emotion_segments,
         )
 

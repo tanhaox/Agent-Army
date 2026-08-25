@@ -9,6 +9,7 @@
 <body>
   <nav>
     <div class="logo">Director<span>Agent</span></div>
+    <a href="/web/books.html">拆书</a>
     <a href="/web/index.html">新闻线索</a>
     <a href="/web/writing.html">文字加工</a>
     <a href="/web/audio.html">音频加工</a>
@@ -106,6 +107,15 @@
                 <option value="0">组0 (默认)</option>
               </select>
             </div>
+            <div>
+              <label>视频画幅 (默认横屏, 以下拉为准)</label>
+              <select id="format-select">
+                <option value="portrait">竖屏 9:16</option>
+                <option value="landscape" selected>横屏 16:9</option>
+                <option value="square">方形 1:1</option>
+              </select>
+              <div id="script-fmt-hint" style="font-size:0.72rem;color:var(--text-muted);margin-top:0.2rem;"></div>
+            </div>
           </div>
           <!-- 管线开关 (2026-08-07 与流水线页 index.html 同源持久化到 localStorage) -->
           <div class="pipeline-toggles" style="display:flex;gap:1.5rem;align-items:center;margin:0.75rem 0 0 0;padding:0.6rem 0.8rem;background:var(--bg-secondary);border-radius:8px;">
@@ -141,6 +151,8 @@
             <span class="badge queued" id="detail-badge" style="margin-left:auto;"></span>
             <span id="detail-format" style="font-size:0.72rem;color:var(--text-muted);margin-left:0.5rem;"></span>
           </h3>
+          <!-- 剪映草稿名 (2026-08-25): J 线导出后常驻, 剪映里按名找 -->
+          <div id="detail-jy-draft" style="display:none;margin:-0.4rem 0 0.6rem;padding:0.4rem 0.7rem;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary);font-size:0.82rem;color:var(--text-secondary);"></div>
           <div class="stats" id="detail-stats">
             <div class="stat-card"><div class="stat-value" id="stat-total">0</div><div class="stat-label">总 Slots</div></div>
             <div class="stat-card success"><div class="stat-value" id="stat-completed">0</div><div class="stat-label">已完成</div></div>
@@ -190,6 +202,7 @@
             <button class="btn btn-danger hidden" id="btn-force-stop" onclick="forceStopJob()" title="杀掉该任务全部子进程(ffmpeg/ComfyUI/HF)并立即终止, 已完成的 slot 保留, 可稍后重试">⚠ 强制停止</button>
             <button class="btn btn-secondary btn-sm" id="btn-purge-replaced" onclick="purgeReplaced()" title="清理 fallback 链产生的旧 replaced 条目">🧹 清理已替换</button>
             <button class="btn btn-violet" id="btn-compose" onclick="composeJob()">合成视频</button>
+            <button class="btn" id="btn-script-txt" onclick="exportScriptTxt()" title="不跑合成, 单独生成稿件txt并打开合成文件夹">文稿.txt</button>
             <button class="btn btn-violet" id="btn-jy-export" onclick="exportJyDraft()" title="J线: 导出剪映草稿到剪映草稿文件夹(音画不合成, 打开剪映即可审片/调BGM/导出)">🎬 导出剪映草稿</button>
             <button class="btn btn-success" id="btn-download" onclick="downloadJob()">下载 MP4</button>
             <button class="btn btn-secondary btn-sm" id="btn-open-folder" onclick="openOutputFolder()" title="在资源管理器中打开产物文件夹">📂 打开文件夹</button>
@@ -237,6 +250,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="/web/director.js?v=7"></script>
+  <script src="/web/director.js?v=9"></script>
 </body>
 </html>

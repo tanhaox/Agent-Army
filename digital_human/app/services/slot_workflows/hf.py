@@ -16,6 +16,7 @@ from app.schemas import get_video_format_spec
 from app.services.slot_workflows.common import _pick_hf_template
 from app.services.slot_workflows.hf_chart import _normalize_chart_input
 from app.services.slot_workflows.hf_extract import _extract_hf_content
+from app.services.template_library import TEMPLATES
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,12 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
     input_data = _extract_hf_content(slot.text_context or "")
-    input_data["duration_sec"] = max(5, min(30, round(duration)))
+    # 时长夹取跟随模板 duration_sec_range (单点真理): hf-title-v2 上限 10 / hf-chart-v2
+    # 上限 12, 老 news-magazine 5-30。溢出部分由 composition _normalize_clip_duration
+    # 冻结尾帧补齐到分配时长, 音画仍同步。(2026-08-24: 原固定 [5,30] clamp 撞上
+    # hf-title-v2 schema max 10, 14.9s 的 hf_title slot 直接校验炸)
+    _lo, _hi = TEMPLATES[template_id]["duration_sec_range"]
+    input_data["duration_sec"] = max(_lo, min(_hi, round(duration)))
     # render_config 里的真实数据(如 title/metrics/chart)优先,覆盖从口播提取的结果
     _merge_render_config(input_data, render_config)
 

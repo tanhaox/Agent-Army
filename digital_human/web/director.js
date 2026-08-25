@@ -86,12 +86,16 @@ function updateSteps(status) {
 }
 
 // ── Load Scripts ──
+const _scriptMeta = {};  // script_id -> {video_format} 画幅提示用 (2026-08-25)
+const _FMT_LABELS = { portrait: '竖屏 9:16', landscape: '横屏 16:9', square: '方形 1:1' };
+
 async function loadScripts() {
   const sel = document.getElementById('script-select');
   try {
     const scripts = await fetch('/api/scripts?limit=20').then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
     sel.innerHTML = '<option value="">— 选择视频 —</option>';
     scripts.forEach(s => {
+      _scriptMeta[s.id] = { video_format: s.video_format || 'portrait' };
       const opt = document.createElement('option');
       opt.value = s.id;
       const title = (s.title || '').trim();
@@ -119,7 +123,14 @@ function syncScriptTitleInput() {
     // 下拉列表未命中时回查接口（如流水线 URL 带入的 script_id）
     fetch(`/api/scripts/${encodeURIComponent(scriptId)}`)
       .then(r => r.ok ? r.json() : null)
-      .then(s => { if (s && s.title) titleInput.value = s.title; })
+      .then(s => {
+        if (!s) return;
+        if (s.title) titleInput.value = s.title;
+        _scriptMeta[s.id] = { video_format: s.video_format || 'portrait' };
+        // 2026-08-25: 只更新提示, 不碰 format-select — 异步落地会静默覆盖用户手选
+        const fmtHint = document.getElementById('script-fmt-hint');
+        if (fmtHint) fmtHint.textContent = `脚本现值: ${_FMT_LABELS[s.video_format || 'portrait']}`;
+      })
       .catch(() => {});
   }
 }
@@ -127,6 +138,14 @@ function syncScriptTitleInput() {
 function onScriptSelect(val) {
   document.getElementById('btn-delete-script').disabled = !val;
   document.getElementById('input-script-id').value = val;
+  // 画幅 (2026-08-25 修复): 不再回写下拉 — 2026-08-24 的自动回显会把竖屏脚本
+  // 的 portrait 静默压掉用户手选, 造成"选横屏输出竖屏"。改为只读提示;
+  // 下拉默认横屏且只由用户操作, 回退/重选后选择依然生效.
+  const fmtHint = document.getElementById('script-fmt-hint');
+  if (fmtHint) {
+    const m = _scriptMeta[val];
+    fmtHint.textContent = m ? `脚本现值: ${_FMT_LABELS[m.video_format] || m.video_format}` : '';
+  }
   syncScriptTitleInput();
   if (val) {
     loadAudioFiles(val);
@@ -283,6 +302,18 @@ function renderJobDetail(job) {
   const fmtEl = document.getElementById('detail-format');
   if (fmtEl) fmtEl.textContent = fmtLabels[job.video_format] || '竖屏 9:16';
 
+  // 剪映草稿名 (2026-08-25): J 线导出后常驻显示, 剪映草稿列表按此名直接找
+  const draftEl = document.getElementById('detail-jy-draft');
+  if (draftEl) {
+    if (job.jy_draft_name) {
+      draftEl.textContent = `🎬 剪映草稿: ${job.jy_draft_name}`;
+      draftEl.title = '在剪映草稿列表顶部按此名称查找';
+      draftEl.style.display = '';
+    } else {
+      draftEl.style.display = 'none';
+    }
+  }
+
   updateSteps(job.status);
 
   const rawSlots = job.slots || [];
@@ -359,6 +390,8 @@ function renderJobDetail(job) {
   }
 
   document.getElementById('btn-compose').disabled = !hasCompleted && !isDone;
+  const btnScriptTxt = document.getElementById('btn-script-txt');
+  if (btnScriptTxt) btnScriptTxt.disabled = !hasCompleted && !isDone;
   const btnJy = document.getElementById('btn-jy-export');
   if (btnJy) btnJy.disabled = !hasCompleted && !isDone;
   document.getElementById('btn-download').disabled = !isDone;
@@ -495,9 +528,10 @@ async function createJob() {
   const pipelines = enabled.length === 0 ? '' : enabled.join(',');
 
   // 失败现场: 点击即记录本次请求参数 (后端无日志落盘时用于回溯)
+  const videoFormat = (document.getElementById('format-select') || {}).value || undefined;
   const attempt = {
     script_id: scriptId, audio_id: audioId,
-    view_group_index: viewGroupIdx, pipelines,
+    view_group_index: viewGroupIdx, pipelines, video_format: videoFormat,
     t: new Date().toISOString(),
   };
   try { localStorage.setItem('director_create_attempt', JSON.stringify(attempt)); } catch (_) {}
@@ -509,7 +543,7 @@ async function createJob() {
   try {
     const resp = await api('/jobs', {
       method: 'POST',
-      body: JSON.stringify({ script_id: scriptId, audio_file_id: audioId, view_group_index: viewGroupIdx, pipelines }),
+      body: JSON.stringify({ script_id: scriptId, audio_file_id: audioId, view_group_index: viewGroupIdx, pipelines, video_format: videoFormat }),
     });
     currentJobId = resp.job_id;
     try {
@@ -838,6 +872,8 @@ async function exportJyDraft() {
     const skipped = res.skipped_slots?.length ? ` (⚠ ${res.skipped_slots.length} 个 slot 产物缺失已跳过)` : '';
     const r9 = res.emphasis_words != null ? ` + R9编排: ${res.emphasis_words}强调字/${res.sfx_attached}音效` : '';
     toast(`🎬 草稿「${res.draft_name}」已放入剪映 (${res.video_segments}画面 + ${res.audio_segments}音频段 + ${res.text_segments}字幕)${r9}${skipped} — 打开剪映在列表顶部查看`, 'success');
+    // 2026-08-25: 导出成功 → 后端置 completed + 落草稿名; 刷新详情让状态/草稿名即时上屏
+    await selectJob(currentJobId);
   } catch (e) {
     toast('导出剪映草稿失败: ' + e.message, 'error');
   } finally {
@@ -855,6 +891,21 @@ async function openOutputFolder() {
     }
   } catch (e) {
     toast('打开文件夹失败: ' + e.message, 'error');
+  }
+}
+
+// ── 文稿.txt (2026-08-19): 合成按钮的稿件功能独立 — 不跑合成, 写洗稿.txt+开文件夹 ──
+async function exportScriptTxt() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('btn-script-txt');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/jobs/${currentJobId}/export-script-txt`, { method: 'POST' });
+    toast('文稿.txt 已生成并打开文件夹 📄', 'success');
+  } catch (e) {
+    toast('文稿.txt 生成失败: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

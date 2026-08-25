@@ -295,6 +295,25 @@ def rewrite_article(
                     # 人物即账号: persona 自带提示词模板, 覆盖请求里的 prompt_template
                     if persona.prompt_template:
                         _tpl = persona.prompt_template
+                        # 赛道校验 (2026-08-25): geo 稿被通用 persona(如"老谭"→laotan)接管会
+                        # 整链偏航 — geo 模板的合规红线/收口四拍/结构技法全丢, 还会漏进
+                        # "点赞给"类违禁句式。track 与模板族不匹配 → 强制换赛道模板。
+                        _track = (getattr(article, "track", "") or "").lower()
+                        _tpl_l = (_tpl or "").lower()
+                        if _track == "geo" and "geo" not in _tpl_l:
+                            logger.warning(
+                                "[rewrite] persona 模板 %s 与赛道 geo 不匹配, 强制切 laotan-geo",
+                                _tpl,
+                            )
+                            _publish(job_id, {"type": "rewrite_progress",
+                                              "msg": f"人设模板「{_tpl}」与地缘赛道不匹配，已自动切换 laotan-geo"})
+                            _tpl = "laotan-geo"
+                        elif _track == "tech" and "tech" not in _tpl_l and _tpl_l not in ("", "laochen_default"):
+                            logger.warning(
+                                "[rewrite] persona 模板 %s 与赛道 tech 不匹配, 强制切 laotan-tech_7layer_v2",
+                                _tpl,
+                            )
+                            _tpl = "laotan-tech_7layer_v2"
 
                 if host is None and request.host_id:
                     host = db2.query(Host).filter(Host.id == request.host_id).first()

@@ -58,6 +58,7 @@ def _ensure_audio_track(mp4_path: Path, duration_sec: float) -> bool:
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
          "stream=codec_type", "-of", "csv=p=0", str(mp4_path)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW,  # 2026-08-22: 防 cmd 弹窗
     )
     if r.returncode == 0 and r.stdout.strip():
         return False  # already has audio
@@ -76,7 +77,8 @@ def _ensure_audio_track(mp4_path: Path, duration_sec: float) -> bool:
         str(tmp),
     ]
     r2 = subprocess.run(cmd, capture_output=True, text=True,
-                        encoding="utf-8", errors="replace", timeout=300)
+                        encoding="utf-8", errors="replace", timeout=300,
+                        creationflags=subprocess.CREATE_NO_WINDOW)  # 2026-08-22: 防 cmd 弹窗
     if r2.returncode != 0:
         logger.warning("[hf] silent audio add failed: %s", r2.stderr[:300])
         return False
@@ -111,7 +113,8 @@ def _extract_frame(mp4_path: Path, png_path: Path, at_seconds: float | None, lab
         # Force UTF-8 to sidestep the Windows gbk reader-thread crash.
         r = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           timeout=20, check=False)
+                           timeout=20, check=False,
+                           creationflags=subprocess.CREATE_NO_WINDOW)  # 2026-08-22: 防 cmd 弹窗
     except subprocess.TimeoutExpired:
         logger.warning("ffmpeg %s frame extraction timed out", label)
         return False
@@ -130,6 +133,7 @@ def _read_renderer_version() -> str:
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=10, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,  # 2026-08-22: 防 cmd 弹窗
         )
         if r.returncode == 0:
             v = (r.stdout or r.stderr or "").strip().splitlines()

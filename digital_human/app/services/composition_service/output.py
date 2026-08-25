@@ -80,7 +80,9 @@ def _write_script_txt(job: Any, parent: Path) -> None:
     if not text:
         logger.warning("[compose] job %s has no script_text, skip 洗稿.txt", job.id)
         return
-    (parent / "洗稿.txt").write_text(text, encoding="utf-8")
+    from app.services.pinyin_fix import strip_pinyin_marks
+
+    (parent / "洗稿.txt").write_text(strip_pinyin_marks(text), encoding="utf-8")
 
 
 def _write_manifest_file(manifest: dict[str, Any], parent: Path) -> Path:

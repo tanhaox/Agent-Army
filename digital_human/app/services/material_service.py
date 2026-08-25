@@ -229,7 +229,9 @@ def audit_package(
     last_exc: Exception | None = None
     for attempt in range(3):
         try:
-            raw = _call(prompt, json_mode=True, max_tokens=3000, model="pro", temperature=0.2)
+            raw = _call(prompt, json_mode=True, max_tokens=8000, model="pro", temperature=0.2,
+                        enable_thinking=True)  # 2026-08-22: 大 prompt 必须 thinking 才不空响应;
+                        # thinking 的 reasoning 会占 ~5-8K tokens, max_tokens 3000 被耗尽 → content 空
             data = _extract_json(raw)
             break
         except Exception as exc:

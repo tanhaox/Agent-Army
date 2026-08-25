@@ -33,6 +33,11 @@ def _apply_manual_migrations(engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE director_jobs ADD COLUMN pipelines VARCHAR(32)"))
                 logger.info("[db] migrated: director_jobs.pipelines column added")
+            # 剪映草稿名 (2026-08-25): J 线导出成功后记录, 页面常驻显示方便剪映里找
+            if "jy_draft_name" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE director_jobs ADD COLUMN jy_draft_name VARCHAR(256)"))
+                logger.info("[db] migrated: director_jobs.jy_draft_name column added")
 
         # hosts 品牌/账号列 (2026-08-08): 账号信息挂到 Host, 洗稿选 host 后随流水线上屏
         if "hosts" in tables:

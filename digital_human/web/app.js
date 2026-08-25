@@ -119,6 +119,8 @@ async function fetchScript(scriptId) {
   // 2026-08-14: 调取已有脚本后启用生成音频按钮
   toggle('btn-audio', true);
   toggle('btn-goto-audio', true);
+  // 2026-08-22: 载入脚本即可保存编辑 (auto-load 已有脚本路径之前漏启用 btn-save-script)
+  toggle('btn-save-script', true);
   // ID-019: 刷新/跳页返回后恢复音频任务状态 (仅音频加工页)
   if (typeof restoreAudioJobs === 'function') restoreAudioJobs();
 }

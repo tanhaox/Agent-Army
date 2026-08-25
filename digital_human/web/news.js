@@ -172,10 +172,19 @@ function renderComments(decon) {
 }
 
 // ── 素材包 ──
-const LAYER_NAMES = {
+// 七层层名双轨 (2026-08-25): 跟随建稿赛道 — tech=科技七层 / geo=地缘七层(L4/L5/L6 语义不同),
+// 与后端 material_service._AUDIT_PROMPT / _AUDIT_PROMPT_GEO 的层定义保持一致。
+const LAYER_NAMES_TECH = {
   L1: '极速钩子', L2: '身份+反差', L3: '背景纵深', L4: '硬实力三张牌',
   L5: '实测修罗场', L6: '商业降维打击', L7: '价值观收割',
 };
+const LAYER_NAMES_GEO = {
+  L1: '极速钩子', L2: '身份+反差', L3: '背景纵深', L4: '硬事实牌',
+  L5: '一线细节与人物', L6: '横向对照与花边', L7: '价值观收割',
+};
+function layerNames() {
+  return (currentArticle && currentArticle.track === 'geo') ? LAYER_NAMES_GEO : LAYER_NAMES_TECH;
+}
 
 /**
  * AI 自动分析: 对当前主稿建包并跑七层覆盖审计 (无需任何人工素材).
@@ -355,8 +364,8 @@ function renderItems(items) {
     const src = it.media || (it.source_url || '').replace(/^https?:\/\//, '').split('/')[0];
     // 层归属小图标: 审计标注这条素材支撑哪些层 (title 悬浮显示层名)
     const tagChips = (it.layer_tags || [])
-      .filter(t => LAYER_NAMES[t])
-      .map(t => `<span class="layer-mini" title="${LAYER_NAMES[t]}">${t}</span>`)
+      .filter(t => layerNames()[t])
+      .map(t => `<span class="layer-mini" title="${layerNames()[t]}">${t}</span>`)
       .join('');
     div.innerHTML = `
       <span class="mtype">${typeBadge}</span>
@@ -387,7 +396,7 @@ function renderAudit(p) {
   // 七层红绿 (灰 = 不适用该内容类型)
   const layersBox = document.getElementById('audit-layers');
   layersBox.innerHTML = '';
-  Object.keys(LAYER_NAMES).forEach(lid => {
+  Object.keys(layerNames()).forEach(lid => {
     const l = audit.layers[lid] || { applicable: true, covered: false, evidence: '', gaps: '', search_queries: [] };
     const na = l.applicable === false;
     const chipClass = na ? 'na' : (l.covered ? 'ok' : 'gap');
@@ -397,7 +406,7 @@ function renderAudit(p) {
     row.innerHTML = `
       <span class="layer-chip ${chipClass}">${chipText}</span>
       <div class="layer-body">
-        <div class="layer-name">${LAYER_NAMES[lid]}${na ? ' <span style="font-size:0.7rem;color:var(--text-muted);">(不适用本篇)</span>' : ''}</div>
+        <div class="layer-name">${layerNames()[lid]}${na ? ' <span style="font-size:0.7rem;color:var(--text-muted);">(不适用本篇)</span>' : ''}</div>
         ${l.evidence ? `<div class="layer-evidence">证据: ${escapeHtml(l.evidence)}</div>` : ''}
         ${l.gaps ? `<div class="layer-gaps">${na ? '说明' : '缺口'}: ${escapeHtml(l.gaps)}</div>` : ''}
       </div>

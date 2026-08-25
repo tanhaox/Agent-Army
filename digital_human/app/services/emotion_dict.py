@@ -108,7 +108,25 @@ EMOTION_CN = {
     "calm": "平静", "serious": "严肃", "angry": "愤怒",
     "surprised": "惊讶", "happy": "高兴", "confident": "确信",
 }
+# 中→英解析 (2026-08-25 修复): P5 输出中文情绪名, 而 EMOTIONS 字典 key 是英文 —
+# 此前无人转换, tts_service 的 resolve_emotion('惊讶') KeyError 被 except 吞掉,
+# 全部情绪段静默丢弃 → TTS 恒为整篇 calm。别名表覆盖 LLM 常见同义输出。
 CN_TO_KEY = {v: k for k, v in EMOTION_CN.items()}
+CN_TO_KEY.update({
+    "沉稳": "calm", "冷静": "calm", "镇定": "calm",
+    "认真": "serious", "凝重": "serious", "揭秘": "serious",
+    "震惊": "surprised", "意外": "surprised",
+    "开心": "happy", "喜悦": "happy", "欢快": "happy", "升华": "happy",
+    "生气": "angry", "恼火": "angry",
+})
+
+
+def normalize_emotion_key(name: str) -> str:
+    """中文/英文情绪名 → EMOTIONS 字典 key。已是合法 key 原样返回; 中文查别名表;
+    未知名降级 'calm' (宁可无情绪, 不可 KeyError 整段丢弃)。"""
+    if name in EMOTIONS:
+        return name
+    return CN_TO_KEY.get(str(name).strip(), "calm")
 
 
 def resolve_emotion(

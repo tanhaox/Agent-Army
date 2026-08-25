@@ -71,6 +71,7 @@
 <body>
   <nav>
     <div class="logo">Pipeline<span>Studio</span></div>
+    <a href="/web/books.html">拆书</a>
     <a href="/web/index.html">新闻线索</a>
     <a href="/web/writing.html">文字加工</a>
     <a href="/web/audio.html">音频加工</a>
@@ -128,6 +129,13 @@
         <input type="text" id="f-opening" placeholder="例: 各位朋友大家好, 欢迎来到..." maxlength="200">
         <label>结束语</label>
         <input type="text" id="f-ending" placeholder="例: 关注我, 每天读懂财经" maxlength="200">
+      </div>
+
+      <div class="brand-box">
+        <div class="brand-title">目标读者画像（账号人设级，拆书/洗稿缺省继承）</div>
+        <label>目标读者</label>
+        <textarea id="f-reader" rows="2" placeholder="例: 对个人成长、商业规律感兴趣的普通职场人；刷抖音中长视频" maxlength="500"></textarea>
+        <div class="hint">拆书录入时不再要求人工补读者画像，自动继承此值</div>
       </div>
 
       <label>绑定账号 (host_id)</label>
@@ -260,6 +268,7 @@ function openEdit(id) {
   document.getElementById('f-tag').value = p.brand_tag || '';
   document.getElementById('f-opening').value = p.fixed_opening || '';
   document.getElementById('f-ending').value = p.fixed_ending || '';
+  document.getElementById('f-reader').value = p.target_reader || '';
   document.getElementById('f-host').value = p.host_id || '';
   document.getElementById('modal-status').textContent = '';
   document.getElementById('modal-status').className = 'status';
@@ -280,6 +289,7 @@ async function submitForm() {
     brand_tag: document.getElementById('f-tag').value.trim() || null,
     fixed_opening: document.getElementById('f-opening').value.trim() || null,
     fixed_ending: document.getElementById('f-ending').value.trim() || null,
+    target_reader: document.getElementById('f-reader').value.trim() || null,
     host_id: document.getElementById('f-host').value || null,
   };
   const st = document.getElementById('modal-status');
