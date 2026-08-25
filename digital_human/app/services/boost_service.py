@@ -271,7 +271,7 @@ calm / serious / surprised / happy / angry / sad / afraid / disgusted / melancho
 - 分 6~10 个区间，区间连续不重叠，合起来覆盖全部句子；区间边界只在语义模块切换处（背景→硬事实→人物→对照→升华）。
 - 强度档 1-7：叙述/铺垫 1-3，关键模块 4-6，全篇至多一个 7；相邻区间强度差 ≤2，形成情绪坡度。
 - 身份段（"大家好，我是XX…"前后 1-2 句）恒用主基调低档（1-2），禁止惊讶。
-- 主基调按内容气质：严肃分析（军事/政治/经济风险）以 serious 为主，惊讶只许真爆点区间（全篇≤2 个且强度≤4）；轻快叙事可用 surprised 但铺垫段 ≤3 档。
+- 主基调按内容气质：严肃分析（军事/政治/经济风险）以 serious 为主、爆点/转折区间用 surprised 起伏（强度可到 6）；轻快叙事可用 surprised 为主基调但铺垫段 ≤3 档。情绪要有坡度起伏,全篇一个情绪到底=平。
 - happy 仅用于结尾升华区间。
 
 # 输出（严格 JSON, 不要其他文字）
@@ -830,10 +830,13 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
         numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
 
         prompt = P5_SPAN_PROMPT.replace('{persona}', persona_name)
+        # geo 轻提示 (2026-08-25 v2): 此前为修 2.5"逗逼语音包"设过严厉硬规则
+        # (serious 强制 + 惊讶≤2段≤4); 引擎已回退 IndexTTS2(情绪表现力温和),
+        # 撤严厉限制恢复情绪起伏 — 只保留"身份段低调"这一条普适规则。
         if (track or "").strip().lower() == "geo":
             prompt = (
-                "【赛道硬规则 · 优先级最高】本篇为地缘/国际赛道严肃分析: 主基调必须 serious, "
-                "惊讶(surprised)全篇≤2段且强度≤4, 身份段(大家好我是XX…在不确定的时代…)serious/1-2。\n\n" + prompt
+                "【赛道提示】本篇为地缘/国际分析: 主基调 serious, 数据/事件爆点区间"
+                "可上 surprised(强度可到 6), 身份段恒低调(1-2 档)。\n\n" + prompt
             )
         prompt += f"\n\n【编号句子表（共 {len(lines)} 句）】\n" + numbered
         raw = _call(prompt, json_mode=True, max_tokens=1200)
