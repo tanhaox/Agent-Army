@@ -134,10 +134,13 @@ def _run_package_job(
                 _publish(job_id, {"type": "material_error", "package_id": pkg.id, "error": pkg.error_message})
                 return
             pkg.audit_json = audit
-            # 审计 item_tags 回填到条目 layer_tags (编号=过滤后 ok_items 顺序);
-            # item_tags 缺键容错 (2026-08-25): LLM 偶发漏输出该字段, 不应炸整包
+            # 审计 item_tags 回填到条目 layer_tags;
+            # item_numbers 映射 (2026-08-25): 精确按 item_id 查编号 — 修复旧版按
+            # ok_items 位置反推在 fetch_ok 翻转时错位; 旧包无映射退化位置反推。
+            _num_map = audit.get("item_numbers") or {}
             for i, item in enumerate(ok_items, start=1):
-                item.layer_tags = (audit.get("item_tags") or {}).get(str(i)) or None
+                n = _num_map.get(str(item.id), i)
+                item.layer_tags = (audit.get("item_tags") or {}).get(str(n)) or None
             covered = sum(1 for l in audit["layers"].values() if l["covered"])
             pkg.status = "audited"
             db2.commit()

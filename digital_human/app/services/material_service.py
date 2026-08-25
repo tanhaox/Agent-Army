@@ -167,19 +167,57 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + "…(截断)"
 
 
-def build_audit_input(article_text: str, items: list[MaterialItem], track: str = "tech") -> str:
-    """审计 prompt + 主稿 + 编号素材, 总长 cap ~30000. track 决定层集 (tech/geo)."""
+def build_audit_input(
+    article_text: str,
+    items: list[MaterialItem],
+    track: str = "tech",
+    *,
+    prev_audit: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, int]]:
+    """审计 prompt + 主稿 + 编号素材 → (prompt, item_id→编号映射).
+
+    增量模式 (2026-08-25): prev_audit 带 item_numbers 时 — 已审过的 item 只给单行
+    (编号|标题|已有层), 只有新 item 给全文 → 补搜轮 prompt 从 ~40K 降到 <8K;
+    编号沿用上一轮 (新 item 从 max+1 续), item_tags 编号跨轮稳定。
+    返回映射供调用方回填 layer_tags (修复旧版按位置反推在 fetch_ok 翻转时错位)。
+    """
+    prev_nums: dict[str, int] = {}
+    prev_tags: dict[str, Any] = {}
+    if prev_audit:
+        prev_nums = {str(k): int(v) for k, v in (prev_audit.get("item_numbers") or {}).items()}
+        prev_tags = prev_audit.get("item_tags") or {}
+    next_n = (max(prev_nums.values()) + 1) if prev_nums else 1
+    numbering: dict[str, int] = {}
+
     parts = [_audit_prompt_for(track), "", "【主稿】", _truncate(article_text, _ARTICLE_CAP)]
     used = sum(len(p) for p in parts)
-    for i, item in enumerate(items, start=1):
-        label = item.title or item.media or (item.source_url or "")[:60] or f"素材{i}"
-        chunk = f"\n\n【素材{i}】({item.source_type}|{label})\n" + _truncate(item.raw_text, _ITEM_AUDIT_CAP)
-        if used + len(chunk) > _AUDIT_TOTAL_CAP:
+    fresh_lines: list[str] = []
+    known_lines: list[str] = []
+    for item in items:
+        iid = str(item.id)
+        if iid in prev_nums:
+            n = prev_nums[iid]
+            tags = prev_tags.get(str(n)) or []
+            known_lines.append(f"{n}|{item.title or item.media or ''}|已有层={','.join(tags) or '无'}")
+        else:
+            n = next_n
+            next_n += 1
+            label = item.title or item.media or (item.source_url or "")[:60] or f"素材{n}"
+            fresh_lines.append(f"\n\n【素材{n}】({item.source_type}|{label})\n" + _truncate(item.raw_text, _ITEM_AUDIT_CAP))
+        numbering[iid] = n
+
+    if known_lines:
+        parts.append("\n\n【已审素材(上一轮已覆盖, 仅列编号与已有层 — 本轮不必重标)】\n" + "\n".join(known_lines))
+    used += sum(len(x) for x in fresh_lines)
+    for chunk in fresh_lines:
+        if used > _AUDIT_TOTAL_CAP:
             break
         parts.append(chunk)
-        used += len(chunk)
-    parts.append("\n\n【素材集合到此结束，请输出审计JSON】")
-    return "".join(parts)
+    if fresh_lines:
+        parts.append("\n\n【本轮新增素材到此结束】item_tags 只输出新增素材的编号, 已审素材沿用其已有层。")
+    else:
+        parts.append("\n\n【素材集合到此结束，请输出审计JSON】")
+    return "".join(parts), numbering
 
 
 def _normalize_layer(raw: Any) -> dict[str, Any]:
@@ -211,18 +249,24 @@ def audit_package(
       需重置走「新建素材包」。
     """
     ok_items = [it for it in items if it.raw_text and it.raw_text.strip()]
-    prompt = build_audit_input(article_text, ok_items, track=track)
+    prompt, numbering = build_audit_input(article_text, ok_items, track=track, prev_audit=prev_audit)
+    incremental = bool((prev_audit or {}).get("item_numbers"))
     if prev_audit and isinstance(prev_audit.get("layers"), dict):
         prev_lines = []
         for lid in _LAYER_IDS:
             pl = prev_audit["layers"].get(lid) or {}
             if pl:
-                prev_lines.append(f"{lid}: applicable={'true' if pl.get('applicable', True) else 'false'}")
+                prev_lines.append(
+                    f"{lid}: applicable={'true' if pl.get('applicable', True) else 'false'}"
+                    + (f", 上轮covered={'true' if pl.get('covered') else 'false'}, 上轮证据={str(pl.get('evidence') or '')[:40]}" if incremental else "")
+                )
         if prev_lines:
             prompt += (
                 "\n\n【上一轮判定 — applicable 必须与上一轮完全一致】\n"
                 + "\n".join(prev_lines)
-                + "\n(applicable 只取决于主稿内容类型, 补充素材变化不影响它; 本轮只需重新判定 covered/evidence/gaps/search_queries/item_tags)"
+                + "\n(applicable 只取决于主稿内容类型, 补充素材变化不影响它; 本轮基于新增素材重判 covered/evidence/gaps/search_queries"
+                + ("; 新增素材可能让上轮缺口变已覆盖" if incremental else "")
+                + ")"
             )
     # 重试 ×3 (2026-08-16 实测: 补搜后重审偶发 LLM JSON 解析失败 → 包卡 failed,
     # 用户被灰按钮困死; 审计是结构化输出, 一次失败重跑比让人重按划算)
@@ -262,10 +306,23 @@ def audit_package(
                 valid = [t for t in (str(x).strip() for x in tags) if t in _LAYER_IDS]
                 if valid:
                     item_tags[str(key)] = valid
+    # 增量合并 (2026-08-25): 本轮 item_tags 只收新编号, 旧编号沿用上轮
+    # (新 item 从 max+1 续号, 新编号集合可精确判定); 全量模式(无 prev)行为不变。
+    prev_tags = (prev_audit or {}).get("item_tags") or {}
+    if incremental:
+        new_numbers = {str(n) for n in numbering.values()} - {
+            str(v) for v in (prev_audit.get("item_numbers") or {}).values()
+        }
+        merged = {k: v for k, v in prev_tags.items()}
+        merged.update({k: v for k, v in item_tags.items() if k in new_numbers})
+        item_tags = merged
+    round_no = int((prev_audit or {}).get("round") or 0) + 1
     return {
         "layers": normalized,
         "item_tags": item_tags,
         "summary": str(data.get("summary") or "")[:100],
+        "item_numbers": numbering,
+        "round": round_no,
     }
 
 
