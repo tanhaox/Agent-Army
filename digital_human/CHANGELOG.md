@@ -34,6 +34,12 @@
 - **P4 加固**：首句保序护栏（精修稿开头 12 字 ≠ 原稿 → 回退，防身份段挪到第一句毁首屏标题感）+ 金句去重（收尾金句禁与中段重复）
 - **赛道-模板校验**：persona.prompt_template 覆盖时 track 匹配检查（geo 稿被通用模板静默接管 → 强制切 laotan-geo + SSE 提示）；前端选人设时模板下拉自动联动（所见即所得）
 
+### LLM 调用协议升级（全产线普查后分批落地, "LLM 只产标签/引用/增量, 代码负责拼装"）
+- **批次1 防崩护栏**：director 规划调用补 `max_tokens=8000 + response_format=json_object`（此前不设限, 长稿输出截断=JSON解析失败=job报废）；P4 上限 4000→8000；解构产物嵌 `_raw_sha` — 洗稿前原文未变直接复用（每次洗稿免一次解构 LLM）；P1/P2/P3 死代码 ARCHIVED 标注
+- **批次2 零复写协议**：① director 工序单 — 逐句 S 编号表替代 timings 全量 JSON, slot 用 `segment_refs` 引用编号（禁复写口播）, 代码三级兜底拼装 text_context（refs→旧文本→时间夹逼）, 输出 token 降 ~70%；② 素材增量审计 — 已审素材单行化（补搜轮 prompt 40K→<8K）, `item_numbers` 持久映射跨轮续号, item_tags 只收新编号+旧轮合并, layer_tags 回填改精确映射（修位置反推错位 bug）；③ 洗稿默认 max_tokens 8192
+- **批次3 修正+评审**：correct 改 patch 协议（行编号+只输出改动行, 输出降 ~85%, 未改行代码保证原样, 打字机按行模拟, 失败回退旧全稿协议）；P7 同稿 sha 缓存复用
+- 前置同款先例：P5 情绪标注 span 协议（复写全文 3000 字→句编号区间标签, flash 直跑 48s→15s）
+
 ### 工程修复包
 - **J 线导出闭环**：导出剪映草稿成功 → job reviewing→completed + `jy_draft_name` 落库常驻显示（幂等迁移 ALTER TABLE）
 - **TTS 段快照**（ObjectDeletedError 根治）：ORM Segment 对象不跨长任务持有，`_do_tts` 在最后一次 commit 前快照 `(id, text)` 纯元组
