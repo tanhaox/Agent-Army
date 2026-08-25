@@ -83,13 +83,19 @@ def _llm_plan_phase(
             model="pro",
             stream=False,
             # 护栏 (2026-08-25): 此前不设上限不设格式 — 长稿输出截断 = JSON 解析失败
-            # = 整个 job 报废; json_object 废 ``` 围栏, 8000 为 pro 输出上限防截断。
-            # (prompt 已含 "json" 字样, 满足 DeepSeek json 模式要求)
-            max_tokens=8000,
+            # = 整个 job 报废; json_object 废 ``` 围栏。max_tokens 16000: pro 的
+            # reasoning 吃 5-8K + slot 输出 2-4K, 8000 会被 reasoning 耗光 →
+            # content 空 → JSONDecodeError char 0 (15:49 failed 实测); 16000 实测可用。
+            max_tokens=16000,
             response_format={"type": "json_object"},
         )
         if is_cancelled and is_cancelled():
             raise PlanCancelled
+        if not raw_output or not raw_output.strip():
+            # 空响应防御 (2026-08-25): reasoning 耗尽预算等场景 content 为空 —
+            # 直接给可读错误而非 JSONDecodeError char 0, 排障一眼定位。
+            raise RuntimeError(
+                "LLM 返回空内容 (reasoning 可能耗尽 max_tokens, 当前 16000) — 请重试")
         plan = parse_llm_plan(
             raw_output,
             alignment["segment_timings"],
