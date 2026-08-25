@@ -169,13 +169,21 @@ def build_director_prompt(
     """
     prompt = load_director_prompt()
     # 无出镜模式: C 线禁用 (用户只开 P/H 或全关) 时, 直接在系统提示词层移除 host 规则
+    # 注: strip_host_mode 会改变前缀 — 两种模式各自的缓存前缀依然稳定
     if enabled_pipelines is not None and "c" not in enabled_pipelines:
         prompt = strip_host_mode(prompt)
-    prompt = prompt.replace("[在此处粘贴原文标题]", (script_title or "").strip())
-    prompt = prompt.replace("[在此处粘贴口播脚本]", script_text.strip())
+
+    # ── 前缀缓存 (2026-08-26): 静态模板(21KB)原样作前缀, 不再中部 replace —
+    # 旧版三处占位符替换(标题/口播/素材清单都在模板中部)令前缀从第一字符就变,
+    # DeepSeek 自动前缀缓存恒 miss(实测 cached_tokens=0)。动态内容全部 append
+    # 到尾部【动态输入】区, 同一静态前缀跨任务复用 → 输入费用降 ~60%。
+    dynamic_parts: list[str] = []
+    dynamic_parts.append(f"\n\n# 【动态输入】(本条消息末尾, 编号对应上方输入0-4说明)\n\n"
+                         f"## 输入0:原文标题\n{(script_title or '（无标题）').strip()}")
+    dynamic_parts.append(f"\n\n## 输入1:口播脚本(全文, 每行一句, 含 || 停顿标记)\n{script_text.strip()}")
 
     # 画幅上下文 (2026-08-01): 导演规划必须知道当前横/竖/方, 才能按画幅选构图词
-    prompt += _format_frame_spec(video_format)
+    dynamic_parts.append(_format_frame_spec(video_format))
 
     # 输入2 (ID-034): catalog_mode 判定。config 未加载(脚本直接调用)时用默认 "vocabulary";
     # 显式 "full" 才注入全量 catalog, 其余(默认/未知)一律走词表包。
@@ -201,36 +209,42 @@ def build_director_prompt(
     else:
         catalog = material_catalog or mock_material_catalog()
         catalog_json = json.dumps(catalog, ensure_ascii=False, indent=2)
-    prompt = prompt.replace(
-        "[在此处粘贴素材库清单JSON]",
-        catalog_json,
-    )
+    dynamic_parts.append(f"\n\n## 输入2:素材库清单(JSON)\n{catalog_json}")
 
     # 词表包模式下补充选词约束（全维度 + 每维度 ≥1-2 词）
     if catalog_mode == "vocabulary":
-        prompt += _format_vocabulary_constraint_block()
+        dynamic_parts.append(_format_vocabulary_constraint_block())
 
-    # 逐句时间表 (2026-08-25 零复写协议): 替代原 timings 全量 JSON —
-    # 原版把 uuid+全文都注入, slot 再回显 text_context = 全稿复写一遍 (4-8K token 纯浪费)。
-    # 现版: S 编号 | 起止 | 文本, LLM 输出 slot 时只引用 segment_refs=["S01","S02"],
-    # text_context 由代码按编号拼回 (director_parser/_rows.parse_new_row)。
-    timing_lines = []
-    for i, t in enumerate(segment_timings, start=1):
-        timing_lines.append(
-            f"S{i:03d} | {float(t.get('start', 0)):.2f}-{float(t.get('end', 0)):.2f} | {str(t.get('text', '')).strip()}"
+    # ── 输入3 段视图 (2026-08-26 分段先行): 代码把句预聚成候选段(12~25s 时长窗),
+    # LLM 面对的是 ~20 个段的组合决策而非 83 句逐句规划 — v4-pro 对逐句×44禁令
+    # 的 reasoning 失控(实测 13.5K~24.4K)的直接解法。slot 通常引用整段的全部 S;
+    # 开场卡/标题卡等特殊短 slot 可只引段内 1-2 句; 相邻段可合并。
+    blocks = _aggregate_segments(segment_timings)
+    block_lines = []
+    for b in blocks:
+        preview = b["preview"]
+        block_lines.append(
+            f"{b['no']} | {b['start']:.2f}-{b['end']:.2f}s | {b['s_from']}-{b['s_to']} | {preview}"
         )
-    prompt += (
-        "\n\n## 补充输入3：每句口播编号与真实起止时间（秒）\n"
-        "每个 slot 的 start/end 必须落在这些真实时间范围内，不要超出音频总时长。\n"
-        "slot 的口播内容用 segment_refs 引用句编号（如 [\"S001\",\"S002\"]），"
-        "禁止在 slot 里复写口播文本——系统会按编号自动填回。\n"
-        + "\n".join(timing_lines)
+    compact_lines = [
+        f"S{i:03d}|{float(t.get('start', 0)):.2f}-{float(t.get('end', 0)):.2f}"
+        for i, t in enumerate(segment_timings, start=1)
+    ]
+    dynamic_parts.append(
+        "\n\n## 输入3:段落视图(候选段)与句编号\n"
+        "每个 slot 的 start/end 必须落在真实时间范围内, 不要超出音频总时长。\n"
+        "slot 用 segment_refs 引用句编号(S 编号, 如 [\"S001\",\"S002\",\"S003\",\"S004\"]), "
+        "禁止复写口播文本——系统按编号自动填回。\n"
+        "默认:一个候选段 = 一个 slot(引用该段全部 S); 开场卡/标题卡可只引段内前 1-2 句; "
+        "节奏需要时可合并相邻段。句级时间表附后(对齐 start/end 用)。\n\n"
+        "【候选段】(段号|起止|句范围|内容预览)\n" + "\n".join(block_lines)
+        + "\n\n【句级时间表】\n" + "\n".join(compact_lines)
     )
 
     # 管线约束 (2026-08-03): 告诉 LLM 哪些管线禁用, 避免生成无效 slot
     constraint = _build_pipeline_constraint_block(enabled_pipelines)
     if constraint:
-        prompt += constraint
+        dynamic_parts.append(constraint)
 
     # 视觉意图注入 (2026-08-11): 把爆品改造稿的结构意图传给导演, 让它按
     # "观众实际听到的新稿 + 每段意图"配画面, 而非盲配. 这是视觉层"导演盲盒"的解法.
@@ -251,15 +265,58 @@ def build_director_prompt(
             intent = item.get("intent", "body")
             desc = item.get("desc", "")
             intent_lines.append(f"- [{start}s] {intent}: {desc}")
-        prompt += "\n".join(intent_lines)
+        dynamic_parts.append("\n".join(intent_lines))
 
     # 人物级视觉主题注入 (2026-08-11): persona.visual_theme 决定全局主体关键词方向
     # (老谭聊科技 → server room/datacenter; 老谭聊地缘 → world map/geopolitics)
     if visual_theme:
-        prompt += (
+        dynamic_parts.append(
             "\n\n## 补充输入5：人物视觉主题（全局主体关键词方向）\n"
             f"当前账号的视觉主题是：**{visual_theme}**\n"
             "全局主体关键词（规则5.1）必须从该主题取场景词，禁止用地域/城市词替代。"
         )
 
-    return prompt
+    return prompt + "".join(dynamic_parts)
+
+
+def _aggregate_segments(
+    segment_timings: list[dict[str, Any]],
+    min_sec: float = 12.0,
+    max_sec: float = 25.0,
+) -> list[dict[str, Any]]:
+    """句预聚成候选段 (2026-08-26 分段先行): 贪心时长窗 12~25s。
+
+    聚合规则: 累积句子至 ≥min_sec 即收段; 单句超 max_sec 独立成段; 段绝不跨
+    max_sec(超长句后强制截断)。预览取段首 28 字 + 段尾 22 字(主题词/数字高发区)。
+    """
+    blocks: list[dict[str, Any]] = []
+    cur: list[tuple[int, dict[str, Any]]] = []
+    cur_start = 0.0
+
+    def _flush() -> None:
+        nonlocal cur, cur_start
+        if not cur:
+            return
+        texts = [str(t.get("text", "")).strip() for _, t in cur]
+        joined = "".join(texts)
+        preview = (joined[:28] + ("…" + joined[-22:] if len(joined) > 52 else "")) or "（空）"
+        blocks.append({
+            "no": f"B{len(blocks) + 1:02d}",
+            "start": float(cur[0][1].get("start", 0)),
+            "end": float(cur[-1][1].get("end", 0)),
+            "s_from": f"S{cur[0][0] + 1:03d}",
+            "s_to": f"S{cur[-1][0] + 1:03d}",
+            "preview": preview,
+        })
+        cur = []
+
+    for idx, t in enumerate(segment_timings):
+        dur = float(t.get("end", 0)) - float(t.get("start", 0))
+        if not cur:
+            cur_start = float(t.get("start", 0))
+        cur.append((idx, t))
+        cur_dur = float(t.get("end", 0)) - cur_start
+        if cur_dur >= min_sec or dur >= max_sec:
+            _flush()
+    _flush()
+    return blocks
