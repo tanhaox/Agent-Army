@@ -36,12 +36,16 @@ def _extract_output(raw_output: str) -> tuple[str | None, list[dict[str, Any]]]:
 
 def _build_slots(rows: list[dict[str, Any]],
                  timings_by_index: dict[int, dict[str, Any]],
-                 total_duration: float) -> list[DirectorSlotPlan]:
-    """按 schema 分派解析行 → 按 (start_sec, slot_index) 排序 → 重编号."""
+                 total_duration: float,
+                 timings: list[dict[str, Any]] | None = None) -> list[DirectorSlotPlan]:
+    """按 schema 分派解析行 → 按 (start_sec, slot_index) 排序 → 重编号.
+
+    timings (2026-08-25 零复写): 透传给 parse_new_row 供 segment_refs 拼装。
+    """
     slots: list[DirectorSlotPlan] = []
     if is_new_schema(rows):
         for row in rows:
-            slot = parse_new_row(row, total_duration)
+            slot = parse_new_row(row, total_duration, timings=timings)
             if slot is not None:
                 slots.append(slot)
     else:
@@ -73,6 +77,6 @@ def parse_llm_plan(
     """
     title, rows = _extract_output(raw_output)
     timings_by_index = {i + 1: t for i, t in enumerate(segment_timings)}
-    slots = _build_slots(rows, timings_by_index, total_duration)
+    slots = _build_slots(rows, timings_by_index, total_duration, timings=segment_timings)
     slots = enforce_host_rules(slots, total_duration, enabled_pipelines)
     return DirectorPlan(title=title, slots=slots)

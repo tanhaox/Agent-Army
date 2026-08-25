@@ -210,11 +210,21 @@ def build_director_prompt(
     if catalog_mode == "vocabulary":
         prompt += _format_vocabulary_constraint_block()
 
-    timing_json = json.dumps(segment_timings, ensure_ascii=False, indent=2)
+    # 逐句时间表 (2026-08-25 零复写协议): 替代原 timings 全量 JSON —
+    # 原版把 uuid+全文都注入, slot 再回显 text_context = 全稿复写一遍 (4-8K token 纯浪费)。
+    # 现版: S 编号 | 起止 | 文本, LLM 输出 slot 时只引用 segment_refs=["S01","S02"],
+    # text_context 由代码按编号拼回 (director_parser/_rows.parse_new_row)。
+    timing_lines = []
+    for i, t in enumerate(segment_timings, start=1):
+        timing_lines.append(
+            f"S{i:03d} | {float(t.get('start', 0)):.2f}-{float(t.get('end', 0)):.2f} | {str(t.get('text', '')).strip()}"
+        )
     prompt += (
-        "\n\n## 补充输入3：每句口播的真实起止时间（秒）\n"
-        "导演规划时必须保证每个 slot 的 start/end 落在这些真实时间范围内，"
-        "不要超出音频总时长。\n" + timing_json
+        "\n\n## 补充输入3：每句口播编号与真实起止时间（秒）\n"
+        "每个 slot 的 start/end 必须落在这些真实时间范围内，不要超出音频总时长。\n"
+        "slot 的口播内容用 segment_refs 引用句编号（如 [\"S001\",\"S002\"]），"
+        "禁止在 slot 里复写口播文本——系统会按编号自动填回。\n"
+        + "\n".join(timing_lines)
     )
 
     # 管线约束 (2026-08-03): 告诉 LLM 哪些管线禁用, 避免生成无效 slot

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.schemas.director import DirectorSlotPlan
@@ -127,7 +128,51 @@ def _camera_angle(row: dict[str, Any], workflow: str) -> int:
     return camera_angle
 
 
-def parse_new_row(row: dict[str, Any], total_duration: float) -> DirectorSlotPlan | None:
+def _refs_to_context(
+    row: dict[str, Any],
+    timings: list[dict[str, Any]],
+    start: float,
+    end: float,
+) -> tuple[str | None, str | None, list[str]]:
+    """segment_refs (S 编号) → (text_context, segment_id, 全部 segment_ids).
+
+    零复写协议 (2026-08-25): LLM slot 只引用句编号, 代码按 timings 拼回口播文本。
+    三级兜底: refs → 旧版 text_context → 按 start/end 时间夹逼覆盖的段。
+    """
+    # 1) refs: S001 → timings[0]
+    refs = row.get("segment_refs") or []
+    if isinstance(refs, str):
+        refs = [refs]
+    picked: list[dict[str, Any]] = []
+    if refs:
+        for r in refs:
+            m = re.match(r"[Ss](\d+)", str(r).strip())
+            if m:
+                idx = int(m.group(1)) - 1
+                if 0 <= idx < len(timings):
+                    picked.append(timings[idx])
+    # 2) 旧版直给 text_context → 原样用
+    if not picked:
+        tc = row.get("text_context") or row.get("text")
+        if tc:
+            return tc, row.get("segment_id"), []
+    if not picked:
+        # 3) 时间夹逼: 取与 [start, end] 相交(中点落在区间内)的段, 无则最近一段
+        for t in timings:
+            ts, te = float(t.get("start", 0)), float(t.get("end", 0))
+            mid = (ts + te) / 2
+            if start - 0.01 <= mid <= end + 0.01:
+                picked.append(t)
+        if not picked and timings:
+            picked = [min(timings, key=lambda t: abs(float(t.get("start", 0)) - start))]
+    if not picked:
+        return None, None, []
+    ids = [str(t.get("segment_id")) for t in picked if t.get("segment_id")]
+    return "||".join(str(t.get("text", "")) for t in picked), ids[0] if ids else None, ids
+
+
+def parse_new_row(row: dict[str, Any], total_duration: float,
+                  timings: list[dict[str, Any]] | None = None) -> DirectorSlotPlan | None:
     """Convert a new v2 prompt row (direct slot fields) into a slot."""
     workflow = row.get("workflow") or row.get("visual_type") or "host"
     if workflow not in _VALID_WORKFLOWS:
@@ -154,12 +199,23 @@ def parse_new_row(row: dict[str, Any], total_duration: float) -> DirectorSlotPla
             _quote_workflow(row.get("material_source") or {}, params):
         workflow = "hf_quote"
 
+    # 零复写协议 (2026-08-25): refs → text_context/segment_id 代码拼回;
+    # timings 未传(旧调用方) 或 refs/text 皆无时退化原逻辑。
+    if timings:
+        tc, sid, sids = _refs_to_context(row, timings, start, end)
+        if tc is None and not (row.get("text_context") or row.get("text")):
+            return None  # 引用与文本皆无 — 无法定位口播, 弃 slot
+        if sids:
+            params["segment_ids"] = sids
+    else:
+        tc, sid = row.get("text_context") or row.get("text"), row.get("segment_id")
+
     return DirectorSlotPlan(
         slot_index=slot_index,
         start_sec=round(start, 3),
         end_sec=round(end, 3),
-        text_context=row.get("text_context") or row.get("text"),
-        segment_id=row.get("segment_id"),
+        text_context=tc,
+        segment_id=sid,
         visual_type=workflow,  # type: ignore[arg-type]
         workflow=workflow,  # type: ignore[arg-type]
         params=params,

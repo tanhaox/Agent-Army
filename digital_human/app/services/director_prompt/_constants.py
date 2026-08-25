@@ -86,8 +86,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 0,
       "start_sec": 0.00,
       "end_sec": 4.20,
-      "text_context": "大家好,我是老陈。||在这个不确定的时代,||希望能给你一点确定的逻辑。||",
-      "segment_id": "seg-001",
+      "segment_refs": ["S001"],
       "visual_type": "hf_title",
       "workflow": "hf_title",
       "params": {"render_config": {"title": "上半年进口 10.74 万亿", "subtitle": "增长 22.1%"}, "intensity": "low", "emotion": "opening"}
@@ -96,8 +95,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 1,
       "start_sec": 4.20,
       "end_sec": 7.50,
-      "text_context": "今天咱们聊的话题,||来自人民日报的报道。||",
-      "segment_id": "seg-002",
+      "segment_refs": ["S002"],
       "visual_type": "broll_pexels",
       "workflow": "broll_pexels",
       "params": {
@@ -111,8 +109,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 2,
       "start_sec": 7.50,
       "end_sec": 11.00,
-      "text_context": "说三个数字,||听完您就知道钱该往哪儿投。||",
-      "segment_id": "seg-003",
+      "segment_refs": ["S003"],
       "visual_type": "hf_title",
       "workflow": "hf_title",
       "params": {"render_config": {"title": "说三个数字", "subtitle": "钱该往哪儿投"}, "intensity": "medium", "emotion": "rising"}
@@ -121,8 +118,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 3,
       "start_sec": 11.00,
       "end_sec": 16.40,
-      "text_context": "上半年进口10.74万亿元,||增长22.1%。||",
-      "segment_id": "seg-004",
+      "segment_refs": ["S004"],
       "visual_type": "hf_chart",
       "workflow": "hf_chart",
       "params": {
@@ -145,8 +141,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 4,
       "start_sec": 16.40,
       "end_sec": 21.80,
-      "text_context": "中国连续17年,||稳坐全球第二大进口市场。||",
-      "segment_id": "seg-005",
+      "segment_refs": ["S005"],
       "visual_type": "broll_pexels",
       "workflow": "broll_pexels",
       "params": {
@@ -160,8 +155,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 5,
       "start_sec": 21.80,
       "end_sec": 25.50,
-      "text_context": "您最近买到便宜的进口货了吗?||评论区聊聊。||",
-      "segment_id": "seg-006",
+      "segment_refs": ["S006"],
       "visual_type": "hf_title",
       "workflow": "hf_title",
       "params": {"render_config": {"title": "评论区聊聊", "subtitle": "您买到便宜进口货了吗"}, "intensity": "low", "emotion": "closing"}
@@ -170,8 +164,7 @@ _NO_HOST_DEMO = """```json
       "slot_index": 6,
       "start_sec": 25.50,
       "end_sec": 30.00,
-      "text_context": "关注我,看懂财经。||下期见。||",
-      "segment_id": "seg-007",
+      "segment_refs": ["S007"],
       "visual_type": "hf_title",
       "workflow": "hf_title",
       "params": {"render_config": {"title": "关注我,看懂财经", "subtitle": "下期见"}, "intensity": "low", "emotion": "closing"}

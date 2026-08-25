@@ -124,8 +124,8 @@
 ```
 
 
-## 输入3:每句口播的真实起止时间(秒)
-下游已经对整段音频跑了 Whisper 强制对齐,每行口播都有 `start` / `end` / `segment_id`。您必须把每个 slot 的 `start_sec` / `end_sec` 落在这条时间轴上,**不允许超出音频总时长**。允许的微调范围 ±0.5s。
+## 输入3:每句口播编号与真实起止时间(秒)
+下游已经对整段音频跑了 Whisper 强制对齐,每句口播有 S 编号与 `start` / `end`(如 `S007 | 12.30-16.80 | 林肯号漂了250天。`)。您必须把每个 slot 的 `start_sec` / `end_sec` 落在这条时间轴上,**不允许超出音频总时长**。允许的微调范围 ±0.5s。slot 用 `segment_refs` 引用这些编号。
 
 
 # Slot 工序单字段(必填)
@@ -135,8 +135,7 @@
 | `slot_index` | number | 是 | 从 0 开始递增;表示这是第几号工序 |
 | `start_sec` | number | 是 | 该 slot 起始秒,**严格落在输入3的真实区间内** |
 | `end_sec` | number | 是 | 该 slot 结束秒,`end_sec > start_sec` |
-| `text_context` | string | 是 | 该 slot 对应的口播原文(从输入3取对应 segment 的 text) |
-| `segment_id` | string | 否 | 输入3里该句口播的 segment_id |
+| `segment_refs` | array | 是 | 该 slot 对应的句编号列表(如 `["S001","S002"]`,取自输入3的 S 编号)——**禁止复写口播原文**, 系统按编号自动填回 |
 | `visual_type` | string | 是 | 与 workflow 相同的值(见下表)|
 | `workflow` | string | 是 | 下游小 Agent 的执行单元名,见下表 |
 | `params` | object | 是 | 下游 Agent 需要的参数,见下方"params 字段约定" |
@@ -431,8 +430,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 0,
       "start_sec": 0.00,
       "end_sec": 4.20,
-      "text_context": "大家好,我是老谭。||在这个不确定的时代,||希望能给你一点确定的逻辑。||",
-      "segment_id": "seg-001",
+      "segment_refs": ["S001"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "low", "emotion": "opening"}
@@ -441,8 +439,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 1,
       "start_sec": 4.20,
       "end_sec": 7.50,
-      "text_context": "今天咱们聊的话题,||来自人民日报的报道。||",
-      "segment_id": "seg-002",
+      "segment_refs": ["S002"],
       "visual_type": "broll_pexels",
       "workflow": "broll_pexels",
       "params": {
@@ -458,8 +455,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 2,
       "start_sec": 7.50,
       "end_sec": 11.00,
-      "text_context": "说三个数字,||听完您就知道钱该往哪儿投。||",
-      "segment_id": "seg-003",
+      "segment_refs": ["S003"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "medium", "emotion": "opening"}
@@ -468,8 +464,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 3,
       "start_sec": 11.00,
       "end_sec": 16.40,
-      "text_context": "上半年进口10.74万亿元,||增长22.1%。||",
-      "segment_id": "seg-004",
+      "segment_refs": ["S004"],
       "visual_type": "hf_chart",
       "workflow": "hf_chart",
       "params": {
@@ -492,8 +487,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 4,
       "start_sec": 16.40,
       "end_sec": 21.80,
-      "text_context": "中国连续17年,||稳坐全球第二大进口市场。||",
-      "segment_id": "seg-005",
+      "segment_refs": ["S005"],
       "visual_type": "mixed_host_broll",
       "workflow": "mixed_host_broll",
       "params": {
@@ -508,8 +502,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 5,
       "start_sec": 21.80,
       "end_sec": 25.50,
-      "text_context": "您最近买到便宜的进口货了吗?||评论区聊聊。||",
-      "segment_id": "seg-006",
+      "segment_refs": ["S006"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "low", "emotion": "closing"}
@@ -518,8 +511,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       "slot_index": 6,
       "start_sec": 25.50,
       "end_sec": 30.00,
-      "text_context": "关注我,看懂财经。||下期见。||",
-      "segment_id": "seg-007",
+      "segment_refs": ["S007"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "low", "emotion": "closing"}
