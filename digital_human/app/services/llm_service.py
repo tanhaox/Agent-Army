@@ -142,6 +142,9 @@ class LLMService:
             perspective: Optional user perspective injected before rewrite.
             max_tokens/response_format (2026-08-25): 可选注入, 供结构化调用方(director 工序单)防截断。
         """
+        # 洗稿输出 = 全文交付物 (~2400字), 不设上限有隐性截断风险 → 默认 8192
+        if max_tokens is None:
+            max_tokens = 8192
         system = _load_prompt_template(prompt_template)
 
         # 构建 user message: 有观点时前置补充观点
@@ -211,12 +214,89 @@ class LLMService:
         stream: bool = True,
         chunk_callback: Callable[[str], None] | None = None,
     ) -> str:
-        """根据用户修正观点调整已洗稿脚本。
+        """根据用户修正观点调整已洗稿脚本 — patch 协议 (2026-08-25 v2).
 
         与 rewrite 不同: 输入是洗稿结果 + 修正观点，目标是微调而非重写。
+        v2: 行编号 + LLM 只输出改动行 {"changes":[[行号,"新行"]]} (输出从全稿 ~2400 字
+        降到几百字, 零复写零漂移), 代码替换拼装; 未涉及的行由代码保证原样 —
+        旧版"必须输出完整稿一行不少"的复写协议废除非必要的大改全部重写场景。
+        失败回退旧全稿协议一次 (保功能可用)。
         """
+        try:
+            result = self._correct_patch(rewritten_text, perspective, prompt_template, model,
+                                         chunk_callback)
+            if result is not None:
+                return result
+        except Exception:
+            # patch 失败 → 旧协议兜底
+            pass
+        return self._correct_fulltext(rewritten_text, perspective, prompt_template, model,
+                                      stream, chunk_callback)
+
+    def _correct_patch(
+        self, rewritten_text: str, perspective: str, prompt_template: str | None,
+        model: str | None, chunk_callback: Callable[[str], None] | None,
+    ) -> str | None:
+        lines = [ln for ln in rewritten_text.splitlines()]
+        if not lines:
+            return None
+        numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
         system = _load_prompt_template(prompt_template)
-        # 在 system 后追加修正指令 (2026-08-11 加强: 防止 LLM 重写导致内容缩水)
+        system += (
+            "\n\n【修正任务 · patch 协议】用户对洗稿稿提出修正意见。你收到带行号的稿子, "
+            "只输出需要修改的行: 严格 JSON {\"changes\": [[行号, \"新行文本\"], ...]}。\n"
+            "1. 只改与修正观点直接相关的行, 其余行禁止出现在 changes 里 (代码原样保留)。\n"
+            "2. 新行保持原有语言风格与节奏, 行内可含多个句子但不合并/拆分相邻行。\n"
+            "3. 若修正意见与稿子无关或无需改动, 输出 {\"changes\": []}。\n"
+            "4. 禁止输出 JSON 以外的任何文字。"
+        )
+        user_content = f"【修正观点】\n{perspective.strip()}\n\n【带行号稿】\n{numbered}"
+        payload: dict[str, Any] = {
+            "model": self._resolve_model(model),
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            "stream": False,
+            "temperature": 0.3,
+            "max_tokens": 3000,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {self.cfg.api_key}",
+            "Content-Type": "application/json",
+        }
+        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
+        response = self._post_with_retry(url, headers=headers, json=payload, stream=False)
+        response.raise_for_status()
+        data = json.loads(response.json()["choices"][0]["message"]["content"])
+        changes = data.get("changes") if isinstance(data, dict) else None
+        if not isinstance(changes, list):
+            return None
+        patch: dict[int, str] = {}
+        for ch in changes:
+            try:
+                n, new_ln = int(ch[0]), str(ch[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if 1 <= n <= len(lines) and new_ln.strip():
+                patch[n] = new_ln
+        if not patch:
+            return rewritten_text  # 无需改动 — 原稿直返
+        out_lines = [patch.get(i, ln) for i, ln in enumerate(lines, start=1)]
+        result = "\n".join(out_lines)
+        # 模拟打字机: 按行回调 (改动行加标记节奏), 前端 correct_chunk 事件格式不变
+        if chunk_callback:
+            for i, ln in enumerate(out_lines, start=1):
+                chunk_callback(("✎ " if i in patch else "") + ln + "\n")
+        return result
+
+    def _correct_fulltext(
+        self, rewritten_text: str, perspective: str, prompt_template: str | None,
+        model: str | None, stream: bool, chunk_callback: Callable[[str], None] | None,
+    ) -> str:
+        """旧全稿协议 (patch 失败兜底, 行为同 2026-08-11 版)."""
+        system = _load_prompt_template(prompt_template)
         system += (
             "\n\n【重要】用户对洗稿结果提出了修正意见。"
             "你的任务是**在保留完整稿子的前提下，只修改与修正观点相关的句子**。"

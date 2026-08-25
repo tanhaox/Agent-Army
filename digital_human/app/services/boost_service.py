@@ -20,6 +20,9 @@ from sqlalchemy.orm import Session
 from ..config import load_config
 from .script_parser import parse_script
 
+# P7 评审缓存 (2026-08-25): {script_id: (final_text_sha, audit)} — 同稿重跑复用。
+_FLOW_AUDIT_CACHE: dict[str, tuple[str, dict[str, Any]]] = {}
+
 logger = logging.getLogger(__name__)
 
 # ── Pass 提示词 ──────────────────────────────────────────────────────────────
@@ -1113,7 +1116,18 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
     # ── P7: 流量评审 (2026-08-25 复刻豆包五维框架) ── 只评审不改稿, 报告供人决策
     flow_audit: dict[str, Any] | None = None
     try:
-        flow_audit = audit_flow_metrics(final_text)
+        # 重复跳过 (2026-08-25): 同稿(sha 相同)重跑 boost 时复用上次评审 —
+        # 评审是只读仪表盘, 稿没变结论不变; LRU 重启丢失可接受 (单次评审 ~2K token)。
+        import hashlib as _hl3
+        _sha = _hl3.sha1(final_text.encode("utf-8")).hexdigest()[:16]
+        cached_audit = _FLOW_AUDIT_CACHE.get(script_id)
+        if cached_audit and cached_audit[0] == _sha:
+            flow_audit = cached_audit[1]
+            _emit("boost_p7_done", "流量评审: 稿件未变，复用上次评审")
+        else:
+            flow_audit = audit_flow_metrics(final_text)
+            if flow_audit:
+                _FLOW_AUDIT_CACHE[script_id] = (_sha, flow_audit)
         if flow_audit:
             _emit("boost_p7_done",
                   f"流量评审 {flow_audit.get('overall', '?')}: "
