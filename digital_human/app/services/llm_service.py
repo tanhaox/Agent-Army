@@ -83,10 +83,14 @@ class LLMService:
         return aliases.get(model, model)
 
     def chat(self, system: str, user: str, model: str | None = None,
-             temperature: float = 0.7, timeout: int = 300) -> str:
+             temperature: float = 0.7, timeout: int = 300,
+             max_tokens: int | None = None,
+             response_format: dict[str, Any] | None = None) -> str:
         """通用单轮对话 (非流式) — 拆书编排等结构化调用入口.
 
         timeout 默认 300s: pro 长稿生成常超 120s。
+        max_tokens/response_format (2026-08-25): 可选注入 — 结构化调用方(director 工序单)
+        此前不设上限, 长稿输出截断 = JSON 解析失败 = job 报废。
         """
         if not self.cfg.api_key:
             raise RuntimeError(
@@ -102,6 +106,10 @@ class LLMService:
             "stream": False,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
         headers = {
             "Authorization": f"Bearer {self.cfg.api_key}",
             "Content-Type": "application/json",
@@ -120,6 +128,8 @@ class LLMService:
         stream: bool = True,
         chunk_callback: Callable[[str], None] | None = None,
         perspective: str | None = None,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         """Rewrite raw article into broadcast script.
 
@@ -130,6 +140,7 @@ class LLMService:
             stream: Whether to stream response.
             chunk_callback: Called with each content chunk when streaming.
             perspective: Optional user perspective injected before rewrite.
+            max_tokens/response_format (2026-08-25): 可选注入, 供结构化调用方(director 工序单)防截断。
         """
         system = _load_prompt_template(prompt_template)
 
@@ -150,6 +161,10 @@ class LLMService:
             "stream": stream,
             "temperature": 0.7,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         headers = {
             "Authorization": f"Bearer {self.cfg.api_key}",

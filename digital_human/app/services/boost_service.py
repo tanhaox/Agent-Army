@@ -23,7 +23,9 @@ from .script_parser import parse_script
 logger = logging.getLogger(__name__)
 
 # ── Pass 提示词 ──────────────────────────────────────────────────────────────
-
+# ⚠️ ARCHIVED (2026-08-25): P1/P2/P3_PROMPT 及 _run_p1/_run_p2/_run_p3 已于
+# 2026-08-14 从 run_boost 流水线移除 (实证零增益纯破坏), 现行流水线 = P-L(geo)
+# → P4 → P6拼音审计 → P7评审。以下仅留档备查 — 勿删勿优化, 勿在其上投入。
 P1_PROMPT = """你是{persona}的【开场电击外科医生】。你的唯一目标是：在用户划走之前的 3 秒内，通过一次“认知电击”，强行锁死对方的注意力。
 
 # 🧠 电击逻辑（绝对执行）
@@ -255,6 +257,25 @@ happy(升华) 仅用于结尾价值收割模块，全篇情绪切换 ≤2-3次�
 [情绪/强度] 段落文字（原文1:1，含||）"""
 
 
+# P5 span 协议 (2026-08-25 v2): 句编号+区间标签, LLM 零复写原文 —
+# 取代上方旧 P5_PROMPT 的全文复写协议 (大输出空响应/慢/贵; 留档备查)。
+P5_SPAN_PROMPT = """你是{persona}的【情绪标注师】。下面是编号好的口播句子表。你的唯一任务：把句子分组连续区间，给每个区间标「情绪 + 强度档」。不评价、不改写、不解释。
+
+# 情绪枚举（只能从中选, 英文小写）
+calm / serious / surprised / happy / angry / sad / afraid / disgusted / melancholic
+
+# 标注规则
+- 分 6~10 个区间，区间连续不重叠，合起来覆盖全部句子；区间边界只在语义模块切换处（背景→硬事实→人物→对照→升华）。
+- 强度档 1-7：叙述/铺垫 1-3，关键模块 4-6，全篇至多一个 7；相邻区间强度差 ≤2，形成情绪坡度。
+- 身份段（"大家好，我是XX…"前后 1-2 句）恒用主基调低档（1-2），禁止惊讶。
+- 主基调按内容气质：严肃分析（军事/政治/经济风险）以 serious 为主，惊讶只许真爆点区间（全篇≤2 个且强度≤4）；轻快叙事可用 surprised 但铺垫段 ≤3 档。
+- happy 仅用于结尾升华区间。
+
+# 输出（严格 JSON, 不要其他文字）
+{"spans": [[起始句号, 结束句号, "情绪", 强度], ...]}
+例: {"spans": [[1, 3, "serious", 2], [4, 18, "serious", 4], [19, 30, "serious", 3]]}"""
+
+
 # P7 流量评审 (2026-08-25): 复刻豆包五维测评框架 — 发布前仪表盘, 只评审不改稿。
 # 基准值来自地缘/深度口播赛道实测均值, 评审结果供人决策是否再修, 不自动改稿。
 P7_PROMPT = """你是短视频口播稿的【流量评审师】。你拿到一篇待发布的最终稿，从算法与用户视角做发布前测评。只评审，不重写。
@@ -269,7 +290,7 @@ P7_PROMPT = """你是短视频口播稿的【流量评审师】。你拿到一�
 - **完播**: 时长是否落在 2:40~3:10 黄金区；结尾是否有价值落地（不烂尾）；是否有定位式关注锚点收口（"专注拆解…不看热闹只挖本质"级, 唤醒关注/追更）
 - **点赞**: 情绪层次是否叠加（共情/反差/自豪/反思 至少三层）；金句/灵魂反问密度（约每200字一个可复述爆点）；是否有三连排比（中文口播情绪推进器）
 - **评论**: 是否预埋冲突点（官方vs现实/官方内部两套说辞打架/滤镜vs真相）、思辨点（A还是B式二选一）、主动引导、跨界延伸（职场/管理/认知拓宽评论人群）
-- **结构技法**: 是否有锚点物件贯穿（一个具象小物件开头切入-中段回扣-结尾升华, 一物三用）；人物线是否闭环且中后段回扣（不是开头道具）
+- **结构技法**: 是否有锚点物件贯穿（一个具象小物件开头切入-中段回扣-结尾升华, 一物三用）；人物线是否闭环且中后段回扣（不是开头道具）；**钩子的物件/人物是否属于正文主线主体**（配角素材当钩子=锚点断裂）；**开篇悬念是否被及时回收**（钩子/反问抛的问题迟迟不答=观众划走; 参照: 通常应在下一两个模块内开始兑现, 按题材节奏自行判断）；**开篇段是否有推进感**（每段让认知前进一步, 禁同一论点多种说法并列罗列）
 - **收藏**: 是否落地可复用底层逻辑（普通人能带走的管理/认知干货，而非纯吃瓜）
 
 只输出 JSON，不要其他文字：
@@ -293,8 +314,11 @@ P_LOOP_PROMPT = """你是{persona}的【反问目录设计者】。下面是一�
 
 # 设计要求
 - 3~5 问，共 60~100 字。它是全文的口播目录：每一问对应后文一个模块（背景沿革/硬事实/一线人物/横向对照等，按本稿实际结构），观众听到后面会对应收回答案——必须先通读全文，禁止问后文没有的内容。
+- **问的顺序 = 后文回收的顺序**（2026-08-25）：第 1 问必须是正文最早回收的模块（通常是背景/硬事实），横向对照类（历史对比）放最后一问——问序与后文错位 = 悬念悬而不收，观众等不到答案就划走。
+- **第一问必须锚定开头钩子已出现的具体画面/物件**（用观众已经看见的词，如"锈穿的管道""黄褐色的脏水"），禁止提前升华成"帝国污水"式的抽象词——观众还没跟上来。
 - 句式递进不平行："为什么X？"→"难道只是Y？"→"那这笔账，最后记在谁头上？"
 - 最后一问必须落到观众自身利益（为结尾价值层埋线）。
+- 全部用口语（"历史是否给了同一本账"这类书面腔禁用，说"历史是不是早给过答案"）。
 - 每问独立成句，问句之间用换行分隔。
 
 # 示例骨架（只参考句式，禁止照抄）
@@ -579,7 +603,10 @@ def deconstruct_article(raw_text: str, *, emit=None, track: str = "tech") -> dic
         if not data or not data.get("reactions"):
             logger.warning("[boost] deconstruct parse failed: %s", raw[:100])
             return None
+        # _raw_sha (2026-08-25): 原文指纹随产物落库, rewrite 侧比对命中即复用免重跑
+        import hashlib as _hl2
         return {
+            "_raw_sha": _hl2.sha1(raw_text.encode("utf-8")).hexdigest()[:16],
             "reactions": [str(r) for r in data.get("reactions", [])],
             "comment_archetypes": data.get("comment_archetypes", []),
             "narrative": data.get("narrative", []),
@@ -783,27 +810,64 @@ def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
 
 
 def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None = None) -> str | None:
-    """独立 P5 情绪标注 (2026-08-14, 供"保存编辑"后重跑, 不经 run_boost).
+    """生成音频时刻的 P5 情绪标注 (2026-08-25 拆离 boost, 移入 _do_tts).
 
-    输入口播稿全文 + 人设名 → 调 P5_PROMPT 标段落级情绪 → 返回 "[情绪/强度] 文本\\n..."
-    字符串(落 emotion_annotations 给 TTS/IndexTTS). 失败返回 None (调用方保留旧标注或置空).
-    track (2026-08-25): 赛道 geo/tech — geo(地缘/国际)强制 serious 主基调 (满篇惊讶=逗逼感,
-    2.5 表现力放大后实测毁人设), 注入赛道硬规则防 LLM 自选错基调.
+    v2 协议 (2026-08-25): **句编号+区间标签** — 代码用与 TTS 完全相同的分行逻辑编号,
+    LLM 只输出 {"spans": [[起,止,情绪,强度],...]} (几百 token, 零复写原文), 代码拼装
+    "[情绪/强度] 段落文字" 兼容下游 (_parse / _map_lines_to_segments / 存储)。
+    旧协议 (LLM 复写全文 3000+ 字) 触发大输出空响应, 需 thinking 压制约 48s;
+    新协议 flash 直跑 ~10-15s, 且段文本与 TTS 行天然逐行对齐 (零漂移)。
+    track: geo 强制 serious 主基调 (满篇惊讶=逗逼感)。失败返回 None (调用方落 calm)。
     """
     try:
-        prompt = P5_PROMPT.replace('{persona}', persona_name)
+        from scripts.tts_lib.lines import _split_line_indices
+        lines = _split_line_indices(text)
+        if not lines:
+            return None
+        numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
+
+        prompt = P5_SPAN_PROMPT.replace('{persona}', persona_name)
         if (track or "").strip().lower() == "geo":
             prompt = (
                 "【赛道硬规则 · 优先级最高】本篇为地缘/国际赛道严肃分析: 主基调必须 serious, "
-                "惊讶(surprised)全篇≤2段且强度≤4, 身份段 serious/1-2。\n\n" + prompt
+                "惊讶(surprised)全篇≤2段且强度≤4, 身份段(大家好我是XX…在不确定的时代…)serious/1-2。\n\n" + prompt
             )
-        prompt += "\n\n【最终定稿】\n" + text
-        raw = _call(prompt, max_tokens=4000)
-        segs = _parse_emotion_annotations(raw)
-        if segs:
-            return "\n".join(f"[{s['emotion']}/{s['strength']}] {s['text']}" for s in segs)
-        logger.warning("[boost] annotate_emotions parse failed: %s", raw[:100])
-        return None
+        prompt += f"\n\n【编号句子表（共 {len(lines)} 句）】\n" + numbered
+        raw = _call(prompt, json_mode=True, max_tokens=1200)
+        data = _extract_json(raw)
+        if not isinstance(data, dict):
+            logger.warning("[p5] span parse failed: %s", str(raw)[:80])
+            return None
+
+        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (最后兜底 calm/2)
+        emo_of: list[tuple[str, int]] = [("calm", 2)] * len(lines)
+        spans = data.get("spans") or []
+        for sp in spans:
+            try:
+                a, b, emo, strength = int(sp[0]) - 1, int(sp[1]), str(sp[2]), int(sp[3])
+            except (TypeError, ValueError, IndexError):
+                continue
+            a, b = max(0, min(a, len(lines) - 1)), max(1, min(b, len(lines)))
+            for i in range(a, b):
+                emo_of[i] = (emo, strength)
+        # 连续同情绪合并 → "[情绪/强度] 段文本" (TTS 行原样拼接, 与合成行天然对齐)
+        blocks: list[str] = []
+        cur_emo, cur_strength, cur_lines = None, 0, []
+        for ln, (emo, strength) in zip(lines, emo_of):
+            if emo != cur_emo:
+                if cur_lines:
+                    blocks.append(f"[{cur_emo}/{cur_strength}] " + "\n".join(cur_lines))
+                cur_emo, cur_strength, cur_lines = emo, strength, [ln]
+            else:
+                # 同情绪但强度档变化 → 仍分段 (强度是情绪坡度的一部分)
+                if strength != cur_strength:
+                    blocks.append(f"[{cur_emo}/{cur_strength}] " + "\n".join(cur_lines))
+                    cur_strength, cur_lines = strength, [ln]
+                else:
+                    cur_lines.append(ln)
+        if cur_lines:
+            blocks.append(f"[{cur_emo}/{cur_strength}] " + "\n".join(cur_lines))
+        return "\n".join(blocks) if blocks else None
     except Exception as exc:
         logger.warning("[boost] annotate_emotions failed: %s", exc)
         return None
@@ -840,6 +904,8 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
     p4_text: str | None = None
     loop_block: str | None = None  # P-L 反问目录文本 (geo; 定稿后代码插入)
 
+    # ⚠️ ARCHIVED: _run_p2/_run_p3/_run_p1 (下方三个函数) 已于 2026-08-14 弃用,
+    # run_boost 现行流水线不调用 — 勿删勿优化 (详见 P1_PROMPT 处标注)。
     # ── P2: 预埋争议+关注 ──
     def _run_p2() -> None:
         nonlocal p2_text
@@ -881,7 +947,9 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
             p4_prompt = P4_PROMPT.replace('{persona}', persona_name) + "\n\n【输入已完成全文】\n" + input_text
             raw_p4 = _call(
                 p4_prompt,
-                max_tokens=4000,
+                # 8000 (2026-08-25): P4 输出=全文复写 ~3000字≈逼近 4000 上限, 截断/
+                # 大输出空响应风险 (同 P5 前科); thinking 兜底路径 max(8000,·) 不受影响。
+                max_tokens=8000,
             )
             p4_text = _strip_p3_head(raw_p4)
             if not p4_text or not p4_text.strip():
@@ -969,17 +1037,27 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
             loop_block = None
 
     def _insert_loop_block(text: str) -> str:
-        """确定性插入反问目录: 身份段组末尾 (优先 '剥开看' 引导词, 次选 '确定的逻辑。')。"""
+        """确定性插入反问目录。
+
+        锚点优先级 (2026-08-25 v2): 认知校准句组之后 > '剥开看'引导词之后。
+        校准句("千万别当成简单的XX" + 定调句)必须先于反问目录 — 先立视角再抛
+       目录, 目录紧跟定调承接正文; 插在校准前会被校准块截断连贯性 (实测)。
+        """
         import re as _re3
         if not loop_block or loop_block in text:
             return text
         anchor = None
-        for key in ("这事儿咱们得剥开看", "剥开看", "确定的逻辑"):
-            i = text.find(key)
-            if i != -1:
-                end = text.find("。", i)
-                anchor = end + 1 if end != -1 else i + len(key)
-                break
+        # 优先: 认知校准句组之后 (校准句 + 支撑/定调句, 最多再 3 行, 吃到空行前)
+        m_cal = _re3.search(r"千万别当成[^\n]*(?:\n[^\n]*){0,3}", text)
+        if m_cal:
+            anchor = m_cal.end()
+        if anchor is None:
+            for key in ("这事儿咱们得剥开看", "剥开看", "确定的逻辑"):
+                i = text.find(key)
+                if i != -1:
+                    end = text.find("。", i)
+                    anchor = end + 1 if end != -1 else i + len(key)
+                    break
         if anchor is None:
             m = _re3.search(r"大家好[^。]*。", text)
             anchor = m.end() if m else 0

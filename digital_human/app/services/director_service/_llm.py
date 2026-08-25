@@ -82,6 +82,11 @@ def _llm_plan_phase(
             raw_text=prompt,
             model="pro",
             stream=False,
+            # 护栏 (2026-08-25): 此前不设上限不设格式 — 长稿输出截断 = JSON 解析失败
+            # = 整个 job 报废; json_object 废 ``` 围栏, 8000 为 pro 输出上限防截断。
+            # (prompt 已含 "json" 字样, 满足 DeepSeek json 模式要求)
+            max_tokens=8000,
+            response_format={"type": "json_object"},
         )
         if is_cancelled and is_cancelled():
             raise PlanCancelled
