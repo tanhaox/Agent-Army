@@ -230,7 +230,8 @@ class _StyledTextSegment(TextSegment):
             return [{**hl, "range": [s, e]} for s, e in ranges if s < e]
 
         gold = make_style(_HL_COLOR, self._hl_ranges) if self._hl_ranges else []
-        red = make_style(_HL_COLOR_RED, self._red_ranges) if self._red_ranges else []
+        # 红通道并入金 (2026-08-26 用户决策): 放大字颜色统一 fff58a, 不再金红混用
+        red = make_style(_HL_COLOR, self._red_ranges) if self._red_ranges else []
         # 合并两组 (金+红), 按位置排序, 空白用 base 填充; 重叠时先到者优先
         merged = sorted(gold + red, key=lambda s: s["range"][0])
         styles = []
@@ -1327,6 +1328,61 @@ _SFX_FAMILY = {
 }
 
 
+def _suspense_core(chunk: str) -> str | None:
+    """问句强调短语 (2026-08-26 v2): 疑问代词锚定 + 虚指兜底, 代替旧"剥疑问词取前14字"。
+
+    旧规则把"是什么样的/怎么办呢"这类纯虚指尾巴也整块放大 (用户实测选字不精细)。
+    - 实体代词 (谁/多少/几/啥): 取代词前后各 ~3 字窗口 — "算在谁头上"/"记在谁头上"
+    - 方式代词 (什么/怎么/为什么…): 取最后一个标点后、代词前的实义词段 (≤6 字),
+      剥边缘虚词 — "我们被灌输的美军是什么样的"→"灌输的美军"; "伊朗为什么这么干"→"伊朗"
+    - 兜底: 句中数字/专名 (find_highlight_ranges); 再无 → None 不放大 (宁缺毋滥)。
+    """
+    import re
+
+    text = chunk.strip().rstrip("？?。！")
+    last = None  # (start, end, kind) — 取结束最靠后者; 同结束取更长词 ("为什么"胜过其内嵌"什么")
+    for q in ("为什么", "凭什么", "什么样", "怎么", "多少", "哪些", "哪个", "什么", "谁", "啥", "哪", "几"):
+        for m in re.finditer(q, text):
+            cand = (m.start(), m.end(), "entity" if q in ("谁", "多少", "几", "啥") else "manner")
+            if last is None or (cand[1], -cand[0]) > (last[1], -last[0]):
+                last = cand
+    if last is None:
+        rngs = find_highlight_ranges(text)
+        if rngs:
+            s, e = rngs[0]
+            return text[s:e][:8]
+        return None
+
+    s, e, kind = last
+    if kind == "entity":
+        win = text[max(0, s - 4):min(len(text), e + 3)]  # 前4字: 覆盖"到底/究竟"整词剥除
+        win = re.sub(r"[，。！？；、,]", "", win)
+        win = re.sub(r"(?:到底|究竟|最后|还是|就是|了|的|地|得)+$", "", win)
+        win = re.sub(r"^(?:到底|究竟|最后|还是|真的)+", "", win)
+        if len(win) >= 2:
+            return win[:8]
+    # 方式代词: 代词前最后一个分句; 不足 2 字则回溯倒数第二个分句
+    # ("咱们普通人，又凭什么该关心…" → 尾分句"又"剥空 → 回溯"普通人")
+    head = text[:s]
+    clauses = [c.strip() for c in re.split(r"[，。！？；、,]", head) if c.strip()]
+    for seg in reversed(clauses[-2:] if len(clauses) >= 2 else clauses):
+        seg = re.sub(r"(?:到底|究竟|最后|真的|还是|就是|要是|能|会|是|了|的|地|得|又|也|才)+$", "", seg)
+        seg = re.sub(r"^(?:到底|究竟|最后|可是|但是|所以|而且|咱们|我们|他们|又|也|才)+", "", seg)
+        if len(seg) > 6:
+            seg = seg[-6:]
+        if len(seg) >= 2:
+            return seg
+    # 兜底: 代词本身+后 1-3 实字 ("多少钱"/"谁头上"型)
+    mm = re.match(r"((?:谁|什么|多少|几)[一-鿿]{1,3})", text[s:])
+    if mm:
+        return mm.group(1)
+    rngs = find_highlight_ranges(text)
+    if rngs:
+        st, en = rngs[0]
+        return text[st:en][:8]
+    return None
+
+
 def _classify_chunk(chunk: str) -> tuple[str, str | None]:
     """字幕块语义分类: (类别, 强调短语). 类别 ∈ money/punchline/suspense/plain.
 
@@ -1340,9 +1396,8 @@ def _classify_chunk(chunk: str) -> tuple[str, str | None]:
     import re
 
     if re.search(r"[?？]$", chunk.strip()):
-        core = re.sub(r"^(为什么|怎么|难道|凭什么)", "", chunk.strip())
-        core = core.rstrip("？?。！")[:14]
-        return "suspense", (core or None)
+        core = _suspense_core(chunk)
+        return "suspense", core
 
     # ① 引号金句/概念: 「...」 “...” "..." （TTS 读法稿里引号保留完整）
     m = re.search(r"[「“\"]([^「」”\"]{4,24})[」”\"]", chunk)
