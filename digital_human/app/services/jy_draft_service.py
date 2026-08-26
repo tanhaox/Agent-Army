@@ -48,8 +48,8 @@ _HL_COLOR_RED = (0.72, 0.11, 0.11)  # 冲击红 (四模板验证)
 _HL_SIZE_DELTA = 2.5
 
 # ── R9 v3 (2026-08-18): 动态字幕 = TextIntro 动画挂字幕段本身 + 配对音效 ──
-# 同帧文字独载分工 (用户决策): HF 文字窗内字幕抑制, 文字由 HF 卡独载 —
-# 根治"字幕/HF卡/动效 同帧三段同文" (三者同源 slot.text_context)。
+# 字幕抑制已撤 (2026-08-26 用户决策: 恢复全篇字幕): HF 卡是画面补充不是字幕替代,
+# 抑制导致 HF 段无字幕且窗口错位误杀邻近字幕。hf_windows 仅保留给边界音效用。
 # 知识源: config/jy_animation_sound_pairs.json (动画↔同帧音效配对, 库缺回退 _SFX_FAMILY)
 #         config/jy_sound_semantics.json (title_in 族 = HF 边界转场音)
 _HF_TEXT_FAMILIES = {"hf_title", "hf_chart", "hf_opening", "hf_quote"}
@@ -428,12 +428,9 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                 alloc = [seg_dur_us * len(c) // total_len for c in chunks]
                 alloc[-1] = seg_dur_us - sum(alloc[:-1])
                 for chunk, chunk_us in zip(chunks, alloc):
-                    # v3 独载分工: HF 文字窗内字幕抑制 (中点落窗即抑制), 文字由 HF 卡独载
-                    mid = seg_start_us + max(chunk_us, 1000) // 2
-                    if any(ws <= mid < we for ws, we in hf_windows):
-                        r9_stats["caption_suppressed"] += 1
-                        seg_start_us += chunk_us
-                        continue
+                    # 字幕抑制已撤 (2026-08-26 用户决策): HF 卡是画面补充不是字幕
+                    # 替代 — 抑制导致 HF 段整段无字幕(听不清无兜底), 且 HF 时长被
+                    # clamp 后窗口错位会误杀邻近字幕。恢复全篇逐句字幕。
                     # R9 v3: 分类拿内联高亮区间 + 动效(动画名) + 同帧音效
                     gold, red, anim, anim_ms = _auto_choreograph(
                         script, chunk, seg_start_us, r9_stats, _last_sfx,
