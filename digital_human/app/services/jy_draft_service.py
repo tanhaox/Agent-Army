@@ -362,11 +362,25 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                     speed=speed,
                     volume=0,
                 )
-            else:  # 缺口过大不硬拉, 钳制并记录
-                logger.warning("[jy_export] slot %d 素材缺口过大 (%.2fs/%.2fs), 保持钳制",
+            else:  # 缺口过大: 循环铺满分配窗口 (2026-08-26 改) — 旧版钳制留黑,
+                # 50s 大 slot 配 20s 素材时尾部 ~30s 黑屏 (实测"尾部画面短缺"根因);
+                # 素材重复播完即接续, 远好于黑场。配合 parse 层拆超长 slot, 此分支仅为最后兜底。
+                logger.warning("[jy_export] slot %d 素材缺口大 (%.2fs/%.2fs), 循环铺满",
                                s.slot_index, mat_us / _US, alloc_us / _US)
-                seg = draft_mod.VideoSegment(
-                    mat, trange(int(round(s.start_sec * _US)), mat_us), volume=0)
+                placed_us = 0
+                while placed_us < alloc_us:
+                    take = min(mat_us, alloc_us - placed_us)
+                    script.add_segment(draft_mod.VideoSegment(
+                        mat,
+                        trange(int(round((s.start_sec * _US) + placed_us)), take),
+                        source_timerange=Timerange(0, take),
+                        volume=0,
+                    ), "main")
+                    placed_us += take
+                if s.workflow in _HF_TEXT_FAMILIES:
+                    ws = int(round(s.start_sec * _US))
+                    hf_windows.append((ws, ws + alloc_us))
+                continue
         else:
             seg = draft_mod.VideoSegment(
                 mat,

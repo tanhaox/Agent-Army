@@ -80,7 +80,63 @@ def parse_llm_plan(
     slots = _build_slots(rows, timings_by_index, total_duration, timings=segment_timings)
     slots = enforce_host_rules(slots, total_duration, enabled_pipelines)
     slots = _patch_uncovered(slots, segment_timings)
+    slots = _split_oversized(slots, segment_timings)
+    slots.sort(key=lambda s: (s.start_sec, s.slot_index))
+    for i, s in enumerate(slots):
+        s.slot_index = i
     return DirectorPlan(title=title, slots=slots)
+
+
+def _split_oversized(
+    slots: list[DirectorSlotPlan],
+    segment_timings: list[dict[str, Any]],
+    max_sec: float = 30.0,
+) -> list[DirectorSlotPlan]:
+    """拆超长 slot (2026-08-26): LLM 合并相邻段产生 >30s 大 slot → broll 素材
+    (10~30s) 撑不满 → 草稿层钳制留黑 (尾部画面短缺实测根因)。
+    按句贪心 12~25s 重拆 (继承 workflow/params), 尾卡/来源卡不受影响。
+    """
+    import copy as _copy
+
+    sid_order = {str(t.get("segment_id")): t for t in segment_timings}
+    out: list[DirectorSlotPlan] = []
+    for s in slots:
+        dur = s.end_sec - s.start_sec
+        ids = [x for x in (s.params.get("segment_ids") or []) if x in sid_order]
+        if dur <= max_sec or len(ids) < 2:
+            out.append(s)
+            continue
+        # 按句贪心分组: 每组 ≥12s 收, 单组不超 max_sec
+        groups: list[list[str]] = []
+        cur: list[str] = []
+        cur_start: float | None = None
+        for x in ids:
+            t = sid_order[x]
+            if cur_start is None:
+                cur_start = float(t.get("start", 0))
+            cur.append(x)
+            if float(t.get("end", 0)) - cur_start >= 12.0:
+                groups.append(cur)
+                cur, cur_start = [], None
+        if cur:
+            if groups and len(cur) == 1:
+                groups[-1].extend(cur)  # 孤句并入前组
+            else:
+                groups.append(cur)
+        if len(groups) <= 1:
+            out.append(s)
+            continue
+        for gi, grp in enumerate(groups):
+            ts = [sid_order[x] for x in grp]
+            ns = _copy.deepcopy(s)
+            ns.params = dict(s.params)
+            ns.params["segment_ids"] = grp
+            ns.start_sec = round(float(ts[0].get("start", s.start_sec)), 3)
+            ns.end_sec = round(float(ts[-1].get("end", s.end_sec)), 3)
+            ns.text_context = "||".join(str(t.get("text", "")) for t in ts) or s.text_context
+            ns.segment_id = grp[0]
+            out.append(ns)
+    return out
 
 
 def _patch_uncovered(
