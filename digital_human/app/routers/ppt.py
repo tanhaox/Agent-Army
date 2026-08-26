@@ -293,11 +293,11 @@ def _run_ppt_pipeline(job_id: str) -> None:
             voice_id = voice.id if voice else None
 
             # TTS 缓存 key (2026-08-21): 音色+全段台词哈希, 稿没变复用音频免重跑合成
-            # 引擎因子 (2026-08-25): IndexTTS2→2.5 后语速/音色风格全变, 旧缓存复用会
-            # 拿到 2 时代音频与 2.5 新段混拼; key 掺引擎版号, 升引擎自动失效全部缓存。
+            # 引擎因子 (2026-08-25): 换引擎语速/音色风格全变, 旧缓存复用会拿到异引擎
+            # 音频混拼; key 掺引擎版号, 升引擎自动失效全部缓存。(产线现 IndexTTS2)
             import hashlib as _hl
             cache_key = _hl.sha256(
-                ("indextts2.5" + "\x00" + str(voice_id or "") + "\x00"
+                ("indextts2" + "\x00" + str(voice_id or "") + "\x00"
                  + "\x00".join(seg.text for seg in segments)).encode()
             ).hexdigest()
             cached_job = (

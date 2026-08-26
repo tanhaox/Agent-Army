@@ -44,12 +44,14 @@ _BUILTIN_SPECS: dict[str, dict[str, Any]] = {
         "env": {},
     },
     "indextts": {
-        # 2026-08-24 升级 IndexTTS2.5 (多语言 zh/en/ja/es/ar + duration_factor + bf16 提速).
-        # 旧版回滚: cwd/env 改回 index-tts-windows 即可, 端口与接口不变.
-        "display_name": "IndexTTS2.5",
+        # 2026-08-25 回退产线至 IndexTTS2: 2.5 语速/韵律/情绪联动仍需联调, 不可投产。
+        # 2.5 安装保留在 E:/AI/tts/index-tts2.5 (实验位), 联调完成后改回:
+        #   cwd=E:/AI/tts/index-tts2.5 + HF_HOME 同目录 + display_name IndexTTS2.5
+        # 端口与接口两版一致。
+        "display_name": "IndexTTS2",
         "base_url": "http://127.0.0.1:7862",
         "health_path": "/health",
-        "cwd": "E:/AI/tts/index-tts2.5",
+        "cwd": "E:/AI/tts/index-tts-windows",
         "command": [
             ".venv/Scripts/python.exe", "api_server.py",
             "--port", "7862", "--host", "127.0.0.1",
@@ -58,7 +60,7 @@ _BUILTIN_SPECS: dict[str, dict[str, Any]] = {
         "env": {
             "PYTHONPATH": "",
             "HF_ENDPOINT": "https://hf-mirror.com",
-            "HF_HOME": "E:/AI/tts/index-tts2.5/.huggingface",
+            "HF_HOME": "E:/AI/tts/index-tts-windows/.huggingface",
         },
     },
     "comfyui": {

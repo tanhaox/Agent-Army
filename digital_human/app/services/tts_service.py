@@ -157,11 +157,10 @@ class TTSService:
             master_text=master_text,
             progress_callback=_manifest_callback,
             params=voice_params,
-            # 句级批 (2026-08-25, 原 150): 一句一调, wav 粒度=parse_script 分句。
-            # 旧批合成(3-5 句合一次 API)是 IndexTTS2 慢速时代(RTF 1.81)的吞吐优化;
-            # 2.5 下批(150字)超服务端切分预算被按逗号再切+拼接静音(~0.5s 停顿, 006.wav
-            # 实测), 且句间韵律是机器拼接而非模型自然生成。max_chars=1 → 每行独立成批。
-            batch_max_chars=1,
+            # 批合成 (2026-08-25 回退 150): IndexTTS2 RTF~1.8, 句级批(一句一调)总时长远超
+            # 批合成, 恢复 3-5 句一批。句级批是为 2.5 (RTF 0.54 + 服务端逗号切分/拼接
+            # 静音问题)设计的实验配置 — 回 2.5 时改回 batch_max_chars=1。
+            batch_max_chars=150,
             emotion_segments=emotion_segments,
         )
 
