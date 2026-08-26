@@ -37,12 +37,26 @@ def _decode_request_pipelines(job: DirectorJob, pipelines: str | None) -> set[st
     return _decode_pipelines(pipelines)
 
 
-def _check_executable(job: DirectorJob) -> None:
-    """Reject re-execution on completed / fully-failed jobs."""
+def _check_executable(job: DirectorJob, db: Session) -> None:
+    """Reject re-execution on completed jobs; revive fully-failed ones.
+
+    fully-failed job (2026-08-26 改): 不再 409 拒绝 — 执行期全灭的 job 常因
+    代码缺陷(如 hf_quote 路由/时长 clamp 时代), 修复后应可直接复活重跑,
+    重新规划要再花一次 LLM。此处把全部 failed slot 重置 queued 并清错误,
+    走正常执行流。completed 仍拒绝(重跑请用 slot 级重试)。"""
     if job.status == "completed":
         raise HTTPException(status_code=409, detail="job 已完成, 不可重复执行")
     if job.status == "failed" and all(s.status in ("failed", "replaced") for s in job.slots):
-        raise HTTPException(status_code=409, detail="job 已失败, 请新建任务")
+        revived = 0
+        for s in job.slots:
+            if s.status == "failed":
+                s.status = "queued"
+                s.error_code = None
+                s.error_message = None
+                revived += 1
+        job.error_message = None
+        db.commit()
+        logger.info("[director %s] revived failed job: %d slots -> queued", job.id[:8], revived)
 
 
 def _execute_in_background(job_id: str, auto_replace: bool, enabled_pipelines: set[str] | None = None) -> None:
@@ -107,7 +121,7 @@ def execute_job(
     enabled: set[str] | None = _decode_request_pipelines(job, pipelines)
     logger.info("[director %s] pipelines filter: %s", job_id,
                 ",".join(sorted(enabled)) if enabled else ("all" if enabled is None else "none"))
-    _check_executable(job)
+    _check_executable(job, db)
 
     with _executing_lock:
         if job_id in _executing_jobs:
