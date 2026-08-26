@@ -44,17 +44,17 @@ def _merge_render_config(input_data: dict, render_config: dict) -> None:
 
 # 账号拆分 (2026-08-18): 发布账号按赛道分离, HF 卡品牌文字跟随首页赛道
 # (Article.track, 同驱动评论层/七层分支), 不再读 persona/host 的旧统一账号名.
-#   tech (科技/商业) → 老谭科技观;  geo (地缘/国际) → 老谭观时局
+#   tech (科技/商业) → 老谭科技观;  geo (地缘/国际) → 老谭世界观
 _TRACK_BRAND = {
     "tech": {"brand": "老谭科技观", "stamp": "科技", "tag": "科技·商业"},
-    "geo": {"brand": "老谭观时局", "stamp": "时局", "tag": "地缘·国际"},
+    "geo": {"brand": "老谭世界观", "stamp": "时局", "tag": "地缘·国际"},
 }
 
 
 def _merge_brand(input_data: dict, slot: DirectorSlot, db: Session) -> None:
     """注入品牌字段 (brand_name / stamp_name / brand_tag), 跟随赛道自动切换.
 
-    两套发布账号 (老谭科技观/老谭观时局) 的差异仅品牌文字 — 模板本身已参数化
+    两套发布账号 (老谭科技观/老谭世界观) 的差异仅品牌文字 — 模板本身已参数化
     ({{brand_name}}/{{stamp_name}}/{{brand_tag}}), 无需复制两套模板文件.
     赛道取 ``script.article.track`` (缺省 tech); render_config 显式 brand_tag 仍可覆盖标语.
     """
