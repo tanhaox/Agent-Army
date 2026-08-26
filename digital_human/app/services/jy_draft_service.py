@@ -41,6 +41,10 @@ _JY_PPT_TRANSITION = draft_mod.TransitionType.上移
 
 # ── 字幕样式 (2026-08-15 用户口径: 美观字号 5, 非 pyJYD 默认 8) ──
 _SUBTITLE_SIZE = 5.0
+# 字幕黑底条 (2026-08-27 参考片同款): 用户实测 v9 后弃用 — 我们的字幕多压暗调画面,
+# 黑底条反而累赘。pyJYD 写法备查: TextBackground(color="#000000", alpha=0.55, round_radius=0.08)
+# 署名条 (黄底黑字, 引用卡署名用) 保留: _CREDIT_BG
+_CREDIT_BG = draft_mod.TextBackground(color="#FFDE00", alpha=0.95, round_radius=0.06)
 # 内联划重点升级 (2026-08-17 v2): +1→+2.5 字号差 + 金色, 代替被砍掉的独立强调轨
 # (剪映"智能划重点"的真实做法 — 关键词嵌在字幕行内, 变色变大, 不另起文字层)
 _HL_COLOR = (1.0, 0.96, 0.54)  # 引文金 (45期实测)
@@ -208,6 +212,7 @@ class _StyledTextSegment(TextSegment):
                  **kwargs):
         kwargs.setdefault("style", draft_mod.TextStyle(
             size=_SUBTITLE_SIZE, color=_SUBTITLE_COLOR, align=_SUBTITLE_ALIGN))
+        # 字幕黑底条已撤 (2026-08-27 用户实测弃用), 裸白字回归
         super().__init__(text, timerange, **kwargs)
         self._hl_ranges = sorted(highlight_ranges or [])
         self._red_ranges = sorted(red_ranges or [])

@@ -68,3 +68,15 @@ data/geo_batch/
 
 # 迁移备份目录 (纯代码快照, 不入库)
 digital_human_2/
+
+# 2026-08-27 审计补充: 素材/缓存/密钥/备份不入库
+sandbox/
+.sandbox_preview/
+data/frames_cache/
+data/l0/
+data/vocabulary_pack.json
+data/failed_scenes_ids.json
+config/siliconflow.yaml
+config/p*_prompt_backup_*.txt
+*.bak
+*.bak_*
