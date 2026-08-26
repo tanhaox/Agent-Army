@@ -79,4 +79,50 @@ def parse_llm_plan(
     timings_by_index = {i + 1: t for i, t in enumerate(segment_timings)}
     slots = _build_slots(rows, timings_by_index, total_duration, timings=segment_timings)
     slots = enforce_host_rules(slots, total_duration, enabled_pipelines)
+    slots = _patch_uncovered(slots, segment_timings)
     return DirectorPlan(title=title, slots=slots)
+
+
+def _patch_uncovered(
+    slots: list[DirectorSlotPlan],
+    segment_timings: list[dict[str, Any]],
+) -> list[DirectorSlotPlan]:
+    """补洞 (2026-08-26): LLM refs 漏引的句归并到时间最近 slot, 消灭无字幕段。
+
+    段视图协议实测 83 句漏 6 句 — 漏引句既无画面也无字幕 (剪映成片"字幕短缺"
+    根因)。确定性归并: 未覆盖句并入其时间中点所在(或最近) slot, 该 slot 的
+    segment_ids/text_context 按句序重拼。LLM 漏洞不该让观众看到。
+    """
+    if not slots or not segment_timings:
+        return slots
+    covered: set[str] = set()
+    for s in slots:
+        if s.segment_id:
+            covered.add(str(s.segment_id))
+        for sid in (s.params.get("segment_ids") or []):
+            covered.add(str(sid))
+    sid_order = {str(t.get("segment_id")): i for i, t in enumerate(segment_timings)}
+    missing = [
+        (i, t) for i, t in enumerate(segment_timings)
+        if str(t.get("segment_id")) not in covered
+    ]
+    if not missing:
+        return slots
+    for _, t in missing:
+        mid = (float(t.get("start", 0)) + float(t.get("end", 0))) / 2
+        target = min(
+            slots,
+            key=lambda s: 0 if s.start_sec <= mid <= s.end_sec
+            else min(abs(s.start_sec - mid), abs(s.end_sec - mid)),
+        )
+        ids = set(target.params.get("segment_ids") or ([target.segment_id] if target.segment_id else []))
+        ids.add(str(t.get("segment_id")))
+        ordered = sorted(ids, key=lambda x: sid_order.get(x, 10**9))
+        target.params["segment_ids"] = ordered
+        target.segment_id = ordered[0]
+        rebuilt = "||".join(
+            str(segment_timings[sid_order[x]].get("text", "")) for x in ordered if x in sid_order
+        )
+        if rebuilt:
+            target.text_context = rebuilt
+    return slots
