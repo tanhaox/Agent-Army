@@ -142,9 +142,6 @@ class LLMService:
             perspective: Optional user perspective injected before rewrite.
             max_tokens/response_format (2026-08-25): 可选注入, 供结构化调用方(director 工序单)防截断。
         """
-        # 洗稿输出 = 全文交付物 (~2400字), 不设上限有隐性截断风险 → 默认 8192
-        if max_tokens is None:
-            max_tokens = 8192
         system = _load_prompt_template(prompt_template)
 
         # 构建 user message: 有观点时前置补充观点
