@@ -812,6 +812,72 @@ def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
     return segs if segs else None
 
 
+# ── 口播适配 (2026-08-27): 纯读法转换, 手改稿重跑数字禁令的唯一通道 ──
+# 背景: 数字禁令 (50%→百分之五十/2024→二零二四) 只在洗稿模板里由 LLM 执行;
+# 用户手改错别字存盘后引入的阿拉伯数字, 重洗稿/重爆改会毁掉手改 — 此处只转读法。
+TTS_ADAPT_PROMPT = """你是口播稿的【TTS读法适配师】。你拿到一篇口播稿，唯一任务：把所有 TTS 会读错/读不出的符号转换为中文读法——阿拉伯数字、百分号、连字符、markdown 星号。除此之外的任何文字（标点、用词、语序、英文品牌名、[情绪] 标签）必须 1:1 逐字保留——你没有润色、改写、增删句子的权限。
+
+# 转换规则
+- 百分比: 50% → 百分之五十；22.1% → 百分之二十二点一
+- 年份: 2024年 → 二零二四年；2035 → 二零三五（逐位读）
+- 普通数量: 45倍 → 四十五倍；89.6亿 → 八十九点六亿；3000元 → 三千元
+- 小数/版本: 5.3 → 五点三
+- markdown 星号 (TTS 读成乱音): **加粗** → 去掉星号只留文字；不成对的单个 * 一并删除
+- 型号连字符: GLM-5.3 → GLM五点三；DeepSeek-V4 → DeepSeek四版；B-52 → B五二（连字符删除，数字转中文逐位）
+- 非型号连字符: 中文词之间 A-B → A到B（3-5个 → 三到五个）；行首列表符「- 」直接删除；裸连字符一律不许留在稿中
+- 长编号/型号序列逐位读: 5090 → 五零九零；919 → 九一九
+- 型号里的数字按业内惯读: 17 → 十七；V4 → V四
+
+# 绝对禁区（触发即失败）
+- ❌ 禁止改动任何非符号文字（一字都不许动，标点也不许动）
+- ❌ 禁止增删句、调整语序
+- ❌ 禁止输出任何说明/清单/标题——只输出转换后的完整稿件
+
+# 输出
+直接输出转换后的完整稿件正文，从第一句到最后一句。"""
+
+
+def adapt_tts_readability(text: str) -> tuple[str, int]:
+    """口播适配: 全文阿拉伯数字/百分号/连字符 → 中文读法, 其余 1:1.
+
+    返回 (适配稿, 变更行数). 手改稿专用——洗稿模板的数字禁令只覆盖首产,
+    之后人工编辑引入的数字靠本函数补转 (确定性优先, 不动 LLM 润色)。
+
+    守卫: LLM 篡改检测——转换只让文本变长 (50%→百分之五十) 或小幅变短
+    (删星号/列表符), 变更后长度超原文 60% 或缩水逾 18% 即判失败抛异常;
+    结果只回编辑区不落库, 人工目检后保存。
+    """
+    import re
+
+    original = (text or "").strip()
+    if not original:
+        return "", 0
+    # 快路径: 无数字/百分号/星号/连字符 → 原样返回, 省一次 LLM 调用
+    if not re.search(r"[0-9%*]|-", original):
+        return original, 0
+
+    prompt = TTS_ADAPT_PROMPT + "\n\n【待适配口播稿】\n" + original
+    raw = _call(prompt, max_tokens=8000, temperature=0.2)
+    adapted = raw.strip()
+    # 剥可能的 markdown 代码围栏 (LLM 偶发包 ```)
+    if adapted.startswith("```"):
+        adapted = re.sub(r"^```[a-z]*\n?|```$", "", adapted).strip()
+
+    drift = len(adapted) / max(len(original), 1)
+    if not adapted or drift > 1.6 or drift < 0.82:
+        raise RuntimeError(
+            f"口播适配守卫拦截: 输出长度漂移 {drift:.2f}x (读法转换应在 0.82~1.6x), 疑似 LLM 篡改原文"
+        )
+
+    # 变更行数 = 前后按行对齐统计差异行 (供前端提示)
+    old_lines = original.splitlines()
+    new_lines = adapted.splitlines()
+    changed = sum(
+        1 for a, b in zip(old_lines, new_lines) if a.strip() and a.strip() != b.strip()
+    )
+    return adapted, changed
+
+
 def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None = None) -> str | None:
     """生成音频时刻的 P5 情绪标注 (2026-08-25 拆离 boost, 移入 _do_tts).
 

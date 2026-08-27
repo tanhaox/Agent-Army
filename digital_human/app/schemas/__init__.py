@@ -22,6 +22,7 @@ from .articles import (
     RewriteRequest,
     ScriptOut,
     ScriptUpdate,
+    TtsAdaptRequest,
     SegmentOut,
     SegmentUpdate,
 )
@@ -108,7 +109,7 @@ from .voices import (
 
 __all__ = [
     # articles
-    "ArticleCreate", "RewriteRequest", "CorrectRequest", "FetchUrlRequest",
+    "ArticleCreate", "RewriteRequest", "CorrectRequest", "TtsAdaptRequest", "FetchUrlRequest",
     "FetchUrlResponse", "ArticleUpdate", "ArticleOut", "SegmentOut",
     "ArticleBriefOut", "ScriptOut", "ScriptUpdate", "SegmentUpdate",
     "AudioJobOut", "AudioFileOut", "HostOut", "HostCreate", "HostUpdate",

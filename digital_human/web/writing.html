@@ -118,6 +118,8 @@
       </div>
       <div class="btn-group" style="margin-top:1rem;">
         <button class="btn btn-success btn-sm" id="btn-save-script" onclick="saveScript()" disabled>保存编辑</button>
+        <button class="btn btn-secondary btn-sm" id="btn-tts-adapt" onclick="ttsAdaptScript()" disabled
+                title="全文数字/百分比/连字符/星号转中文读法 (50%→百分之五十, 2024→二零二四, GLM-5.3→GLM五点三, **加粗**→去星号)，其余一字不动。结果先回填编辑区，目检后点「保存编辑」落库。">🔢 口播适配</button>
         <button class="btn btn-violet btn-sm" id="btn-goto-audio" onclick="gotoAudio()" disabled>🎙 去生成音频 →</button>
       </div>
     </div>

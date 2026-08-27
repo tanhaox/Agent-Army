@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..database import db_session, get_db, get_session_maker
 from ..models import Script, Segment, AudioJob, AudioFile, DirectorJob, Host, Persona
-from ..schemas import ScriptOut, ScriptUpdate, SegmentOut, SegmentUpdate, CorrectRequest
+from ..schemas import ScriptOut, ScriptUpdate, SegmentOut, SegmentUpdate, CorrectRequest, TtsAdaptRequest
 from ..services.llm_service import LLMService
 from ..services.script_parser import parse_script
 from .jobs import _publish
@@ -373,6 +373,35 @@ def boost_script(
     )
     t.start()
     return {"job_id": job_id, "status": "started"}
+
+
+@router.post("/{script_id}/tts-adapt")
+def tts_adapt_script(
+    script_id: str,
+    request: TtsAdaptRequest,
+    db: Session = Depends(get_db),
+):
+    """口播适配 (2026-08-27): 全文数字/百分号/连字符 → 中文读法, 其余 1:1.
+
+    手改稿专用——洗稿数字禁令只覆盖首产, 人工编辑引入的阿拉伯数字靠此补转。
+    同步 flash 调用 (~15-30s); 结果只返回不落库, 前端回填编辑区人工目检后
+    走「保存编辑」落库+重分段。
+    """
+    script = db.query(Script).filter(Script.id == script_id).first()
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found")
+
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is empty")
+
+    from ..services.boost_service import adapt_tts_readability
+
+    try:
+        adapted, changed = adapt_tts_readability(text)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"adapted_text": adapted, "changed_lines": changed}
 
 
 @router.post("/{script_id}/correct")

@@ -11,6 +11,7 @@ __all__ = [
     "ArticleCreate",
     "RewriteRequest",
     "CorrectRequest",
+    "TtsAdaptRequest",
     "FetchUrlRequest",
     "FetchUrlResponse",
     "ArticleUpdate",
@@ -51,6 +52,11 @@ class CorrectRequest(BaseModel):
     """洗稿后的修正观点请求."""
     model: Literal["flash", "pro"] | None = None
     perspective: str = Field(..., min_length=1, max_length=500, description="修正观点")
+
+
+class TtsAdaptRequest(BaseModel):
+    """口播适配请求: 编辑区当前全文 (可能含未保存的手改)."""
+    text: str = Field(..., min_length=1, max_length=20000, description="待读法适配的口播全文")
 
 
 class FetchUrlRequest(BaseModel):

@@ -34,14 +34,8 @@ async function rewriteArticle() {
         ta.value = '';
         fetchScript(data.script_id);
         toggle('btn-save-script', true);
-        toggle('btn-goto-audio', true);
-        // 显示修正观点区域
-        const p2section = document.getElementById('perspective-2-section');
-        if (p2section) p2section.style.display = 'block';
-        // 半自动流程: 洗稿后显示爆品改造入口 (手动触发)
-        const boostSection = document.getElementById('boost-section');
-        if (boostSection) boostSection.style.display = 'block';
-        toggle('btn-boost', true);
+        // 显示修正观点/爆品改造区 + 口播适配等工具 (2026-08-27 统一走 revealScriptToolbars)
+        revealScriptToolbars();
       } else if (data.type === 'rewrite_error') {
         source.close();
         setStatus('status-rewrite', data.error, true);
@@ -99,8 +93,7 @@ async function correctScript() {
         document.getElementById('script-text').value = '';
         fetchScript(data.script_id);
         toggle('btn-correct', true);
-        toggle('btn-save-script', true);
-        toggle('btn-goto-audio', true);
+        revealScriptToolbars();
       } else if (data.type === 'correct_error') {
         source.close();
         setStatus('status-correct', data.error, true);
@@ -133,7 +126,10 @@ async function loadLatest() {
     try {
       const scripts = await api('GET', '/scripts?limit=50');
       const mine = scripts.filter(s => s.article_id === currentArticle.id);
-      if (mine.length) await fetchScript(mine[0].id);
+      if (mine.length) {
+        await fetchScript(mine[0].id);
+        revealScriptToolbars();
+      }
     } catch (_) { /* 静默 */ }
     // 顺带绑定该文章最新素材包 (等价于新闻线索页跳转, 2026-08-15)
     try {
@@ -331,19 +327,54 @@ async function boostScript() {
   }
 }
 
+// ── 口播适配 (2026-08-27): 全文数字/百分比/连字符 → 中文读法, 其余 1:1 ──
+// 手改稿专用: 洗稿数字禁令只覆盖首产, 手改引入的阿拉伯数字靠此补转。
+// 结果只回填编辑区不落库 — 目检后点「保存编辑」才写库+重分段。
+async function ttsAdaptScript() {
+  if (!currentScript) return;
+  const ta = document.getElementById('script-text');
+  const text = ta.value.trim();
+  if (!text) {
+    setStatus('status-rewrite', '编辑区无内容可适配', true);
+    return;
+  }
+  toggle('btn-tts-adapt', false);
+  setStatus('status-rewrite', '口播适配中（数字/百分比/连字符/星号 → 中文读法，其余一字不动）…');
+  try {
+    const data = await api('POST', `/scripts/${currentScript.id}/tts-adapt`, { text });
+    ta.value = data.adapted_text;
+    updateCharCount();
+    setStatus('status-rewrite', data.changed_lines > 0
+      ? `✅ 口播适配完成: ${data.changed_lines} 行已转读法/清符号 — 请目检后点「保存编辑」落库`
+      : '✅ 全文无数字/百分号/连字符/星号, 无需适配', false, true);
+  } catch (e) {
+    setStatus('status-rewrite', '口播适配失败: ' + e.message, true);
+  } finally {
+    toggle('btn-tts-adapt', true);
+  }
+}
+
+// ── 脚本就绪后的工具区显现 (2026-08-27 bug 修复) ──
+// 爆品改造/修正观点区原先只在 洗稿完成/手动调取 两路显示; 带 article_id
+// 进入的自动调取路径 (从音频页后退回来的主路径) 漏了 → 按钮凭空消失。
+function revealScriptToolbars() {
+  const p2 = document.getElementById('perspective-2-section');
+  if (p2) p2.style.display = 'block';
+  const boost = document.getElementById('boost-section');
+  if (boost) boost.style.display = 'block';
+  toggle('btn-save-script', true);
+  toggle('btn-boost', true);
+  toggle('btn-tts-adapt', true);
+  toggle('btn-goto-audio', true);
+}
+
 // ── 调取已有脚本 (从 app.js v6 迁入) ──
 async function selectExistingScript(select) {
   const scriptId = select.value;
   if (!scriptId) return;
   try {
     await fetchScript(scriptId);
-    const p2 = document.getElementById('perspective-2-section');
-    if (p2) p2.style.display = 'block';
-    const boost = document.getElementById('boost-section');
-    if (boost) boost.style.display = 'block';
-    toggle('btn-save-script', true);
-    toggle('btn-boost', true);
-    toggle('btn-goto-audio', true);
+    revealScriptToolbars();
     // 调取脚本后回填来源文章 banner
     if (currentScript.article) {
       currentArticle = currentScript.article;
@@ -427,6 +458,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const mine = scripts.filter(s => s.article_id === articleId);
         if (mine.length) {
           await fetchScript(mine[0].id);
+          revealScriptToolbars();
           autoLoaded = true;
         }
       } catch (_) { /* 无脚本或列表失败: 静默, 用户走「开始洗稿」 */ }
