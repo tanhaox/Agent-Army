@@ -46,6 +46,58 @@ BONUS_DIMENSIONS = ("motion_level", "content_density", "time_of_day")
 LOCATION_RELAX_ACTIVE = True
 
 
+def match_entity_bullseye(
+    db: Session,
+    entity_queries: list[str],
+    *,
+    min_duration_sec: float | None = None,
+    orientation: str | None = None,
+    exclude: list[str] | None = None,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """实体靶心通道 (素材层 2.0, 2026-08-27): 实体英文 query × 素材英文指纹.
+
+    特朗普/航母这类真实画面实体, 命中 raw_query/description_en/tags 即为
+    正确素材 — 绕过 9 维门槛 (tone 不对也是对的画面)。命中即给 100 分基分,
+    供上层直接采用或与常规通道结果合并排序。
+    entity_queries: 实体的英文搜索词 (entity['queries'] 的并集, 小写)。
+    """
+    if not entity_queries:
+        return []
+    q = db.query(VideoAsset)
+    q = q.filter(VideoAsset.preference != "dislike")
+    if exclude:
+        q = q.filter(~VideoAsset.file_path.in_(exclude))
+    if orientation:
+        q = q.filter(VideoAsset.orientation == orientation)
+    from sqlalchemy import String as _S, or_
+    like = lambda col, term: col.cast(_S).ilike(f"%{term}%")  # noqa: E731
+    conds = []
+    for term in entity_queries:
+        term = term.strip().lower()
+        if len(term) < 3:
+            continue
+        conds.append(like(VideoAsset.raw_query, term))
+        conds.append(like(VideoAsset.description_en, term))
+        conds.append(like(VideoAsset.description_zh, term))
+    if not conds:
+        return []
+    q = q.filter(or_(*conds))
+    rows = q.all()
+    out = []
+    for a in rows:
+        if min_duration_sec and (a.duration_sec or 0) < min_duration_sec - 0.5:
+            continue
+        blob = " ".join(filter(None, [a.raw_query, a.description_en, a.description_zh,
+                                      " ".join(a.tags or [])]))
+        score = 100 + sum(1 for t in entity_queries if t.lower() in blob.lower()) * 5
+        out.append({"file_path": a.file_path, "score": score, "asset_no": a.asset_no,
+                    "duration_sec": a.duration_sec, "entity_bullseye": True,
+                    "used_count": a.used_count or 0})
+    out.sort(key=lambda r: (-r["score"], r["used_count"]))
+    return out[:limit]
+
+
 def match_local_assets(
     db: Session,
     keywords: list[str] | None = None,

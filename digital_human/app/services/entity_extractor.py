@@ -23,6 +23,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# 实验开关 (2026-08-27 用户令: 实验成功前不并入系统内部) —
+# False 时 _persist_plan 的实体抽取挂钩静默跳过; 模块函数仍可供离线实验调用。
+ENTITY_LAYER_ENABLED = False
+
 # 实体类型 → 素材源路由 (第 2 期接下载管线, 第 1 期先出需求单)
 SOURCE_ROUTES: dict[str, list[str]] = {
     "person": ["youtube", "dvids"],     # 真实人物: 演讲/新闻画面 (军事人物 DVIDS)
@@ -45,9 +49,11 @@ ENTITY_PROMPT = """你是短视频素材采购员。读下面这篇口播稿，�
 
 # 规则
 - 只提口播稿**点名**的实体; 稿里没提的不猜 (宁缺毋滥)
+- person 仅限**公众人物** (政要/企业家/名人) — 稿内 anecdotes 虚构人物/普通市民/受访者 (如"义乌老陈""一位工程师") 不算, 他们搜不到真实画面
+- **国家名不算实体** (美国/中国/日本每篇都有, 无检索价值) — 除非绑定具体事件场景; 具体城市可提 (底特律/义乌)
 - 每实体给 queries: {"youtube": "英文搜索词(新闻/官方频道口径)", "pexels": "英文图库词(仅concept/place需要)", "dvids": "英文军语(仅military)"}
 - 出现多次的同一实体只提一次; 优先提画面权重高的 (主角人物/核心装备/关键事件)
-- concept 不超过 3 个 (太多=没重点)
+- concept 不超过 3 个 (太多=没重点); 全稿没有真实画面实体就返回空 entities 数组
 
 # 输出
 {"entities": [{"name": "中文名", "type": "person", "queries": {...}, "why": "口播中的上下文短语(≤20字)"}]}"""
@@ -72,12 +78,18 @@ def extract_material_entities(script_text: str) -> list[dict[str, Any]]:
         return []
 
     out: list[dict[str, Any]] = []
+    # 显著性代码侧兜底 (LLM 偶尔仍会提): 国家名/纯国名 place 丢弃 —
+    # 每篇都有无检索价值; anecdotes 人物由提示词拦, 这里再拦泛化国家。
+    _GENERIC_PLACES = {"美国", "中国", "中国大陆", "日本", "俄罗斯", "欧盟", "欧洲", "亚洲", "全球", "西方"}
     for it in items:
         etype = str(it.get("type") or "").strip()
-        if etype not in SOURCE_ROUTES or not it.get("name"):
+        name = str(it.get("name") or "").strip()
+        if etype not in SOURCE_ROUTES or not name:
+            continue
+        if etype == "place" and name in _GENERIC_PLACES:
             continue
         out.append({
-            "name": str(it["name"]).strip(),
+            "name": name,
             "type": etype,
             "queries": {k: v for k, v in (it.get("queries") or {}).items() if v},
             "why": str(it.get("why") or "")[:40],
