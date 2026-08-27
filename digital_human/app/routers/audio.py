@@ -166,7 +166,8 @@ def _do_tts(job_id: str):
 
             # ── 情绪标注 (2026-08-25 从爆品改造拆出, 移至生成音频时刻) ──
             # 单一事实源: 用与 TTS 完全同源的文本现场标注 → 不存在"改稿后旧标注
-            # 错配"窗口 (此前靠改稿清空+异步重跑兜)。失败落 calm 平滑降级。
+            # 错配"窗口 (此前靠改稿清空+异步重跑兜)。失败落整篇 surprised/3 兜底
+            # (2026-08-27 惊讶打底定稿; 原 calm 兜底听着平)。
             # 耗时 ~10-30s, 藏在 TTS 引擎冷启动 (~2min) 里零感知。
             emotion_segments: list | None = None
             from ..services.pinyin_fix import apply_pinyin_marks
@@ -179,10 +180,8 @@ def _do_tts(job_id: str):
                     persona_name = (
                         getattr(script.host, "stamp_name", None) or script.host.name
                     ) or "老谭"
-                # 赛道注入 (2026-08-25): geo=地缘严肃分析 → serious 主基调
-                # (满篇惊讶在 2.5 上=逗逼感, 实测毁人设)
-                _track = (script.article.track if script and script.article else None) or None
-                raw_anno = annotate_emotions(tts_text, persona_name, track=_track)
+                # (2026-08-27 撤 geo 分赛道: 全赛道统一惊讶打底)
+                raw_anno = annotate_emotions(tts_text, persona_name)
                 parsed = _parse_emotion_annotations(raw_anno) if raw_anno else None
                 if parsed:
                     emotion_segments = parsed
@@ -191,13 +190,15 @@ def _do_tts(job_id: str):
                     _publish(job_id, {"type": "tts_service",
                                       "message": f"情绪标注完成: {len(parsed)} 段"})
                 else:
+                    emotion_segments = [{"emotion": "surprised", "strength": 3, "text": tts_text}]
                     _publish(job_id, {"type": "tts_service",
-                                      "message": "情绪标注解析失败, 本篇走默认 calm"})
+                                      "message": "情绪标注解析失败, 本篇整篇惊讶打底(3档)"})
             except Exception as exc:
-                logger.warning("[tts %s] emotion annotate failed, fallback calm: %s",
+                logger.warning("[tts %s] emotion annotate failed, fallback surprised: %s",
                                job_id[:8], exc)
+                emotion_segments = [{"emotion": "surprised", "strength": 3, "text": tts_text}]
                 _publish(job_id, {"type": "tts_service",
-                                  "message": "情绪标注失败, 本篇走默认 calm"})
+                                  "message": "情绪标注失败, 本篇整篇惊讶打底(3档)"})
 
             def _progress(completed: int, total: int, text: str | None, audio_file: AudioFile | None = None) -> None:
                 job.completed_segments = completed

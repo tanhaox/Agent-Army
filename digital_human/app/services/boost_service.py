@@ -213,7 +213,7 @@ P4_PROMPT = """你是{persona}的【最终精修师】。你拿到的是一篇�
 - **型号连字符替换（2026-08-15）**：型号/版本号中的连字符一律删除并转中文读法（GLM-5.3 → GLM五点三；GLM-130B → GLM一百三十B；DeepSeek-V4 → DeepSeek四版）。裸连字符 TTS 会读成「负」。
 - **清除预告/计数句（2026-08-15）**：「这篇的赞，我给三条」「下面说三件事」等内容预告/计数句直接删除，只保留内容本身。
 - **口语化电击**：严禁"综上所述""值得注意的是"等 AI 腔；用老谭式转场（"这事儿咱们得剥开看""这里面有个坑"）。
-- **有画面感**：让听众闭眼能"看见"画面，拒绝抽象名词堆砌。
+- **有画面感（可执行公式, 2026-08-27）**：关键句的画面感二选一——①参照物证据：不写"30米高的巨人"，写"手掌和一辆汽车一样宽"；②物理行为：不写"非常真实"，写"贴在皮肤表面，沿重力缓慢低落"。禁止用"画面感/真实感/震撼/宏大"这类形容词替代画面（Hell Grind 文法：给证据，不喊口号）。
 - **先炸后圆**：重要结论先抛，再解释背景。
 - **认知差**：适当插入"普通人以为 A，但实际是 B"。
 - **主观评价中立化**：主观情绪论断（"我觉得他不好"）改写为中立陈述+开放互动（"我不评价他，欢迎评论区聊聊"），仅改主观句，不动事实。
@@ -269,14 +269,14 @@ calm / serious / surprised / happy / angry / sad / afraid / disgusted / melancho
 
 # 标注规则
 - 分 6~10 个区间，区间连续不重叠，合起来覆盖全部句子；区间边界只在语义模块切换处（背景→硬事实→人物→对照→升华）。
-- 强度档 1-7：叙述/铺垫 1-3，关键模块 4-6，全篇至多一个 7；相邻区间强度差 ≤2，形成情绪坡度。
-- 身份段（"大家好，我是XX…"前后 1-2 句）恒用主基调低档（1-2），禁止惊讶。
-- 主基调按内容气质：严肃分析（军事/政治/经济风险）以 serious 为主、爆点/转折区间用 surprised 起伏（强度可到 6）；轻快叙事可用 surprised 为主基调但铺垫段 ≤3 档。情绪要有坡度起伏,全篇一个情绪到底=平。
+- **全程惊讶打底（主基调铁律, 2026-08-27 用户定稿）**：所有区间默认情绪一律 surprised。起伏不靠换情绪，靠强度档坡度——叙述/铺垫 2-3 档，硬事实/数据爆点 4-6 档，全篇至多一个 7 档；相邻区间强度差 ≤2。
+- 身份段（"大家好，我是XX…"前后 1-2 句）恒用 surprised 低档（1-2），惊讶打底但低调进场。
+- serious 等其他情绪仅允许 ≤2 个对比点缀区间（强反差/沉重伤亡对照处），禁止连续两个非惊讶区间，禁止充当主基调。
 - happy 仅用于结尾升华区间。
 
 # 输出（严格 JSON, 不要其他文字）
 {"spans": [[起始句号, 结束句号, "情绪", 强度], ...]}
-例: {"spans": [[1, 3, "serious", 2], [4, 18, "serious", 4], [19, 30, "serious", 3]]}"""
+例: {"spans": [[1, 3, "surprised", 2], [4, 18, "surprised", 5], [19, 24, "surprised", 3], [25, 30, "happy", 4]]}"""
 
 
 # P7 流量评审 (2026-08-25): 复刻豆包五维测评框架 — 发布前仪表盘, 只评审不改稿。
@@ -886,7 +886,9 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
     "[情绪/强度] 段落文字" 兼容下游 (_parse / _map_lines_to_segments / 存储)。
     旧协议 (LLM 复写全文 3000+ 字) 触发大输出空响应, 需 thinking 压制约 48s;
     新协议 flash 直跑 ~10-15s, 且段文本与 TTS 行天然逐行对齐 (零漂移)。
-    track: geo 强制 serious 主基调 (满篇惊讶=逗逼感)。失败返回 None (调用方落 calm)。
+    track: 2026-08-27 起不再分赛道 — 全程惊讶打底 (实测 serious 打底在 IndexTTS2
+    上听着平/困, 且 LLM 把带数据的科技稿也误判成"严肃分析")。失败返回 None
+    (调用方落整篇 surprised 兜底)。
     """
     try:
         from scripts.tts_lib.lines import _split_line_indices
@@ -896,14 +898,7 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
         numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
 
         prompt = P5_SPAN_PROMPT.replace('{persona}', persona_name)
-        # geo 轻提示 (2026-08-25 v2): 此前为修 2.5"逗逼语音包"设过严厉硬规则
-        # (serious 强制 + 惊讶≤2段≤4); 引擎已回退 IndexTTS2(情绪表现力温和),
-        # 撤严厉限制恢复情绪起伏 — 只保留"身份段低调"这一条普适规则。
-        if (track or "").strip().lower() == "geo":
-            prompt = (
-                "【赛道提示】本篇为地缘/国际分析: 主基调 serious, 数据/事件爆点区间"
-                "可上 surprised(强度可到 6), 身份段恒低调(1-2 档)。\n\n" + prompt
-            )
+        # (2026-08-27 撤 geo serious 赛道提示: 全赛道统一惊讶打底, 起伏靠强度档。)
         prompt += f"\n\n【编号句子表（共 {len(lines)} 句）】\n" + numbered
         raw = _call(prompt, json_mode=True, max_tokens=1200)
         data = _extract_json(raw)
@@ -911,8 +906,8 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
             logger.warning("[p5] span parse failed: %s", str(raw)[:80])
             return None
 
-        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (最后兜底 calm/2)
-        emo_of: list[tuple[str, int]] = [("calm", 2)] * len(lines)
+        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (初始兜底 surprised/2)
+        emo_of: list[tuple[str, int]] = [("surprised", 2)] * len(lines)
         spans = data.get("spans") or []
         for sp in spans:
             try:
