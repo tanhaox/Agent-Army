@@ -265,3 +265,29 @@ def _persist_plan(
                      + (f" (失败: {stats['failed']})" if stats.get("failed") else ""))
     except Exception as exc:  # noqa: BLE001 — 增强层任何失败不挡主流程
         append_trace(db, job, "shot_contract", "failed", str(exc)[:120])
+
+    # ── 素材实体层 (2026-08-27, 素材层 2.0 第 1 期): 口播稿 → 实体需求单 ──
+    # 特朗普演讲/航母这类真实画面 Pexels 图库根本没有 — 实体按类型路由
+    # (person/military/event→油管/DVIDS 第2期接线, concept→Pexels 兜底)。
+    # 实体入 plan_json + slot params.entities (本地碰撞实体维度, 第3期)。
+    try:
+        from ..entity_extractor import extract_material_entities, match_slot_entities, requirement_sheet
+        script = getattr(job, "script", None)
+        full_text = ((getattr(script, "boosted_text", None) or "")
+                     or (getattr(script, "script_text", None) or "")) if script else ""
+        entities = extract_material_entities(full_text)
+        if entities:
+            pj = dict(job.plan_json or {})
+            pj["material_entities"] = entities
+            job.plan_json = pj
+            for s in job.slots:
+                hits = match_slot_entities(s.text_context or "", entities)
+                if hits:
+                    params = dict(s.params_json or {})
+                    params["entities"] = hits
+                    s.params_json = params
+            db.commit()
+        append_trace(db, job, "material_entities", "done",
+                     f"素材实体 {len(entities)} 个\n{requirement_sheet(entities)}")
+    except Exception as exc:  # noqa: BLE001 — 增强层失败不挡主流程
+        append_trace(db, job, "material_entities", "failed", str(exc)[:120])
