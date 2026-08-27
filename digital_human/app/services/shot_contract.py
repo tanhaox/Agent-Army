@@ -37,6 +37,7 @@ SHOT_CONTRACT_PROMPT = """你是短视频的【镜头契约师】。下面是口
 - light_material: 主光源来自哪 + 关键材质怎么响应光（高光随光源移动等）
 - risk_focus: 本画面最可能翻车的 ≤3 点（如: 文字乱码/人物变形/运动无因果）
 - tone_words: 2-4 个基调词（冷静/紧张/温暖/恢弘…）
+- brightness: 亮度基调三选一 — "暗调/中调/亮调"。默认**中调**；只有 tone_words 明确阴郁/沉重/压抑（如葬礼/危机/深夜戏）才允许暗调。⚠ Wan2.2 t2v 暗调默认，写暗调画面会黑成一团
 - effect_recipe: 从下方菜单选（选不出合适的就 null，禁止编菜单外的名字）
 
 # 特效菜单（J2 效果目录实测高频池, 名字必须逐字照抄; 运行时由目录 top 池填充）
@@ -45,7 +46,7 @@ SHOT_CONTRACT_PROMPT = """你是短视频的【镜头契约师】。下面是口
 # 输出格式
 {"contracts": [{"slot_index": <槽位号>, "visual_goal": "...", "first_frame": "...",
   "motion": "...", "camera": "...", "light_material": "...",
-  "risk_focus": ["..."], "tone_words": ["..."],
+  "risk_focus": ["..."], "tone_words": ["..."], "brightness": "中调",
   "effect_recipe": {"video_effect": "发光 或 null", "anim_in": "渐显 或 null"}}]}"""
 
 
@@ -112,7 +113,7 @@ def generate_shot_contracts(db: Session, job_id: str) -> dict[str, Any]:
                 continue
             contract = {k: item.get(k) for k in
                         ("visual_goal", "first_frame", "motion", "camera",
-                         "light_material", "risk_focus", "tone_words")}
+                         "light_material", "risk_focus", "tone_words", "brightness")}
             recipe = item.get("effect_recipe") or {}
             # 菜单校验: 编造的效果名直接丢 (J2 目录里不存在 = 剪映加不上)
             if not valid_ve or recipe.get("video_effect") not in valid_ve:

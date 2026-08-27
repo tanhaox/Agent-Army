@@ -40,6 +40,20 @@ _RISK_NEG: dict[str, dict] = {
 }
 
 
+def brightness_anchor(contract: dict[str, Any] | None = None) -> str:
+    """亮度锚 (兵器谱: 亮调需'负面词手术+单亮度锚' — Wan2.2 t2v 暗调默认).
+
+    契约 brightness 中调/亮调 (或未标) → 返回单条亮度锚追加正向;
+    暗调 → 空 (不干预, 场景本身要暗)。
+    """
+    b = (contract or {}).get("brightness") or "中调"
+    if b == "暗调":
+        return ""
+    if b == "亮调":
+        return "画面整体明亮通透，如同充足的自然光照亮所有细节"
+    return "画面整体明亮，主体细节清晰可见"
+
+
 def build_prompt(
     contract: dict[str, Any] | None = None,
     *,
