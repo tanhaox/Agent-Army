@@ -1,107 +1,70 @@
 # -*- coding: utf-8 -*-
-"""tools.vpn — 变色龙加速器托管 (2026-08-27, 素材层外网管线配套).
+"""tools.vpn — mihomo (Clash Meta) 代理托管 (2026-08-27 v2, 替换变色龙).
 
-实测链路 (2026-08-27 定稿):
-  启动 Main.exe → 弹一次确认框(需人工点一次) → 点窗口内开关(相对坐标 210,360)
-  → 本地 HTTP 代理口 127.0.0.1:9876 激活 → youtube 200 @1.2s
+v1 教训 (变色龙): GUI 开关坐标点击/admin 杀不掉/虚拟网卡与显卡驱动冲突死机 —
+用户裁决直接换内核。mihomo 优势:
+  - 纯命令行: 启动=spawn, 停止=kill pid (无需 admin), 零点击
+  - 代理模式无虚拟网卡 → 与 GPU 互斥问题根因消失 (仍保留检查作保险)
+  - REST 控制口 9090: 节点/延迟/切换全 API 可控
 
-⚠ GPU 互斥铁律 (用户令, 不可违): VPN 与 4090 计算不能同时 — 虚拟网卡与显卡
-驱动冲突会死机/重启。connect() 前必须 ensure_gpu_idle(); GPU 任务前 disconnect()。
-llama-server(8080)/ComfyUI(8188)/数字人后端都可能占卡, 按端口探测逐 PID 杀。
-
-⚠ 2026-08-27 实测状态: connect 已验证可用 (启动+点开关(断开态 210,360)+代理口 9876+youtube 200)。
-disconnect 未自动化: ①连接态 UI 布局变了, 断开钮坐标未知(存档 _cham_connected.png 待视觉定位)
-②进程 admin 权限杀不掉(Access denied) ③WM_CLOSE 被托盘模式无视。
-临时手段: 人工点断开 / 或连"断开"坐标定位后补 disconnect()。
+部署: E:/AI/mihomo/{mihomo.exe, config.yaml}; 订阅链接填 config.yaml 的
+SUB_URL_PLACEHOLDER (机场买的 Clash 订阅)。
 
 用法 (CLI):
   python -m tools.vpn status
-  python -m tools.vpn connect [--force-kill-gpu]
-  python -m tools.vpn disconnect
+  python -m tools.vpn start          # 启动代理 (幂等)
+  python -m tools.vpn stop           # 停止
+  python -m tools.vpn restart
 用法 (代码):
-  from tools.vpn import connect, disconnect, PROXY, proxy_env
+  from tools.vpn import ensure_proxy, PROXY, proxy_env, with_proxy
+  ensure_proxy()                     # 未启动则启动, 已启动直接用
   requests.get(url, proxies=proxy_env())
-  yt-dlp --proxy http://127.0.0.1:9876 ...
+  yt-dlp --proxy http://127.0.0.1:7890 ...
+
+⚠ 旧变色龙 (Cham/Main.exe): 已弃用。若在跑且 mihomo 要起, 端口不冲突
+(9876 vs 7890) 可共存, 但建议关掉省心。
 """
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-EXE = r"C:\Program Files\Cham\Main.exe"
-PROXY = "http://127.0.0.1:9876"
-PROBE_URL = "https://www.youtube.com/generate_204"  # 轻量连通探针
-TOGGLE_X, TOGGLE_Y = 210, 360  # 窗口内相对坐标 (视觉模型实测, 窗口 420x720)
+MIHOMO_DIR = Path("E:/AI/mihomo")
+MIHOMO_EXE = MIHOMO_DIR / "mihomo.exe"
+PROXY = "http://127.0.0.1:7890"
+CTRL = "http://127.0.0.1:9090"
+PROBE_URL = "https://www.gstatic.com/generate_204"
 
-# 占用 4090 的服务端口 → 互斥检查用 (与 gpu_service_manager specs 对齐)
-GPU_PORTS = {8080: "llama-server", 8188: "comfyui", 7862: "indextts",
-             7860: "fish-speech", 7861: "f5-tts"}
+# 保险: 与 GPU 大任务的粗互斥提示位 (代理模式无虚拟网卡, 风险根因已除)
+GPU_PORTS = {8080: "llama-server", 8188: "comfyui"}
 
 
 def proxy_env() -> dict:
     return {"http": PROXY, "https": PROXY}
 
 
-def _ps(script: str) -> str:
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                       capture_output=True, text=True, timeout=60)
-    return (r.stdout or "") + (r.stderr or "")
-
-
-def _proc() -> tuple[int, str] | None:
-    """返回 (pid, 窗口标题) — 主进程带窗口才算可操作."""
-    out = _ps(
-        "Get-Process | Where-Object {$_.Name -eq 'Main'} | "
-        "Where-Object {$_.MainWindowTitle -ne ''} | "
-        "ForEach-Object { \"$($_.Id)|$($_.MainWindowTitle)\" }")
-    for line in out.splitlines():
-        line = line.strip()
-        if "|" in line:
-            pid, title = line.split("|", 1)
-            try:
-                return int(pid), title
-            except ValueError:
-                continue
-    return None
-
-
-def _listening(port: int) -> int | None:
-    r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, timeout=30)
+def _pid() -> int | None:
+    """mihomo 进程 PID (找命令行含 mihomo 的 python/exe)."""
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-CimInstance Win32_Process | Where-Object {$_.Name -eq 'mihomo.exe'} "
+         "| ForEach-Object { $_.ProcessId }"],
+        capture_output=True, text=True, timeout=30)
     for line in (r.stdout or "").splitlines():
-        if f"127.0.0.1:{port}" in line and "LISTEN" in line:
-            try:
-                return int(line.split()[-1])
-            except (ValueError, IndexError):
-                return None
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
     return None
 
 
-def gpu_busy() -> list[str]:
-    """在跑的 GPU 服务清单 (互斥检查)."""
-    return [f"{name}(:{port},pid={_listening(port)})"
-            for port, name in GPU_PORTS.items() if _listening(port)]
-
-
-def ensure_gpu_idle(force: bool = False) -> list[str]:
-    """杀掉在跑的 GPU 服务 (按端口→PID 精确, 不批量杀 python)."""
-    killed: list[str] = []
-    for port, name in GPU_PORTS.items():
-        pid = _listening(port)
-        if not pid:
-            continue
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
-        killed.append(f"{name}(:{port},pid={pid})")
-    return killed
-
-
-def probe(timeout: int = 8) -> bool:
-    """代理口→外网探针 (generate_204 最轻)."""
-    handler = urllib.request.ProxyHandler(proxy_env())
-    opener = urllib.request.build_opener(handler)
+def _probe(timeout: int = 8) -> bool:
+    """经代理探外网."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxy_env()))
     try:
         with opener.open(PROBE_URL, timeout=timeout) as resp:
             return resp.status in (200, 204)
@@ -109,102 +72,93 @@ def probe(timeout: int = 8) -> bool:
         return False
 
 
+def _ctrl(path: str) -> dict | None:
+    """REST 控制口查询 (节点/延迟)."""
+    try:
+        with urllib.request.urlopen(CTRL + path, timeout=5) as r:
+            return json.loads(r.read().decode())
+    except Exception:
+        return None
+
+
 def status() -> dict:
-    proc = _proc()
-    port_up = _listening(9876) is not None
-    ok = probe(6) if port_up else False
-    return {"process": proc[0] if proc else None,
-            "proxy_port_up": port_up, "proxy_ok": ok,
-            "gpu_busy": gpu_busy()}
+    return {"pid": _pid(), "proxy_ok": _probe(6),
+            "ctrl_up": _ctrl("/version") is not None,
+            "gpu_note": [n for p, n in GPU_PORTS.items() if _ctrl(f"/../{p}") or False] or None}
 
 
-def _click_toggle(pid: int) -> None:
-    """置前后台 + 按窗口相对坐标点开关."""
-    _ps(r"""
-$p = Get-Process -Id %d
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public class V {
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
-  public struct R { public int L, T, Rt, B; }
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint data, UIntPtr extra);
-}
-'@
-$r = New-Object 'V+R'
-[V]::GetWindowRect($p.MainWindowHandle, [ref]$r) | Out-Null
-[V]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 600
-[V]::SetCursorPos($r.L + %d, $r.T + %d) | Out-Null
-Start-Sleep -Milliseconds 300
-[V]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 120
-[V]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
-Write-Host ("clicked window+" + %d + "," + %d)
-""" % (pid, TOGGLE_X, TOGGLE_Y, TOGGLE_X, TOGGLE_Y))
-
-
-def connect(force_kill_gpu: bool = False, wait_sec: int = 25) -> dict:
-    """确保 VPN 连通: GPU清场 → 拉起/复用进程 → 点开关 → 等代理口 → 探针."""
-    busy = gpu_busy()
-    if busy and not force_kill_gpu:
-        return {"ok": False, "error": f"GPU 服务在跑, 互斥铁律拒绝连接: {busy} (用 --force-kill-gpu)"}
-    if busy:
-        ensure_gpu_idle()
-
-    if probe(4):  # 已连通
-        return {"ok": True, "already": True, **{k: v for k, v in status().items()}}
-
-    proc = _proc()
-    if not proc:
-        subprocess.Popen([EXE], cwd=str(Path(EXE).parent))
-        print("[vpn] Main.exe 已拉起 (首次启动若弹确认框需人工点一次)")
-        for _ in range(wait_sec):
-            time.sleep(2)
-            proc = _proc()
-            if proc:
-                break
-    if not proc:
-        return {"ok": False, "error": "进程未起来 (确认框未点?)"}
-
-    time.sleep(2)
-    _click_toggle(proc[0])
+def start(wait_sec: int = 20) -> dict:
+    """启动 mihomo (幂等): spawn → 等控制口 → 探针."""
+    if _probe(4):
+        return {"ok": True, "already": True, **status()}
+    if not MIHOMO_EXE.exists():
+        return {"ok": False, "error": f"缺 {MIHOMO_EXE}"}
+    cfg = MIHOMO_DIR / "config.yaml"
+    if "SUB_URL_PLACEHOLDER" in cfg.read_text(encoding="utf-8"):
+        return {"ok": False,
+                "error": "config.yaml 订阅链接未填 (SUB_URL_PLACEHOLDER) — 机场订阅买好后替换"}
+    subprocess.Popen([str(MIHOMO_EXE), "-d", str(MIHOMO_DIR)],
+                     cwd=str(MIHOMO_DIR),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(wait_sec):
-        time.sleep(2)
-        if _listening(9876) and probe(6):
-            return {"ok": True, "pid": proc[0], **{k: v for k, v in status().items()}}
-    return {"ok": False, "error": "点了开关但代理口未就绪/探针失败", **status()}
+        time.sleep(1)
+        if _ctrl("/version") and _probe(6):
+            return {"ok": True, **status()}
+    return {"ok": False, "error": "启动后探针失败 (节点不通? 订阅过期?)", **status()}
 
 
-def disconnect() -> dict:
-    proc = _proc()
-    pid = proc[0] if proc else _listening(9876)
+def stop() -> dict:
+    pid = _pid()
     if pid:
         subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
-        time.sleep(2)
-    return {"ok": not _listening(9876), "killed_pid": pid}
+        time.sleep(1)
+    return {"ok": _pid() is None, "killed": pid}
+
+
+def ensure_proxy() -> bool:
+    """素材抓取前调用: 未启动则启动. 返回代理可用性."""
+    return bool(start().get("ok") or _probe(4))
+
+
+def nodes() -> list[dict]:
+    """当前节点与延迟 (url-test 组延迟榜)."""
+    proxies = _ctrl("/proxies") or {}
+    grp = (proxies.get("proxies") or {}).get("PROXY") or {}
+    now = grp.get("now")
+    rows = []
+    for name in grp.get("all") or []:
+        p = (proxies.get("proxies") or {}).get(name) or {}
+        hist = p.get("history") or []
+        delay = hist[-1].get("delay") if hist else None
+        rows.append({"name": name, "delay_ms": delay, "selected": name == now})
+    return sorted(rows, key=lambda r: (r["delay_ms"] is None, r["delay_ms"] or 0))
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="变色龙 VPN 托管 (GPU 互斥)")
+    ap = argparse.ArgumentParser(description="mihomo 代理托管")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status")
-    p_c = sub.add_parser("connect")
-    p_c.add_argument("--force-kill-gpu", action="store_true")
-    sub.add_parser("disconnect")
+    sub.add_parser("start")
+    sub.add_parser("stop")
+    sub.add_parser("restart")
+    sub.add_parser("nodes")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     if args.cmd == "status":
-        print(status())
-    elif args.cmd == "connect":
-        r = connect(force_kill_gpu=args.force_kill_gpu)
-        print(r)
-        return 0 if r.get("ok") else 1
+        print(json.dumps(status(), ensure_ascii=False))
+    elif args.cmd in ("start", "restart"):
+        if args.cmd == "restart":
+            stop()
+        r = start()
+        print(json.dumps(r, ensure_ascii=False))
+        sys.exit(0 if r.get("ok") else 1)
+    elif args.cmd == "stop":
+        print(json.dumps(stop(), ensure_ascii=False))
     else:
-        print(disconnect())
+        for n in nodes()[:10]:
+            mark = "★" if n["selected"] else " "
+            print(f"{mark} {n['name'][:36]:38s} {n['delay_ms'] or '-'}ms")
     return 0
 
 
