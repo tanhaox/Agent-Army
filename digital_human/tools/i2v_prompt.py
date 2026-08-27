@@ -36,6 +36,7 @@ _RISK_NEG: dict[str, dict] = {
     "F-ARTIFACT": {"keys": ["artifact", "伪影", "多余", "穿透", "肢体"], "negs": ["多余肢体", "物体穿透", "塑料质感"]},
     "F-MOTION-NONE": {"keys": ["none", "静止", "不动"], "negs": []},  # 基线"静态/静止"双覆盖
     "F-STYLE-SLOP": {"keys": ["slop", "塑料", "锐化", "饱和", "AI味"], "negs": ["过度锐化", "色彩过饱和"]},
+    "F-PROMPT-OVERDO": {"keys": ["过度", "烟雾", "浓", "过量", "雾霾"], "negs": ["浓重烟雾", "烟雾弥漫"]},
 }
 
 

@@ -43,6 +43,8 @@ FAILURE_CODES: dict[str, dict[str, str]] = {
                           "layer": "提示词", "fix": "只保留一个主运动, 其余写静止"},
     "F-PROMPT-JARGON": {"symptom": "镜头随机 (写了 mm 数/摄影术语没生效)",
                         "layer": "提示词", "fix": "FOV 结果化: 写画面里能看到什么"},
+    "F-PROMPT-OVERDO": {"symptom": "特效/氛围过度强调致失真 (如冷气浓成雾霾) — 人审常用, llama 难辨",
+                        "layer": "提示词", "fix": "该效果全稿只描述一次, 其余句删; 加针对性负向 (浓烟雾等)"},
     "F-MELT": {"symptom": "主体融化/边界粘连/纹理流失",
                "layer": "生成随机性", "fix": "同 batch 换 seed 复测; 仍熔 → 降运动幅度或回提示词"},
     "F-DRIFT": {"symptom": "主体漂移出画面/布局重构",
