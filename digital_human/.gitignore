@@ -77,6 +77,9 @@ sandbox/*
 sandbox/reports/*
 !sandbox/reports/*.md
 !sandbox/reports/*_vision_zones.json
+!sandbox/ref_videos/
+sandbox/ref_videos/*
+!sandbox/ref_videos/*_asr.json
 .sandbox_preview/
 data/frames_cache/
 data/l0/
