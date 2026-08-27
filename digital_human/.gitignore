@@ -70,7 +70,13 @@ data/geo_batch/
 digital_human_2/
 
 # 2026-08-27 审计补充: 素材/缓存/密钥/备份不入库
-sandbox/
+# sandbox 只忽略大文件素材 (视频/抽帧/ASR); 拆解工具与报告是实验工作产物, 必须留痕:
+sandbox/*
+!sandbox/*.py
+!sandbox/reports/
+sandbox/reports/*
+!sandbox/reports/*.md
+!sandbox/reports/*_vision_zones.json
 .sandbox_preview/
 data/frames_cache/
 data/l0/
