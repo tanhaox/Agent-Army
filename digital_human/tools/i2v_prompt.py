@@ -40,6 +40,26 @@ _RISK_NEG: dict[str, dict] = {
 }
 
 
+# 风格定位 → 前缀/负向 (2026-08-27 用户定稿: "弄成卡通的、手办类的感觉, 别直接往
+# 实物上生成" — AI 意象统一走卡通手办美学; 真实画面另有素材API管线, 写实是较劲)
+_STYLE_MAP: dict[str, dict] = {
+    "示意": {"prefix": "卡通手办风格的微缩立体场景：圆润可爱的形体，材质像磨砂塑料与树脂模型，摆放感强，色彩明快干净，柔和的摄影棚布光",
+             "negs": ["照片级写实", "真实照片", "摄影质感", "粗糙纹理"]},
+    "抽象": {"prefix": "抽象概念可视化，纯粒子与光的运动，无具体物体",
+             "negs": ["具体物体", "照片级写实"]},
+    "写实": {"prefix": "", "negs": []},  # 明确要写实时才用 (Wan2.2 打不赢的仗)
+    # 未标 = 同示意 (契约默认)
+    "": {"prefix": "卡通手办风格的微缩立体场景：圆润可爱的形体，材质像磨砂塑料与树脂模型，摆放感强，色彩明快干净，柔和的摄影棚布光",
+         "negs": ["照片级写实", "真实照片", "摄影质感", "粗糙纹理"]},
+}
+
+
+def style_directives(contract: dict[str, Any] | None = None) -> tuple[str, list[str]]:
+    """契约 style → (正向前缀, 针对性负向). 缺省按示意处理."""
+    spec = _STYLE_MAP.get(str((contract or {}).get("style") or "").strip(), _STYLE_MAP["示意"])
+    return spec["prefix"], list(spec["negs"])
+
+
 def brightness_anchor(contract: dict[str, Any] | None = None) -> str:
     """亮度锚 (兵器谱: 亮调需'负面词手术+单亮度锚' — Wan2.2 t2v 暗调默认).
 

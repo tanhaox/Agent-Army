@@ -200,17 +200,21 @@ def generate(
 
 
 def generate_from_contract(contract: dict, image: str | None, prefix: str = "i2v", **kw) -> dict:
-    """契约驱动: tools/i2v_prompt.build_prompt + 亮度锚 + 针对性负向 → generate.
+    """契约驱动: 风格前缀 + build_prompt + 亮度锚 + 针对性负向 → generate.
 
     亮度链 (2026-08-27, 用户实测"总是这么暗"修): 契约 brightness 非暗调 →
     负面词换亮调手术版 (NEG_BRIGHT: 去"色调艳丽"压亮度项 + 加过暗死黑) +
     正向追加单亮度锚 — 兵器谱定稿做法接入契约链。
+    风格链 (同日, 用户定稿"示意了非要弄成真的=较劲"): style 缺省示意 →
+    非写实前缀 + 写实负面 — AI 意象放弃写实较劲, 真实画面走素材API管线。
     """
-    from tools.i2v_prompt import NEG_BASE, NEG_BRIGHT, brightness_anchor
+    from tools.i2v_prompt import (NEG_BASE, NEG_BRIGHT, brightness_anchor,
+                                  style_directives)
 
+    style_prefix, style_negs = style_directives(contract)
     anchor = brightness_anchor(contract)
-    pos = build_prompt(contract) + ("，" + anchor if anchor else "")
-    negs = targeted_negs(contract)
+    pos = "，".join(p for p in (style_prefix, build_prompt(contract), anchor) if p)
+    negs = targeted_negs(contract) + style_negs
     neg = (NEG_BRIGHT if anchor else NEG_BASE) + ("，" + "，".join(negs) if negs else "")
     return generate(image, pos, prefix, negative=neg, **kw)
 
