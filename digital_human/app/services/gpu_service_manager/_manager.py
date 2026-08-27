@@ -12,6 +12,50 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.services.gpu_service_manager._http import http_ok
+
+
+# ── GPU-VPN 互斥 (2026-08-27 用户令) ─────────────────────────────────────
+# 变色龙 VPN (C:\Program Files\Cham\Main.exe) 的虚拟网卡与显卡驱动冲突,
+# 带 VPN 跑 GPU 会死机/重启。所有 GPU 会话启动前强制退出; 进程是 admin
+# 权限, 普通 taskkill 杀不掉时抛错让用户手动断开 — 严禁带 VPN 起 GPU。
+_VPN_PROC = "Main.exe"  # 变色龙主进程名
+
+
+def vpn_running() -> int | None:
+    """变色龙在跑 → PID; 没跑 → None.
+
+    按进程名 Main 匹配 — admin 进程的 Path 对普通权限为空 (实测 PID 14812
+    path=[] 导致 Path 过滤漏判), 宁可误判不可漏判: 名字命中即当 VPN。
+    """
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "Get-Process -Name Main -ErrorAction SilentlyContinue "
+         "| ForEach-Object { \"$($_.Id)|$($_.MainWindowTitle)\" }"],
+        capture_output=True, text=True, timeout=30)
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if "|" in line:
+            pid_s = line.split("|", 1)[0].strip()
+            title = line.split("|", 1)[1].strip()
+            if pid_s.isdigit() and (not title or "变色龙" in title):
+                return int(pid_s)
+    return None
+
+
+def ensure_vpn_quiet(backend: str = "") -> None:
+    """GPU 会话前置守卫: VPN 在跑则尝试强杀; 杀不掉 (admin) 硬抛错."""
+    pid = vpn_running()
+    if not pid:
+        return
+    subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+    import time as _t
+    _t.sleep(1.5)
+    if vpn_running():
+        raise RuntimeError(
+            f"⚠ GPU-VPN 互斥铁律: 变色龙 VPN (PID {pid}) 正在运行, 其虚拟网卡与显卡驱动"
+            "冲突会死机/重启, 且进程为管理员权限无法自动退出 — 请手动断开/退出 VPN 后重试"
+            f" (GPU 任务: {backend or '未知'})")
+
 from app.services.gpu_service_manager._lifecycle import ServiceLifecycleMixin
 from app.services.gpu_service_manager._specs import NO_LOCAL_SERVICE, ServiceSpec
 
@@ -55,10 +99,12 @@ class GPUServiceManager(ServiceLifecycleMixin):
 
     @contextmanager
     def session(self, backend: str, status_callback: StatusCallback | None = None):
-        """排队获取 GPU → 确保 backend 服务在线 → 执行 → 释放.
+        """排队获取 GPU → VPN 查杀 → 确保 backend 服务在线 → 执行 → 释放.
 
         backend 不是本地 GPU 服务 (如 elevenlabs) 时直接放行.
         服务启动失败抛 RuntimeError, 超时抛 TimeoutError.
+        2026-08-27 用户令: 起 GPU 前强制退出本地 VPN(变色龙) — 虚拟网卡与
+        显卡驱动冲突会死机/重启; 进程 admin 权限杀不掉时抛错让用户手动断开。
         """
         if backend in NO_LOCAL_SERVICE or backend not in self.specs:
             yield
@@ -67,6 +113,8 @@ class GPUServiceManager(ServiceLifecycleMixin):
             # 未启用托管: 保持旧行为 (直接调用, 服务不在线由调用方报错)
             yield
             return
+
+        ensure_vpn_quiet(backend)
 
         notify = status_callback or (lambda msg: None)
 

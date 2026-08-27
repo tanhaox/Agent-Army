@@ -133,9 +133,20 @@ def _reset_proc() -> None:
 
 
 def _ensure_llama_server() -> bool:
-    """确保 llama-server 正在运行；未运行则自动拉起."""
+    """确保 llama-server 正在运行；未运行则自动拉起.
+
+    2026-08-27 用户令: llama 占 4090, 拉起前走 GPU-VPN 互斥守卫
+    (变色龙在跑 → 尝试杀 → 杀不掉返回 False, 由调用方提示手动断开)。
+    """
     if _is_llama_running():
         return True
+
+    try:
+        from app.services.gpu_service_manager._manager import ensure_vpn_quiet
+        ensure_vpn_quiet("llama-server")
+    except RuntimeError as exc:
+        print(f"[llama] {exc}")
+        return False
 
     with _LLAMA_PROC_LOCK:
         if _is_llama_running():
