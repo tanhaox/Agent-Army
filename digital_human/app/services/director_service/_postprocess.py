@@ -254,3 +254,14 @@ def _persist_plan(
         db.add(slot)
     db.commit()
     db.refresh(job)
+
+    # ── 镜头契约层 (2026-08-27, J3 前置): 独立 flash 二段跑, 不碰规划提示词 ──
+    # 契约+J2 effect_recipe 存 params_json; 增强层失败静默, 不阻塞 reviewing。
+    try:
+        from ..shot_contract import generate_shot_contracts
+        stats = generate_shot_contracts(db, job.id)
+        append_trace(db, job, "shot_contract", "done",
+                     f"镜头契约 {stats.get('contracts', 0)} 条 / 配方 {stats.get('recipes', 0)} 个"
+                     + (f" (失败: {stats['failed']})" if stats.get("failed") else ""))
+    except Exception as exc:  # noqa: BLE001 — 增强层任何失败不挡主流程
+        append_trace(db, job, "shot_contract", "failed", str(exc)[:120])

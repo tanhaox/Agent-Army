@@ -345,6 +345,7 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     # 曾致画面比音轨短 ~1.9s)。素材短 → 微降速拉满分配窗口 (≤15%, 不可感知);
     # 素材长 → 截取前段。素材实例缓存避免同素材多 slot 重复探测。
     skipped: list[int] = []
+    n_fx = 0  # J2 effect_recipe 挂载数 (2026-08-27 契约层消费统计)
     mat_cache: dict[str, draft_mod.VideoMaterial] = {}
     hf_windows: list[tuple[int, int]] = []  # 文字承载 HF 窗 (字幕抑制用, v3 独载分工)
     for s in slots:
@@ -394,6 +395,20 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                 volume=0,
             )
         script.add_segment(seg, "main")
+        # J2 effect_recipe 消费 (2026-08-27): 镜头契约选定的画面特效挂素材段 —
+        # 契约层 (shot_contract.py) 从 J2 目录菜单选的名, 此处枚举直通加挂。
+        _recipe = ((s.params_json or {}).get("shot_contract") or {}).get("effect_recipe") or {}
+        _ve = _recipe.get("video_effect")
+        if _ve:
+            from .jy_effect_library import pyjyd
+            _member = pyjyd(_ve)
+            if _member is not None:
+                try:
+                    seg.add_effect(_member)
+                    n_fx += 1
+                except Exception as exc:  # noqa: BLE001 — 特效挂不上不挡导出
+                    logger.warning("[jy_export] slot %d 特效 %s 挂载失败: %s",
+                                   s.slot_index, _ve, exc)
         if s.workflow in _HF_TEXT_FAMILIES:
             ws = int(round(s.start_sec * _US))
             hf_windows.append((ws, ws + alloc_us))
@@ -486,6 +501,7 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
         "anim_attached": r9_stats["anim"],
         "caption_suppressed": r9_stats["caption_suppressed"],
         "sfx_boundary": r9_stats["sfx_boundary"],
+        "fx_attached": n_fx,
         "skipped_slots": skipped,
         "exported_at": datetime.now().isoformat(timespec="seconds"),
     }
