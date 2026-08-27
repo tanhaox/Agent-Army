@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """第二层 facing 面向蒸馏 (2026-08-22) — 多 agent, 各拿 L0 章节跑一个维度.
 
-设计: docs/蒸馏产物schema设计.md §3. 每个 facing = 一个独立 LLM 调用, 输入 L0 章节块,
+设计: docs/design/蒸馏产物schema设计.md §3. 每个 facing = 一个独立 LLM 调用, 输入 L0 章节块,
 输出该维度结构化 JSON, 落 data/l0/{book}/facing/facing-*.json.
 
 面向:

@@ -1,7 +1,7 @@
 # 蒸馏产物 Schema 设计（两级蒸馏 · 面向产线）
 
 > 2026-08-22 讨论定稿。核心转向：**不在下游提示词上打补丁，在蒸馏时就产出对后面有用的内容**。
-> 关联：`docs/拆书项目-实施方案.md`、`app/services/book_service/distiller.py`（现蒸馏 v2）。
+> 关联：`docs/design/拆书项目-实施方案.md`、`app/services/book_service/distiller.py`（现蒸馏 v2）。
 
 ---
 

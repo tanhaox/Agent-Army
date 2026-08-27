@@ -1,7 +1,8 @@
 # digital_human — 开发者导览
 
 **目标读者**: 第一次接触这个项目的开发者(或自己隔 2 周回来看)。读 10 分钟能上手开发。
-**不替代**: [项目状态总览.md](项目状态总览.md)(当前阶段/技术栈)、[项目进度看板.md](项目进度看板.md)(待办/优先级)、[CHANGELOG.md](CHANGELOG.md)(时间线/版本)。
+**不替代**: [项目状态总览.md](docs/status/项目状态总览.md)(当前阶段/技术栈)、[项目进度看板.md](docs/status/项目进度看板.md)(待办/优先级)、[CHANGELOG.md](CHANGELOG.md)(时间线/版本)。
+**找文档**: 全项目 md 索引与 docs/ 存放规则 → [docs/INDEX.md](docs/INDEX.md)（新文档落位前先读规则）。
 
 ---
 
@@ -235,7 +236,7 @@ routers/ppt.py (PPT 出片产线)
 
 ## 10. 扩展指南
 
-> 本节只列扩展位和方向,不写实现。具体改动落点见 [项目进度看板.md](项目进度看板.md)。
+> 本节只列扩展位和方向,不写实现。具体改动落点见 [项目进度看板.md](docs/status/项目进度看板.md)。
 
 **新加 TTS 后端**: `app/services/tts_service.py` 加新 backend;`config/app.yaml:defaults` 加 `base_url_*`;`voices.backend` 字段加枚举。
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""书库解析 (2026-08-22 v3) — txt/epub 提取 + L0 结构 (docs/蒸馏产物schema设计.md §7).
+"""书库解析 (2026-08-22 v3) — txt/epub 提取 + L0 结构 (docs/design/蒸馏产物schema设计.md §7).
 
 L0 P0 增强：
 - 排版强调保留：`<b>/<strong>`/class bold → §B§…§/B§，`<i>/<em>` → §I§…§/I§，

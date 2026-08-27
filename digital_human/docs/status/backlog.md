@@ -167,7 +167,7 @@
 - **备注**:
   - 依赖 ID-002、ID-003、ID-004（均已 done）。
   - 2026-08-03 v3 优化：零拷贝流水线（`-c copy` concat 无需预归一化）、os.replace 替代 copy2、48kHz 音频统一。
-  - 2026-08-07 素材生命周期策略升级：不再「合成后自动清理 slots/」，slot 素材默认保留 `slot_retention_days`（默认 7 天），超期由 `main.py` 保留扫描回收（留成片）；删除 slots/ 唯二出口 = 用户删 job / 保留扫描（详见 [已完成-20260807-素材生命周期保留策略.md](improvements/已完成-20260807-素材生命周期保留策略.md)）。
+  - 2026-08-07 素材生命周期策略升级：不再「合成后自动清理 slots/」，slot 素材默认保留 `slot_retention_days`（默认 7 天），超期由 `main.py` 保留扫描回收（留成片）；删除 slots/ 唯二出口 = 用户删 job / 保留扫描（详见 [已完成-20260807-素材生命周期保留策略.md](../improvements/已完成-20260807-素材生命周期保留策略.md)）。
 
 ### ID-006：爬虫自动写入 articles 表
 
@@ -541,7 +541,7 @@
 - ✅ DeepSeek key 与双模型别名配置（`flash` / `pro`）
 - ✅ 洗稿接口支持 `model` 和 `prompt_template`
 - ✅ 视觉导演 Agent 2.0 提示词沉淀（`config/visual_director_v2.txt`）
-- ✅ DeepSeek V4 双模型使用指南（`docs/deepseek_v4_model_guide.md`）
+- ✅ DeepSeek V4 双模型使用指南（`docs/guides/deepseek_v4_model_guide.md`）
 - ✅ TTS 句内截断修复（ID-016）
 - ✅ ComfyUI 输入图质检（ID-015）
 - ✅ library.html 视频播放修复（ID-017）
@@ -930,7 +930,7 @@
   - `_call` 空响应自动重试 2 次（reasoning 模型偶发空输出）。
   - 代码兜底：P3 丢 P1 开头时强制拼回；全 Pass 失败回退原稿（不卡死配音）。
 - **涉及模块**: `app/services/boost_service.py`（新增）、`app/routers/articles.py`（rewrite 端点链式调）、`app/models/content.py`（Script 加 boosted_text/boost_titles）、`app/database.py`（迁移加列）
-- **文档**: [已完成-老谭提示词精进-20260810.md](improvements/已完成-老谭提示词精进-20260810.md)（完整讨论+决策）、[爆品改造-阶段提示词.md](improvements/爆品改造-阶段提示词.md)（三 Pass 提示词定稿，已转历史参考）
+- **文档**: [已完成-老谭提示词精进-20260810.md](../improvements/已完成-老谭提示词精进-20260810.md)（完整讨论+决策）、[爆品改造-阶段提示词.md](../improvements/爆品改造-阶段提示词.md)（三 Pass 提示词定稿，已转历史参考）
 - **验证**: 用老陈稿（瓜子水饺）跑 `run_boost` 端到端：P1/P2/P3 全成功，P1 新开头进稿、正文保留、预埋+呼吸点+结尾正确。
 - **待办**:
   - 前端看稿页展示 boost_titles / boosted_text（人工确认用新标题）。
@@ -1266,7 +1266,7 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
   2. `tts_service.py` 不消费 `emotion_annotations`（新增 `_parse_emotion_annotations` + `resolve_emotion`）
   3. 段落拼接破音 → `_concat_wavs_with_fade`（fade 消段接缝，gap=0）
 - **配套**：`lines.py` 按 P5 情绪段落分组行、每批带情绪参数；`enable_thinking: False`（DeepSeek-V4-Flash reasoning 失控思考，单步 110s→15s）
-- **文档**: [p5_情绪标注升级方案.md](p5_情绪标注升级方案.md)（注意：其中 P1-P3 标意图的三层分工已被 ID-046 砍除）、[tts_emotion_experiments.md](tts_emotion_experiments.md)（α 参数定稿依据）
+- **文档**: [p5_情绪标注升级方案.md](../design/p5_情绪标注升级方案.md)（注意：其中 P1-P3 标意图的三层分工已被 ID-046 砍除）、[tts_emotion_experiments.md](../guides/tts_emotion_experiments.md)（α 参数定稿依据）
 
 ### ID-046：【重构】爆品改造 boost 七层适配 — P1-P3 砍除（✅ 2026-08-14 完成）
 
@@ -1401,7 +1401,7 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
 - **优先级**: P0
 - **开发周期**: 2026-08-18 ~ 08-21
 - **描述**: 任意非虚构书 → 本地 Gemma 蒸馏精华稿 → 5 步创作流（输入补全→评论层(读者反应)→素材包(书化)→多集总纲→逐集生成，级联重跑）→ 安全评级 Gate0 → 可进后半段产线
-- **涉及模块**: `app/routers/books.py` / `app/services/book_service/`（reader/distiller/orchestrator/persona）/ `web/books*.html` / `docs/拆书项目-实施方案.md`
+- **涉及模块**: `app/routers/books.py` / `app/services/book_service/`（reader/distiller/orchestrator/persona）/ `web/books*.html` / `docs/design/拆书项目-实施方案.md`
 - **备注**: 蒸馏占 4090 显存（Gemma），批次结束全杀腾卡；级联重跑 N 作废 N..6
 
 ### ID-055：【PPT 出片】元素级剪映多轨草稿（2026-08-20~21）
@@ -1427,7 +1427,7 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
 - **优先级**: P1
 - **开发周期**: 2026-08-16 ~ 08-19
 - **描述**: 豆包规则榨取入库（财经科技/AI 专项/时政 CR-0/拆书线 6 发）→ 规则集 JSON + 代码审查（`distiller.audit_compliance` + 灵性检测代码扫描 + 赛道模板预埋红线）
-- **涉及模块**: `config/compliance_rules_{geo,tech,book}.json` / `docs/compliance/` / `docs/合规审查Pass-设计方案.md`
+- **涉及模块**: `config/compliance_rules_{geo,tech,book}.json` / `docs/compliance/` / `docs/design/合规审查Pass-设计方案.md`
 - **备注**: R20 参考资料尾卡（AI 溯源格式）
 
 ### 🔲 待办（拆书 P2/P3）

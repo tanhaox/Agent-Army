@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """拆书项目模型 (2026-08-19) — BookProject(书+商品信息) / Episode(6集状态机).
 
-方案: docs/拆书项目-实施方案.md。小黄车挂车动作在抖音侧人工, 系统仅记录+提醒。
+方案: docs/design/拆书项目-实施方案.md。小黄车挂车动作在抖音侧人工, 系统仅记录+提醒。
 """
 from __future__ import annotations
 

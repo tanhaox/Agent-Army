@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""L0 蒸馏管线 (2026-08-22) — 两级蒸馏第一层 (docs/蒸馏产物schema设计.md §7).
+"""L0 蒸馏管线 (2026-08-22) — 两级蒸馏第一层 (docs/design/蒸馏产物schema设计.md §7).
 
 P1: reader 章节块 + 自适应打包落盘 data/l0/{book}/chapters/ (py)
 P2: 每提取单元 Gemma 提取 l0-chapter schema (LLM)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """J 线草稿导出服务 — 导演 job → 剪映明文草稿 (J1, 2026-08-15).
 
-设计: docs/剪映草稿产线-设计方案.md §4
+设计: docs/design/剪映草稿产线-设计方案.md §4
 - slot 时间轴直接映射草稿 video 轨 (微秒制, source/target 双坐标系)
 - TTS 分段 wav 逐段进 audio 轨 (不聚合, 段落级可在剪映再调)
 - manifest 逐段文本进 text 轨 (字幕层)

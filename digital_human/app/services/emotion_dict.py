@@ -8,7 +8,7 @@
 
 8维顺序: [happy, angry, sad, afraid, disgusted, melancholic, surprised, calm]
 
-设计依据 (docs/tts_emotion_experiments.md):
+设计依据 (docs/guides/tts_emotion_experiments.md):
   - qwen 0.6B 自动识别不可靠 → LLM 标情绪为主
   - 情绪级自然 α 不同 (实验): 反感/愤怒 0.3-0.4, 高兴/惊讶 0.6
   - α 上限 0.65 保音色 (大学教授音色 0.8 漂移, 0.6 安全)
