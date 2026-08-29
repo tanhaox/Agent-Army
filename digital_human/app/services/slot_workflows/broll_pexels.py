@@ -104,6 +104,41 @@ def _try_local_collision(
     命中返回 (本地路径, 描述); 未命中返回 None 走 Pexels 在线降维搜索。
     """
     params = slot.params_json or {}
+    # ── 实体靶心通道 (2026-08-28 开闸验证): 实体命中 > 一切 9 维碰撞策略 ──
+    # 官片实体素材(英伟达/小米官频切片)是"正确画面"本身, 绕过门槛/strict 档位;
+    # 未命中照旧走原碰撞/在线下载。
+    ent_names = params.get("entities") or []
+    if ent_names:
+        try:
+            from app.models import DirectorJob
+            from app.services.asset_matcher import match_entity_bullseye
+            _job = db.query(DirectorJob).filter(
+                DirectorJob.id == slot.director_job_id).first()
+            pool = ((_job.plan_json or {}).get("material_entities")) if _job else []
+            _queries = [q.lower() for e in (pool or []) if e.get("name") in ent_names
+                        for q in (e.get("queries") or {}).values() if q]
+            if _queries:
+                hits = match_entity_bullseye(
+                    db, _queries, min_duration_sec=float(min_dur),
+                    orientation=orientation,
+                    exclude=_collect_used_local_files(db, slot), limit=3)
+                if hits:
+                    best = hits[0]
+                    # 使用登记三件套 (2026-08-28 修复: 同一素材反复用的根因):
+                    # ① register_asset_usage → 全局 used_count+1 (轮换排序依据)
+                    # ② 写回 params.local_file → 同 job 硬排除列表才会长
+                    # ③ 未写回时 _collect_used_local_files 永远为空 → 每 slot
+                    #    都拿同一最高分素材 (用户复验实测 0003×3/0012×7)
+                    register_asset_usage(db, best["file_path"])
+                    _np = dict(slot.params_json or {})
+                    _np["local_file"] = best["file_path"]
+                    slot.params_json = _np
+                    logger.info("[broll_pexels] slot %s 实体靶心命中官片: %s (实体 %s)",
+                                slot.slot_index, best["asset_no"], ent_names)
+                    return Path(best["file_path"]), f"实体官片:{ent_names[0]}"
+        except Exception as exc:  # noqa: BLE001 — 靶心失败静默回退常规碰撞
+            logger.warning("[broll_pexels] 实体靶心异常(回退): %s", exc)
+
     # P 线本地碰撞策略 (2026-08-16 用户反馈: 本地权重太高, 烂素材反复用):
     #   off    = 完全跳过本地碰撞, 全走 Pexels 新下载
     #   strict = 仅强命中才用本地 (hit_ratio ≥ 0.85, 远高于默认 75%)

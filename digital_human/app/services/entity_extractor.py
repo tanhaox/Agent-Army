@@ -24,8 +24,9 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # 实验开关 (2026-08-27 用户令: 实验成功前不并入系统内部) —
-# False 时 _persist_plan 的实体抽取挂钩静默跳过; 模块函数仍可供离线实验调用。
-ENTITY_LAYER_ENABLED = False
+# False 时 _persist_plan 的实体抽取挂钩静默跳过; 模块函数仍可供离线实验。
+# 2026-08-28 开闸: 小米稿(15f7df6e)重配画面 = 验证实验 (用户令"测试再配画面这一步")。
+ENTITY_LAYER_ENABLED = True
 
 # 实体类型 → 素材源路由 (第 2 期接下载管线, 第 1 期先出需求单)
 SOURCE_ROUTES: dict[str, list[str]] = {

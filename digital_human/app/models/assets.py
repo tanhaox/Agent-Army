@@ -99,6 +99,9 @@ class VideoAsset(Base):
     ai_tags_extra: Mapped[dict | None] = mapped_column(JSON, default=None)
     # 使用统计
     used_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 冷却调度 (2026-08-28 用户令"每10次才能复用一次"): 最近一次被选用时的全局序号;
+    # 当前序号 - last_used_seq < cooldown(10) 的素材在所有检索中被排除。
+    last_used_seq: Mapped[int | None] = mapped_column(Integer, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

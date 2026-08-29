@@ -70,6 +70,8 @@ def match_entity_bullseye(
         q = q.filter(~VideoAsset.file_path.in_(exclude))
     if orientation:
         q = q.filter(VideoAsset.orientation == orientation)
+    # 冷却调度 (2026-08-28): 靶心通道同守 — 官片也不能短时间内反复
+    q = _cooldown_filter(q, 10)
     from sqlalchemy import String as _S, or_
     like = lambda col, term: col.cast(_S).ilike(f"%{term}%")  # noqa: E731
     conds = []
@@ -94,7 +96,9 @@ def match_entity_bullseye(
         out.append({"file_path": a.file_path, "score": score, "asset_no": a.asset_no,
                     "duration_sec": a.duration_sec, "entity_bullseye": True,
                     "used_count": a.used_count or 0})
-    out.sort(key=lambda r: (-r["score"], r["used_count"]))
+    # 新鲜度优先 (2026-08-28): 未用过的排前, 同新鲜度按分, 再按 used_count —
+    # 防同 job 内同素材反复 (用户复验实测 0003×3/0012×7 的另一半根因)。
+    out.sort(key=lambda r: (r["used_count"] > 0, -r["score"], r["used_count"]))
     return out[:limit]
 
 
@@ -154,6 +158,12 @@ def match_local_assets(
             query = query.filter(
                 VideoAsset.used_count.is_(None) | (VideoAsset.used_count < _max_uses)
             )
+        # 冷却调度 (2026-08-28): 最近 N 次选用内被用过的素材出局
+        try:
+            _cooldown = get_config().defaults.material_reuse_cooldown
+        except Exception:
+            _cooldown = 10
+        query = _cooldown_filter(query, int(_cooldown or 0))
         if orientation:
             query = query.filter(VideoAsset.orientation == orientation)
         # 质量硬底线 (2026-08-16 用户反馈烂素材泛滥): 低清素材直接出局。
@@ -293,6 +303,10 @@ def match_local_assets(
                 continue
 
             score = 0
+            # 官片源加权 (2026-08-28 用户令"yt切片优先级太低"): youtube 官方素材
+            # 同场竞争时 +3 — 门槛分过了就是正确画面, 官方画质压图库
+            if (asset.source or "") == "youtube":
+                score += 3
             # keywords 精确打分 (词表包画面词, 不与命中率绑定)
             if keywords:
                 zh = (asset.description_zh or "").lower()
@@ -375,7 +389,13 @@ def register_asset_usage(db: Session, file_path: str) -> None:
     递增 ``used_count`` (updated_at 由 onupdate 自动刷新)。只增不减;
     不做同 job 硬排除 —— 本地库规模 (1500+) 远不足以支撑 107 slot 全去重,
     由 match_local_assets 的 ``used_count.asc()`` 排序自然把高频素材降优先级。
+
+    冷却调度 (2026-08-28 用户令"每10次才能复用一次"): 全局选用序号存
+    data/material_stats.json (免建表), 登记 = 序号+1 + 写 asset.last_used_seq;
+    检索侧 _cooldown_filter 排除 (当前序号 - last_used_seq) < cooldown 的素材。
     """
+    import json as _json
+
     asset = (
         db.query(VideoAsset)
         .filter(VideoAsset.file_path == file_path)
@@ -383,8 +403,41 @@ def register_asset_usage(db: Session, file_path: str) -> None:
     )
     if asset is None:
         return
+    stats_path = Path(__file__).resolve().parents[2] / "data" / "material_stats.json"
+    try:
+        stats = _json.loads(stats_path.read_text(encoding="utf-8"))
+    except Exception:
+        stats = {"selection_seq": 0}
+    stats["selection_seq"] = int(stats.get("selection_seq", 0)) + 1
+    stats_path.write_text(_json.dumps(stats), encoding="utf-8")
+
     asset.used_count = (asset.used_count or 0) + 1
+    asset.last_used_seq = stats["selection_seq"]
     db.commit()
+
+
+def _current_selection_seq() -> int:
+    """全局选用序号 (冷却判定的"现在")."""
+    import json as _json
+
+    try:
+        stats = _json.loads(
+            (Path(__file__).resolve().parents[2] / "data" / "material_stats.json")
+            .read_text(encoding="utf-8"))
+        return int(stats.get("selection_seq", 0))
+    except Exception:
+        return 0
+
+
+def _cooldown_filter(query, cooldown: int):
+    """冷却排除: 最近 cooldown 次选用内被用过的素材出局 (每 N 次才能复用一次)."""
+    if cooldown <= 0:
+        return query
+    now_seq = _current_selection_seq()
+    return query.filter(
+        VideoAsset.last_used_seq.is_(None)
+        | (VideoAsset.last_used_seq <= now_seq - cooldown)
+    )
 
 
 def pick_local_fallback() -> Path | None:
