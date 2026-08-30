@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import db_session, get_db
-from ..models import Article, MaterialItem, MaterialPackage
+from ..models import Article, MaterialIngestJob, MaterialItem, MaterialPackage
 from ..schemas.materials import (
     MaterialItemAddRequest,
     MaterialItemOut,
@@ -294,3 +294,86 @@ def delete_package(package_id: str, db: Session = Depends(get_db)):
     db.delete(pkg)
     db.commit()
     return {"ok": True}
+
+
+# ══ 素材摄入产线 (2026-08-30): 链接/实体批 → 下载→切片→OCR→LLM→入库 ════════
+
+from pydantic import BaseModel as _BM  # noqa: E402
+
+
+class IngestRequest(_BM):
+    mode: str = "url"                # url / entity
+    url: str | None = None           # mode=url
+    entity: str | None = None        # mode=entity (须在 config/geo_entities.yaml)
+    custom_search: str | None = None # 临时搜索词 (实体不在字典时用, entity 仍作标签)
+
+
+@router.get("/ingest/vpn")
+def ingest_vpn_status():
+    """VPN 探针 (UI 徽章轮询)."""
+    from ..services.material_ingest_service import vpn_state
+    return vpn_state()
+
+
+@router.get("/ingest/entities")
+def ingest_entities(db: Session = Depends(get_db)):
+    """实体字典 + 库存水位 (低于 min_stock 的标 need_refill)."""
+    from ..services.material_ingest_service import entity_entry, load_entities, stock_count
+    out = []
+    for e in load_entities():
+        out.append({**e, "stock": stock_count(db, e["name"]),
+                    "need_refill": stock_count(db, e["name"]) < int(e.get("min_stock", 10))})
+    return out
+
+
+@router.post("/ingest")
+def ingest_create(req: IngestRequest, db: Session = Depends(get_db)):
+    from ..services import material_ingest_service as svc
+
+    if req.mode == "url":
+        if not req.url:
+            raise HTTPException(400, "mode=url 需要 url")
+        job = MaterialIngestJob(mode="url", source_url=req.url,
+                                entity=req.entity or None, stage="queued")
+    else:
+        name = req.entity
+        if not name:
+            raise HTTPException(400, "mode=entity 需要 entity")
+        ent = svc.entity_entry(name)
+        if not ent and not req.custom_search:
+            raise HTTPException(404, f"实体字典无「{name}」, 且未提供 custom_search")
+        if not ent:  # 临时实体: 字典补一行内存态 (不改文件), 批完后即逝
+            svc.load_entities.cache_clear() if hasattr(svc.load_entities, "cache_clear") else None
+        job = MaterialIngestJob(mode="entity", entity=name, stage="queued",
+                                stats_json={"custom_search": req.custom_search})
+    db.add(job)
+    db.commit()
+    svc.start_job(job.id, job.mode)
+    return {"id": job.id, "stage": job.stage}
+
+
+@router.get("/ingest/jobs")
+def ingest_jobs(limit: int = 50, parent: str | None = None, db: Session = Depends(get_db)):
+    q = db.query(MaterialIngestJob)
+    if parent:
+        q = q.filter(MaterialIngestJob.parent_id == parent)
+    rows = q.order_by(MaterialIngestJob.created_at.desc()).limit(limit).all()
+    return [{"id": j.id, "mode": j.mode, "entity": j.entity, "title": j.title,
+             "video_id": j.video_id, "stage": j.stage, "error": j.error,
+             "stats": j.stats_json or {}, "parent_id": j.parent_id,
+             "created_at": str(j.created_at)[:19]} for j in rows]
+
+
+@router.post("/ingest/{job_id}/resume")
+def ingest_resume(job_id: str, db: Session = Depends(get_db)):
+    from ..services import material_ingest_service as svc
+    job = db.query(MaterialIngestJob).filter(MaterialIngestJob.id == job_id).first()
+    if not job:
+        raise HTTPException(404, "job not found")
+    if job.stage not in ("paused_vpn_on", "paused_vpn_off", "failed"):
+        raise HTTPException(409, f"状态 {job.stage} 无需 resume")
+    job.stage = "queued"
+    job.error = None
+    db.commit()
+    svc.start_job(job.id, "url")
+    return {"ok": True, "stage": "queued"}

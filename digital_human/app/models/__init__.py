@@ -9,6 +9,7 @@ from __future__ import annotations
 from .assets import DownloadLog, MaterialAsset, VideoAsset, VideoOutput
 from .base import Base, _new_uuid, _now
 from .book import BookProject, Episode
+from .material import MaterialIngestJob
 from .content import (
     Article,
     AudioFile,
@@ -39,4 +40,6 @@ __all__ = [
     "DirectorJob", "DirectorSlot", "VisualRenderJob",
     # 素材 / 成品
     "MaterialAsset", "DownloadLog", "VideoAsset", "VideoOutput",
+    # 素材摄入产线 (2026-08-30)
+    "MaterialIngestJob",
 ]
