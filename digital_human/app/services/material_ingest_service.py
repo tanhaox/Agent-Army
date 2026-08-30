@@ -2,11 +2,14 @@
 """material_ingest_service — 素材摄入产线 v2 (2026-08-30, 用户三需求:
 ①UI 推进不再靠对话 ②链接→下载→识别→切片全流程 ③VPN 检测+等待+自动续跑).
 
-五段流水 (各段幂等断点): download → split → ocr → tag → register
+六段流水 (2026-08-30 用户纠序: 先筛后切, 脏片段不产生):
+  download → probe(抽帧+切点探测) → ocr(整片1fps时间轴) → split(仅干净窗内切片)
+  → tag(每片一帧 LLM 内容识别) → register(入库+9维回填)
+  先切后筛的浪费: 切片半净半脏 → 整片陪葬; 先筛后切把文字检测变成时间轴,
+  切点 ∩ 干净窗 = 零浪费, 且省去脏片占盘。
 VPN 门控: download 需代理 ON / tag (GPU-VPN 互斥) 需代理 OFF —
   探针 = 经 9876 代理访问 youtube generate_204; 不满足进 waiting_* 轮询,
   满足自动续; 30min 超时进 paused_* (UI resume 续)。
-复用: sandbox/yt_ingest.py 的 split/ocr/tag 逻辑 (三轮实测打磨)。
 """
 from __future__ import annotations
 
@@ -38,7 +41,7 @@ STAGE_DIR = ROOT / "data" / "materials" / "youtube"
 FF = r"C:\Programs\ffmpeg\bin\ffmpeg.exe"
 
 # 阶段序 (resume 从当前 stage 重入)
-STAGES = ["download", "split", "ocr", "tag", "register"]
+STAGES = ["download", "probe", "ocr", "split", "tag", "register"]
 
 
 # ── VPN 探针/门控 ──────────────────────────────────────────────
@@ -123,17 +126,139 @@ def _fetch_info(video_id: str) -> dict:
 
 
 def _split(job: MaterialIngestJob) -> dict:
-    from sandbox.yt_ingest import cmd_split
-    video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")
-    cmd_split(video, job.video_id, entity=job.entity or "", title=job.title or "")
+    """干净窗切片 (v2.1 用户纠序): 切点 ∩ OCR 干净窗 → 只切干净段."""
     mf = STAGE_DIR / job.video_id / "manifest.json"
-    m = json.loads(mf.read_text(encoding="utf-8"))
-    return {"clips": len(m.get("clips", []))}
+    video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")
+    tl = json.loads((STAGE_DIR / job.video_id / "timeline.json").read_text(encoding="utf-8"))
+    cuts = tl.get("cuts") or []
+    windows = tl.get("clean_windows") or []
+    total = tl.get("total_sec") or 0.0
+    if not windows:
+        return {"clips": 0, "note": "全片带文字, 无干净窗"}
+
+    # 候选段 = 切点分段; 无切点(静态机位演讲) → 干净窗内均匀 ~10s 切
+    bounds = sorted(set([0.0] + [c for c in cuts if 0 < c < total] + [total]))
+    segs = [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)
+            if bounds[i + 1] - bounds[i] > 0.4]
+    final: list[tuple[float, float]] = []
+    for s, e in segs:
+        # 找覆盖该段的干净窗, 求交集 (只保留净部分)
+        for ws, we in windows:
+            ns, ne = max(s, ws), min(e, we)
+            if ne - ns >= 4.0:  # 最小可用片段
+                final.append((round(ns, 2), round(ne, 2)))
+    # 无切点兜底: 干净窗 >12s 未被覆盖 → 均匀切
+    covered = final or []
+    for ws, we in windows:
+        if we - ws < 4.0:
+            continue
+        n = max(1, int((we - ws) // 10))
+        step = (we - ws) / n
+        covered += [(round(ws + i * step, 2), round(ws + (i + 1) * step, 2))
+                    for i in range(n)]
+
+    clips_dir = STAGE_DIR / job.video_id / "clips"
+    clips_dir.mkdir(parents=True, exist_ok=True)
+    clips = []
+    for i, (s, e) in enumerate(covered):
+        out = clips_dir / f"clip_{i:03d}.mp4"
+        if not out.exists():
+            subprocess.run([FF, "-y", "-v", "error", "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
+                            "-i", video, "-c", "copy", str(out)],
+                           capture_output=True, timeout=120)
+        if out.exists() and out.stat().st_size > 50000:
+            clips.append({"n": i, "start": s, "end": e,
+                          "file": str(out.relative_to(ROOT)),
+                          "ocr_clean": True})  # 出自干净窗, 天然干净
+    manifest = {"video_id": job.video_id, "title": job.title or "",
+                "entity": job.entity or "", "clips": clips}
+    mf.write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"clips": len(clips)}
+
+
+def _probe(job: MaterialIngestJob) -> dict:
+    """抽帧+切点探测: 场景切点 → timeline.json (OCR 段消费)."""
+    video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")
+    out = subprocess.run(
+        [r"C:\Programs\ffmpeg\bin\ffprobe.exe", "-v", "error",
+         "-show_entries", "format=duration", "-of", "csv=p=0", video],
+        capture_output=True, text=True, timeout=60)
+    total = float((out.stdout or "0").strip() or 0)
+    r = subprocess.run([FF, "-i", video, "-vf",
+                        "select='gt(scene,0.20)',metadata=print", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=600)
+    cuts = sorted(float(m.group(1)) for m in
+                  re.finditer(r"pts_time:([0-9.]+)", r.stderr or ""))
+    d = STAGE_DIR / job.video_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "timeline.json").write_text(
+        json.dumps({"total_sec": total, "cuts": cuts}, ensure_ascii=False),
+        encoding="utf-8")
+    return {"total_sec": round(total, 1), "cuts": len(cuts)}
 
 
 def _ocr(job: MaterialIngestJob) -> dict:
-    from sandbox.yt_ingest import ocr_screen
-    return ocr_screen(job.video_id)
+    """OCR 时间轴 (v2.1): 整片 1fps 逐秒判定 → 干净窗清单写 timeline.json."""
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        ocr = RapidOCR()
+    except ImportError:
+        return {"error": "rapidocr 未装"}
+
+    import tempfile
+    video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")
+    tl_path = STAGE_DIR / job.video_id / "timeline.json"
+    tl = json.loads(tl_path.read_text(encoding="utf-8"))
+    total = tl.get("total_sec") or 0.0
+    tmp = tempfile.mkdtemp(prefix="ocrfull_")
+
+    def _f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # 逐秒抽帧+OCR (长片 ~100ms/帧; 25min≈1500帧≈3-4min CPU)
+    dirty_secs: set[int] = set()
+    t = 0.5
+    while t < total:
+        fp = Path(tmp) / f"{int(t*2)}.jpg"
+        subprocess.run([FF, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", video,
+                        "-frames:v", "1", "-vf", "scale=1280:-2",
+                        "-pix_fmt", "yuvj420p", str(fp)], capture_output=True)
+        if fp.exists():
+            try:
+                result, _ = ocr(str(fp))
+            except Exception:
+                result = None
+            if result:
+                for r in result:
+                    if _f(r[2]) >= 0.55 and (r[0][3][1] - r[0][1][1]) >= 9:
+                        dirty_secs.add(int(t))
+                        break
+            fp.unlink(missing_ok=True)
+        t += 1.0
+
+    # 干净窗合并 (脏秒即断窗; 连续干净段收窗)
+    windows: list[list[float]] = []
+    run_start = None
+    for sec in range(int(total) + 1):
+        if sec in dirty_secs:
+            if run_start is not None:
+                windows.append([run_start, float(sec)])
+                run_start = None
+        else:
+            if run_start is None:
+                run_start = float(sec)
+    if run_start is not None:
+        windows.append([run_start, total])
+    windows = [[max(0.0, ws - 0.5), min(total, we + 0.5)] for ws, we in windows]  # 半秒容差
+    tl["clean_windows"] = windows
+    tl["dirty_secs"] = len(dirty_secs)
+    tl_path.write_text(json.dumps(tl, ensure_ascii=False), encoding="utf-8")
+    clean_total = sum(we - ws for ws, we in windows)
+    return {"clean_windows": len(windows),
+            "clean_sec": round(clean_total), "dirty_sec": len(dirty_secs)}
 
 
 def _tag(job: MaterialIngestJob) -> dict:
@@ -248,7 +373,7 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
     order = {s: i for i, s in enumerate(STAGES)}
     start = order.get(job.stage, 0) if job.stage in order else 0
     if job.stage.startswith(("waiting", "paused")):
-        start = 0 if job.stage.endswith("_on") else 3  # wait_on → 从头; wait_off → 从 tag
+        start = 0 if job.stage.endswith("_on") else 4  # wait_on → 从头; wait_off → 从 tag
     stats = dict(job.stats_json or {})
 
     for stage in STAGES[start:]:
@@ -266,7 +391,9 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
                     db.commit()
                     return
 
-        job.stage = stage + "ing" if stage != "register" else "registering"
+        job.stage = {"download": "downloading", "probe": "probing", "ocr": "ocr",
+                     "split": "splitting", "tag": "tagging",
+                     "register": "registering"}[stage]
         db.commit()
 
         if stage == "download":
@@ -283,10 +410,12 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
                 except Exception:
                     pass
             _download(job)
-        elif stage == "split":
-            stats.update(_split(job))
+        elif stage == "probe":
+            stats.update(_probe(job))
         elif stage == "ocr":
             stats.update(_ocr(job))
+        elif stage == "split":
+            stats.update(_split(job))
         elif stage == "tag":
             stats.update(_tag(job))
         elif stage == "register":

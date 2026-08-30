@@ -69,9 +69,10 @@ async function ingestStartCustom() {
 }
 
 const STAGE_LABEL = {
-  queued: '排队', downloading: '⬇ 下载', splitting: '✂ 切片',
-  ocr: '🔍 OCR筛', tagging: '🧠 LLM打标', registering: '📥 入库', done: '✅ 完成',
-  failed: '❌ 失败', waiting_vpn_on: '⏳ 等VPN开', waiting_vpn_off: '⏳ 等VPN关',
+  queued: '排队', downloading: '⬇ 下载', probing: '🎞 抽帧',
+  ocr: '🔍 OCR时间轴', splitting: '✂ 净窗切片', tagging: '🧠 LLM打标',
+  registering: '📥 入库', done: '✅ 完成', failed: '❌ 失败',
+  waiting_vpn_on: '⏳ 等VPN开', waiting_vpn_off: '⏳ 等VPN关',
   paused_vpn_on: '⏸ 暂停(需VPN开)', paused_vpn_off: '⏸ 暂停(需VPN关)',
 };
 
@@ -87,8 +88,9 @@ async function ingestPollJobs() {
       const canResume = j.stage.startsWith('paused') || j.stage === 'failed';
       const s = j.stats || {};
       const stats = s.registered ? `入库 ${s.registered}` :
-        s.tagged ? `打标 ${s.tagged}` : (s.clean !== undefined) ? `OCR净 ${s.clean}/脏 ${s.dirty}` :
-        s.clips ? `切片 ${s.clips}` : '';
+        s.tagged ? `打标 ${s.tagged}` : s.clips ? `切片 ${s.clips}` :
+        (s.clean_windows !== undefined) ? `净窗 ${s.clean_windows} (${s.clean_sec||0}s)` :
+        (s.cuts !== undefined) ? `切点 ${s.cuts}` : '';
       return `<div style="display:flex;gap:0.6rem;align-items:center;padding:0.35rem 0;border-bottom:1px solid var(--border);">
         <span style="flex:0 0 90px;font-weight:600;">${j.entity || j.mode}</span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);">${j.title || j.source_url || ''}</span>
