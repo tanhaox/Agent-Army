@@ -429,6 +429,56 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
     logger.info("[ingest %s] done: %s", job.id[:8], stats)
 
 
+# ── 搜索规划器 (2026-08-30 用户单: 源头干净度是最上游杠杆) ────────
+# 领域知识固化进提示词: 官方政府频道/国会/C-SPAN 是 raw 无字幕; 新闻台
+# (CNN/BBC/DW/日テレ等) 上传必带 chyron 字幕条。LLM 按"干净源优先"生成
+# 搜索词 + 指定官方频道 + 片名避雷词, 下载前预筛掉注定脏的源。
+
+QUERY_PLANNER_PROMPT = """你是 YouTube 素材采购专家。为下面的实体生成"能搜到无字幕干净素材"的搜索方案。只输出 JSON。
+
+# 干净源知识 (核心依据)
+- 官方政府/机构频道 (The White House, 首相官邸, Kremlin, UN, 国会官方, C-SPAN, NATO, 白宫档案馆) = raw 无字幕, 最优
+- 新闻台上传 (CNN/BBC/FOX/DW/NHK/日テレ/TBS/ABS-CBN/ANC...) = 必带字幕条+台标, 尽量避开
+- 有利词: "full speech" "raw" "no commentary" "press conference" 官方口径
+- 不利词(片名含则脏): "subtitles" "subtitulado" "字幕" "CC" "hardcoded" "highlights"(新闻剪辑)
+
+# 任务
+给实体生成 3 路搜索 (queries) + 若知道其官方频道给出频道 handle (channels, 没有给空) + 片名避雷正则词 (avoid, 除上述通用词外加该实体特有的)
+
+# 输出
+{"queries": ["...", "...", "..."], "channels": ["@Kantei...", ...], "avoid": ["新闻台名", ...]}"""
+
+# 通用片名避雷 (静态): 预筛注定脏的源, 不浪费下载
+_STATIC_AVOID = re.compile(
+    r"subtitl|subtitulado|字幕|hardcoded|\bCC\b|closed.?caption|"
+    r"\bCNN\b|\bBBC\b|\bFOX\b|\bMSNBC\b|\bDW News\b|\bAl.?Jazeera\b|"
+    r"\bNHK\b|日テレ|テレ朝|TBS.?NEWS|\bABS.?CBN\b|\bANC\b|"
+    r"news.?live|breaking", re.I)
+
+
+def plan_queries(entity: str, etype: str) -> dict:
+    """LLM 搜索规划: 干净源导向的 queries + 官方频道 + 避雷词."""
+    try:
+        from ..services.boost_service import _call, _extract_json
+        raw = _call(QUERY_PLANNER_PROMPT + f"\n\n【实体】{entity} ({etype})",
+                    json_mode=True, max_tokens=600, temperature=0.3)
+        data = _extract_json(raw) or {}
+        return {"queries": [q for q in (data.get("queries") or []) if q][:3],
+                "channels": [c for c in (data.get("channels") or []) if c][:2],
+                "avoid": [a for a in (data.get("avoid") or []) if a][:6]}
+    except Exception as exc:
+        logger.warning("[ingest] 搜索规划失败(退字典默认): %s", exc)
+        return {"queries": [], "channels": [], "avoid": []}
+
+
+def _title_clean(title: str, extra_avoid: list[str]) -> bool:
+    """片名预筛: 避雷词命中 → 弃 (不浪费下载)."""
+    if _STATIC_AVOID.search(title or ""):
+        return False
+    low = (title or "").lower()
+    return not any(a.lower() in low for a in extra_avoid)
+
+
 def _run_entity_batch(parent_id: str) -> None:
     """实体批: 搜索 → 建子任务 → 顺序执行."""
     with db_session() as db:
@@ -437,40 +487,76 @@ def _run_entity_batch(parent_id: str) -> None:
         if not parent:
             return
         ent = entity_entry(parent.entity or "")
-        if not ent:
+        custom_search = (parent.stats_json or {}).get("custom_search")
+        if not ent and not custom_search:
             parent.stage = "failed"
             parent.error = f"实体字典无此实体: {parent.entity}"
             db.commit()
             return
-        query = (f"ytsearch{ent.get('max_videos', 2)}:" + ent["search"]
-                 if not ent.get("channel") else
-                 f"https://www.youtube.com/{ent['channel']}/videos")
-        max_dur = int(ent.get("max_duration", 3600))
-        r = subprocess.run(
-            [sys.executable, "-m", "yt_dlp", "--proxy", PROXY, "--flat-playlist",
-             "--print", "%(id)s|%(duration)s|%(title)s", query],
-            cwd=str(ROOT), capture_output=True, text=True, timeout=300)
-        kids: list[str] = []
-        for line in (r.stdout or "").splitlines():
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) != 3 or not parts[0] or parts[0] == "NA":
-                continue
-            dur = float(parts[1]) if parts[1].replace(".", "").isdigit() else 0
-            if not dur or not (30 <= dur <= max_dur):
-                continue
+        max_dur = int((ent or {}).get("max_duration", 3600))
+        max_videos = int((ent or {}).get("max_videos", 2))
+        etype = (ent or {}).get("type", "person")
+
+        # 🔮 LLM 搜索规划 (2026-08-30): 干净源导向 — 官方频道优先/新闻台避雷
+        plan = plan_queries(parent.entity or "", etype)
+        queries: list[str] = []
+        channels: list[str] = []
+        if custom_search:
+            queries.append(f"ytsearch{max_videos + 2}:" + custom_search)
+        if ent and ent.get("channel"):
+            channels.append(f"https://www.youtube.com/{ent['channel']}/videos")
+        channels += [f"https://www.youtube.com/{c}/videos" for c in plan["channels"]]
+        # 字典默认搜索词兜底 (规划空/全失败时)
+        if not queries and not channels:
+            base = (ent or {}).get("search") or custom_search or parent.entity
+            queries.append(f"ytsearch{max_videos + 2}:" + base)
+        else:
+            for q in plan["queries"][:2]:
+                queries.append(f"ytsearch{max(2, max_videos - 1)}:" + q)
+            if ent and not custom_search and channels:
+                queries.append(f"ytsearch2:" + (ent.get("search") or parent.entity))
+
+        avoid = plan["avoid"]
+        kids: dict[str, str] = {}  # video_id -> title (跨路去重)
+        for src in channels + queries:
+            if len(kids) >= max_videos + 2:
+                break
+            r = subprocess.run(
+                [sys.executable, "-m", "yt_dlp", "--proxy", PROXY, "--flat-playlist",
+                 "--print", "%(id)s|%(duration)s|%(title)s", src],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=300)
+            for line in (r.stdout or "").splitlines():
+                if len(kids) >= max_videos + 2:
+                    break
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) != 3 or not parts[0] or parts[0] == "NA":
+                    continue
+                dur = float(parts[1]) if parts[1].replace(".", "").isdigit() else 0
+                if not dur or not (30 <= dur <= max_dur):
+                    continue
+                if parts[0] in kids:
+                    continue
+                if not _title_clean(parts[2], avoid):  # 📋 片名预筛
+                    continue
+                kids[parts[0]] = parts[2][:200]
+
+        child_ids = []
+        for vid, title in list(kids.items())[:max_videos + 1]:
             kid = MaterialIngestJob(mode="url", entity=parent.entity,
-                                    source_url=f"https://www.youtube.com/watch?v={parts[0]}",
-                                    video_id=parts[0], title=parts[2][:200],
+                                    source_url=f"https://www.youtube.com/watch?v={vid}",
+                                    video_id=vid, title=title,
                                     stage="queued", parent_id=parent.id)
             db.add(kid)
             db.flush()
-            kids.append(kid.id)
-        parent.stats_json = {"children": len(kids)}
+            child_ids.append(kid.id)
+        parent.stats_json = {"children": len(child_ids),
+                             "planned_queries": plan["queries"],
+                             "planned_channels": plan["channels"]}
         parent.stage = "done"  # 父任务=调度器, 子任务各自跑
         db.commit()
 
-    for kid in kids:
-        _run_job(kid)
+    for cid in child_ids:
+        _run_job(cid)
 
 
 def start_job(job_id: str, mode: str) -> None:
