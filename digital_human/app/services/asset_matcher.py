@@ -75,6 +75,13 @@ def match_entity_bullseye(
     from sqlalchemy import String as _S, or_
     like = lambda col, term: col.cast(_S).ilike(f"%{term}%")  # noqa: E731
     conds = []
+    match_terms: list[str] = []
+    # 词级拆分 (2026-08-30 修复: 实体 query 是长短语 "Sanae Takaichi cabinet
+    # reshuffle press conference", 整短语子串匹配打不中片名只含人名的资产 —
+    # 实测 takaichi 直中 3 条而整句 0 条。拆成 ≥5 字母词参与匹配; 泛词
+    # (press/conference/speech/president...) 不单独匹配, 只留给整短语)。
+    _GENERIC = {"press", "conference", "speech", "president", "minister",
+                "government", "official", "national", "address", "cabinet"}
     for term in entity_queries:
         term = term.strip().lower()
         if len(term) < 3:
@@ -82,6 +89,14 @@ def match_entity_bullseye(
         conds.append(like(VideoAsset.raw_query, term))
         conds.append(like(VideoAsset.description_en, term))
         conds.append(like(VideoAsset.description_zh, term))
+        match_terms.append(term)
+        import re as _re
+        for w in _re.split(r"[^0-9a-z一-鿿]+", term):
+            if len(w) >= 5 and w not in _GENERIC:
+                for col in (VideoAsset.raw_query, VideoAsset.description_en,
+                            VideoAsset.description_zh):
+                    conds.append(like(col, w))
+                match_terms.append(w)
     if not conds:
         return []
     q = q.filter(or_(*conds))
@@ -90,9 +105,14 @@ def match_entity_bullseye(
     for a in rows:
         if min_duration_sec and (a.duration_sec or 0) < min_duration_sec - 0.5:
             continue
-        blob = " ".join(filter(None, [a.raw_query, a.description_en, a.description_zh,
-                                      " ".join(a.tags or [])]))
-        score = 100 + sum(1 for t in entity_queries if t.lower() in blob.lower()) * 5
+        title_blob = (a.raw_query or "").lower()
+        own_blob = " ".join(filter(None, [a.description_en, a.description_zh,
+                                          " ".join(a.tags or [])])).lower()
+        # 内容级 >> 标题级 (2026-08-30): 记者会视频含大量非本人切镜头, 只靠
+        # 视频标题命中会把特朗普切镜头配给高市早苗 — 自身描述命中 +8/词,
+        # 标题命中 +2/词, 逼内容对得上的切片排前。
+        score = 100 + sum(8 for t in match_terms if t in own_blob) \
+                     + sum(2 for t in match_terms if t in title_blob)
         out.append({"file_path": a.file_path, "score": score, "asset_no": a.asset_no,
                     "duration_sec": a.duration_sec, "entity_bullseye": True,
                     "used_count": a.used_count or 0})

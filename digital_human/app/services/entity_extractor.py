@@ -111,6 +111,51 @@ def match_slot_entities(slot_text: str, entities: list[dict[str, Any]]) -> list[
     return hit
 
 
+def promote_person_slots(db, job, entities: list[dict[str, Any]]) -> int:
+    """人物 slot 提升 (2026-08-30): slot 挂的人物实体在库里有真画面 → hf 文字卡转 broll.
+
+    根因: 规划 LLM 不知道素材库有什么, 高市早苗的关键 slot 被排成 hf_title
+    文字卡 — 她的镜头永远上不了片。此处确定性提升: person 类实体且靶心有货,
+    hf_* slot → broll_pexels (实体随行, 靶心直接命中官片)。返回转换数。
+    """
+    from ..models import DirectorSlot
+    person_ents = [e for e in entities if e.get("type") == "person"]
+    if not person_ents:
+        return 0
+    from .asset_matcher import match_entity_bullseye
+    # 只提升"库里有货"的人物
+    stocked: dict[str, list[str]] = {}
+    for e in person_ents:
+        qs = [q.lower() for q in (e.get("queries") or {}).values() if q]
+        qs.append(e["name"].lower())
+        try:
+            if match_entity_bullseye(db, qs, limit=1):
+                stocked[e["name"]] = qs
+        except Exception:
+            continue
+    if not stocked:
+        return 0
+    n = 0
+    for s in job.slots:
+        if not (s.workflow or "").startswith("hf"):
+            continue
+        ents = (s.params_json or {}).get("entities") or []
+        hit_ent = next((nm for nm in stocked if nm in ents), None)
+        if not hit_ent:
+            continue
+        params = dict(s.params_json or {})
+        params["keywords"] = [hit_ent] + [e for e in ents if e != hit_ent][:2]
+        s.workflow = "broll_pexels"
+        s.visual_type = "broll_pexels"
+        s.params_json = params
+        n += 1
+        logger.info("[entity] slot %s 人物提升 hf→broll (实体 %s 有库藏)",
+                    s.slot_index, hit_ent)
+    if n:
+        db.commit()
+    return n
+
+
 def requirement_sheet(entities: list[dict[str, Any]]) -> str:
     """需求单文本 (人读/落 trace): 哪些实体走哪个源、搜什么."""
     if not entities:

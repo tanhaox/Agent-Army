@@ -290,6 +290,13 @@ def _persist_plan(
                     params["entities"] = hits
                     s.params_json = params
             db.commit()
+        # 人物 slot 提升 (2026-08-30): 高市早苗根因 — 规划不知道库里有她的素材,
+        # 人物 slot 被排成 hf 文字卡。人物实体有库藏 → hf 转 broll 让真画面上片。
+        from ..entity_extractor import promote_person_slots
+        n_promo = promote_person_slots(db, job, entities)
+        if n_promo:
+            append_trace(db, job, "material_entities", "done",
+                         f"人物slot提升 {n_promo} 个 hf→broll (库藏人物)")
         append_trace(db, job, "material_entities", "done",
                      f"素材实体 {len(entities)} 个\n{requirement_sheet(entities)}")
     except Exception as exc:  # noqa: BLE001 — 增强层失败不挡主流程

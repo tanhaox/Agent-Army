@@ -47,6 +47,46 @@ RETRY_ROUND = [
     ("G7峰会", "ytsearch3:G7 summit press conference", 3, 3600),
 ]
 
+# VIP 轮 (2026-08-29 用户单): 过去一年高频新闻人物, 每国 3-4 人,
+# 剔除临时角色(某司令/某政府人士); 每人 2-3 部多下 — 筛选是漏斗, 量大出净货。
+# 已有富余的(特朗普54/冯德莱恩83)不重下, 只补缺口。
+VIP_ROUND = [
+    # 日本 (高市早苗是核心缺口 ×3)
+    ("高市早苗", "ytsearch3:Takaichi Sanae press conference", 3, 3600),
+    ("小泉进次郎", "ytsearch2:Koizumi Shinjiro speech", 2, 3600),
+    ("石破茂",   "ytsearch2:Ishiba Shigeru speech", 2, 3600),
+    # 俄罗斯 (普京缺口 ×3)
+    ("普京",     "ytsearch3:Putin speech highlights", 3, 3600),
+    ("拉夫罗夫", "ytsearch2:Lavrov press conference", 2, 3600),
+    ("梅德韦杰夫", "ytsearch2:Medvedev interview speech", 2, 3600),
+    # 韩国 (李在明缺口 ×3)
+    ("李在明",   "ytsearch3:Lee Jae-myung speech press", 3, 3600),
+    ("尹锡悦",   "ytsearch2:Yoon Suk Yeol speech", 2, 3600),
+    # 美国 (补人物 + 补国家片)
+    ("万斯",     "ytsearch2:JD Vance speech", 2, 3600),
+    ("鲁比奥",   "ytsearch2:Marco Rubio press conference", 2, 3600),
+    ("马斯克",   "ytsearch2:Elon Musk press conference", 2, 3600),
+    ("美国",     "ytsearch3:New York City 4K timelapse", 3, 600),
+    # 伊朗
+    ("哈梅内伊", "ytsearch2:Khamenei speech", 2, 3600),
+    ("阿拉格齐", "ytsearch2:Araghchi interview", 2, 3600),
+    # 乌克兰 (泽连斯基只 2 条, 补)
+    ("泽连斯基", "ytsearch3:Zelensky speech", 3, 3600),
+    # 菲律宾
+    ("马科斯",   "ytsearch2:Marcos speech", 2, 3600),
+    ("莎拉杜特尔特", "ytsearch2:Sara Duterte speech", 2, 3600),
+    # 欧盟 (法德 + EU 外交)
+    ("马克龙",   "ytsearch2:Macron speech", 2, 3600),
+    ("默茨",     "ytsearch2:Friedrich Merz speech", 2, 3600),
+    ("卡拉斯",   "ytsearch2:Kaja Kallas speech", 2, 3600),
+    # 北约
+    ("吕特",     "ytsearch2:Mark Rutte NATO speech", 2, 3600),
+    # 韩国国家片
+    ("韩国",     "ytsearch3:Seoul Korea 4K timelapse", 3, 600),
+    # G7 重试
+    ("G7峰会",   "ytsearch3:G7 summit leaders", 3, 3600),
+]
+
 
 def run_retry() -> None:
     """补弹: 首轮未命中的实体换口径重搜 (需 VPN)."""
@@ -66,6 +106,11 @@ def run(entity: str, url: str, max_n: int, max_dur: int) -> None:
 def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "retry":
         run_retry()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "vip":
+        for row in VIP_ROUND:
+            run(*row)
+        print("\nVIP 轮完成 → 断 VPN 后 tag --all + clean 入库", flush=True)
         return
     for row in COUNTRY_PROMOS + LEADER_SPEECHES:
         run(*row)

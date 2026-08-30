@@ -115,8 +115,12 @@ def _try_local_collision(
             _job = db.query(DirectorJob).filter(
                 DirectorJob.id == slot.director_job_id).first()
             pool = ((_job.plan_json or {}).get("material_entities")) if _job else []
+            # query 词 + 实体中文名双轨 (2026-08-30: 入库时 tags 打的是中文名,
+            # 中文名匹配最精确; 英文 query 供词级召回)
             _queries = [q.lower() for e in (pool or []) if e.get("name") in ent_names
                         for q in (e.get("queries") or {}).values() if q]
+            _queries += [e["name"].lower() for e in (pool or [])
+                         if e.get("name") in ent_names]
             if _queries:
                 hits = match_entity_bullseye(
                     db, _queries, min_duration_sec=float(min_dur),
