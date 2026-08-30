@@ -61,7 +61,11 @@ def match_entity_bullseye(
     正确素材 — 绕过 9 维门槛 (tone 不对也是对的画面)。命中即给 100 分基分,
     供上层直接采用或与常规通道结果合并排序。
     entity_queries: 实体的英文搜索词 (entity['queries'] 的并集, 小写)。
+    同源视频惩罚 (2026-08-30): exclude 里已用文件的父目录 (源视频) 记为
+    已耗 — 同源切片 -40 分, 防一部记者会视频的不同切镜头连中造成重复感。
     """
+    from pathlib import Path as _P
+    used_dirs = {str(_P(f).parent).lower() for f in (exclude or [])}
     if not entity_queries:
         return []
     q = db.query(VideoAsset)
@@ -113,6 +117,11 @@ def match_entity_bullseye(
         # 标题命中 +2/词, 逼内容对得上的切片排前。
         score = 100 + sum(8 for t in match_terms if t in own_blob) \
                      + sum(2 for t in match_terms if t in title_blob)
+        try:
+            if str(_P(a.file_path).parent).lower() in used_dirs:
+                score -= 40  # 同源视频已耗 — 换别家的切片
+        except Exception:
+            pass
         out.append({"file_path": a.file_path, "score": score, "asset_no": a.asset_no,
                     "duration_sec": a.duration_sec, "entity_bullseye": True,
                     "used_count": a.used_count or 0})

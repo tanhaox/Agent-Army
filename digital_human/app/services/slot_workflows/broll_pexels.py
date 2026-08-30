@@ -115,12 +115,16 @@ def _try_local_collision(
             _job = db.query(DirectorJob).filter(
                 DirectorJob.id == slot.director_job_id).first()
             pool = ((_job.plan_json or {}).get("material_entities")) if _job else []
-            # query 词 + 实体中文名双轨 (2026-08-30: 入库时 tags 打的是中文名,
-            # 中文名匹配最精确; 英文 query 供词级召回)
-            _queries = [q.lower() for e in (pool or []) if e.get("name") in ent_names
+            # 人物实体优先纯打靶 (2026-08-30 用户反馈: 混合查询里 "japan" 泛词在
+            # 特朗普切片描述+8 分, 压过她本人切片 → 3 个镜头全是会见特朗普) —
+            # slot 含 person 类实体时只用该人物自己的 query+中文名, 不混机构/国家泛词;
+            # 无 person 实体才用全实体合并查询。
+            slot_pool = [e for e in (pool or []) if e.get("name") in ent_names]
+            persons = [e for e in slot_pool if e.get("type") == "person"]
+            source_ents = persons or slot_pool
+            _queries = [q.lower() for e in source_ents
                         for q in (e.get("queries") or {}).values() if q]
-            _queries += [e["name"].lower() for e in (pool or [])
-                         if e.get("name") in ent_names]
+            _queries += [e["name"].lower() for e in source_ents]
             if _queries:
                 hits = match_entity_bullseye(
                     db, _queries, min_duration_sec=float(min_dur),

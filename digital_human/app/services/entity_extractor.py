@@ -139,6 +139,10 @@ def promote_person_slots(db, job, entities: list[dict[str, Any]]) -> int:
     for s in job.slots:
         if not (s.workflow or "").startswith("hf"):
             continue
+        # 来源声明卡豁免 (2026-08-30 用户反馈: 尾部资料页引用卡被误换成人物镜头)
+        rc = ((s.params_json or {}).get("render_config") or {})
+        if rc.get("style") in ("references", "hf-source-v1"):
+            continue
         ents = (s.params_json or {}).get("entities") or []
         hit_ent = next((nm for nm in stocked if nm in ents), None)
         if not hit_ent:
