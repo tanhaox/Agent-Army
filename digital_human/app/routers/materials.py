@@ -370,8 +370,11 @@ def ingest_resume(job_id: str, db: Session = Depends(get_db)):
     job = db.query(MaterialIngestJob).filter(MaterialIngestJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "job not found")
-    if job.stage not in ("paused_vpn_on", "paused_vpn_off", "failed"):
+    if job.stage not in ("paused_vpn_on", "paused_vpn_off", "failed",
+                         "waiting_vpn_on", "waiting_vpn_off"):
         raise HTTPException(409, f"状态 {job.stage} 无需 resume")
+    # waiting_* 孤儿 (服务重启杀掉等待线程) → queued 重入流水;
+    # paused_* → 重新走门控 (满足则直通, 不满足重新等)
     job.stage = "queued"
     job.error = None
     db.commit()

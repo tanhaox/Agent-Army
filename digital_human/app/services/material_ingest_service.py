@@ -380,10 +380,20 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
         start = 0 if job.stage.endswith("_on") else 4  # wait_on → 从头; wait_off → 从 tag
     stats = dict(job.stats_json or {})
 
+    # URL → video_id 提前解析 (2026-08-31 流程测试揪出: 解析在下载段内部,
+    # VPN 门控先于它执行 → 缓存感知永远拿不到 video_id, 已下载的片也在傻等 VPN)
+    if not job.video_id and job.source_url:
+        m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", job.source_url)
+        if m:
+            job.video_id = m.group(1)
+            db.commit()
+
     for stage in STAGES[start:]:
-        # VPN 门控
+        # VPN 门控 (缓存感知: 文件已在盘上则下载段免等 VPN — 2026-08-31)
         if stage == "download":
-            if vpn_state()["state"] != "on":
+            cached = (job.video_id
+                      and (STAGE_DIR / f"yt_{job.video_id}.mp4").exists())
+            if not cached and vpn_state()["state"] != "on":
                 if not _wait_vpn(db, job, want_on=True):
                     job.stage = "paused_vpn_on"
                     db.commit()
@@ -402,11 +412,7 @@ def _advance(db: Session, job: MaterialIngestJob) -> None:
 
         if stage == "download":
             if not job.video_id:
-                m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", job.source_url or "")
-                if not m:
-                    raise ValueError(f"无法从 URL 解析视频 ID: {job.source_url}")
-                job.video_id = m.group(1)
-                db.commit()
+                raise ValueError(f"无法从 URL 解析视频 ID: {job.source_url}")
             if not job.title:
                 try:
                     job.title = _fetch_info(job.video_id).get("title") or ""
