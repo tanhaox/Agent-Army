@@ -254,7 +254,11 @@ def _ocr(job: MaterialIngestJob) -> dict:
         windows.append([run_start, total])
     windows = [[max(0.0, ws - 0.5), min(total, we + 0.5)] for ws, we in windows]  # 半秒容差
     tl["clean_windows"] = windows
-    tl["dirty_secs"] = len(dirty_secs)
+    # 逐秒标记保留 (2026-08-31 用户设计要求: 第N秒有无字幕可查, 为切分/复核
+    # 提供依据 — 之前只存 len(dirty_secs) 计数, 逐秒信息被扔掉)
+    tl["dirty_sec_list"] = sorted(dirty_secs)
+    tl["sec_flags"] = "".join("1" if s in dirty_secs else "0"
+                              for s in range(int(total) + 1))  # "0110..." 逐秒位图
     tl_path.write_text(json.dumps(tl, ensure_ascii=False), encoding="utf-8")
     clean_total = sum(we - ws for ws, we in windows)
     return {"clean_windows": len(windows),
