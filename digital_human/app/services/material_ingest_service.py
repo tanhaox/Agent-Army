@@ -197,13 +197,36 @@ def _probe(job: MaterialIngestJob) -> dict:
     return {"total_sec": round(total, 1), "cuts": len(cuts)}
 
 
+def _new_ocr():
+    """RapidOCR CUDA 工厂 (2026-08-31): DLL 目录注入 + GPU EP + v3 模型路径.
+
+    Windows 坑: Py3.8+ 不继承 PATH → cudnn/cublas 系列必须 add_dll_directory;
+    实测预热后 655ms/帧 (CPU 1800ms, 2.7x — GPU P5 省电态下)。
+    """
+    import rapidocr_onnxruntime as _r
+    _models = Path(_r.__file__).parent / "models"
+    _nv = ROOT / ".venv/Lib/site-packages/nvidia"
+    for sub in ("cudnn/bin", "cublas/bin", "cuda_nvrtc/bin", "cufft/bin", "nvjitlink/bin"):
+        d = _nv / sub
+        if d.exists():
+            import os as _os
+            _os.add_dll_directory(str(d))
+            _os.environ["PATH"] = str(d) + _os.pathsep + _os.environ.get("PATH", "")
+    return RapidOCR(det_use_cuda=True, rec_use_cuda=True,
+                    det_model_path=str(_models / "ch_PP-OCRv3_det_infer.onnx"),
+                    rec_model_path=str(_models / "ch_PP-OCRv3_rec_infer.onnx"))
+
+
 def _ocr(job: MaterialIngestJob) -> dict:
     """OCR 时间轴 (v2.1): 整片 1fps 逐秒判定 → 干净窗清单写 timeline.json."""
     try:
-        from rapidocr_onnxruntime import RapidOCR
-        ocr = RapidOCR()
+        ocr = _new_ocr()
     except ImportError:
         return {"error": "rapidocr 未装"}
+    except Exception as _exc:
+        logger.warning("[ocr] CUDA 初始化失败退 CPU: %s", _exc)
+        from rapidocr_onnxruntime import RapidOCR
+        ocr = RapidOCR()
 
     import tempfile
     video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")

@@ -13,7 +13,8 @@
 
 用法:
   python sandbox/yt_ingest.py split <video.mp4> <视频id> [--entity 英伟达] [--title "..."]
-  python sandbox/yt_ingest.py tag <视频id>        # 需 GPU — VPN 必须已断
+  python sandbox/yt_ingest.py ocr --all        # OCR 快筛 (CPU, 先于 LLM)
+  python sandbox/yt_ingest.py tag --all        # 需 GPU — VPN 必须已断; 脏片自动跳过
   python sandbox/yt_ingest.py register <视频id>
 """
 from __future__ import annotations
@@ -107,11 +108,95 @@ TAG_PROMPT = """你是视频素材打标员。看这个视频片段的一帧。�
  "has_burned_text": true/false,
  "text_content": "画面里烧录的文字内容, 无则空"}
 has_burned_text=true 当画面有: 字幕/台词文字/大标题/产品名大字/水印文字;
-产品上的小logo(芯片上的NVIDIA刻字)不算。"""
+产品上的小logo(芯片上的NVIDIA刻字)不算。注意角落小字水印(Courtesy:/频道名)也算。"""
+
+
+def ocr_screen(video_id: str, fps_sample: float = 1.0) -> dict:
+    """OCR 快筛 (2026-08-30 用户单): 切片后每秒 1 帧 OCR, 有持久文字 → 脏片.
+
+    先于 LLM: CPU 快筛砍掉带字幕/水印切片, 干净的才进 llama 内容识别。
+    判定: 任一采样帧存在≥2 处文字框, 或任一帧文字框≥1 且面积占比>1.5%
+    (字幕带/角标) → burned。结果写 manifest clips[].ocr_clean。
+    Returns: {"clean": n, "dirty": n, "total": n}
+    """
+    import glob as _glob
+
+    try:
+        from app.services.material_ingest_service import _new_ocr
+        ocr = _new_ocr()  # GPU CUDA (2026-08-31 用户令: 全系统统一 GPU OCR)
+    except ImportError:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            ocr = RapidOCR()  # 退 CPU (服务模块不可用时 — CLI 独立场景)
+        except ImportError:
+            print("[ocr] rapidocr 不可用, 跳过快筛 (pip install rapidocr-onnxruntime)")
+            return {"clean": 0, "dirty": 0, "total": 0, "skipped": True}
+    except Exception as _cuda_err:
+        from rapidocr_onnxruntime import RapidOCR
+        print(f"[ocr] CUDA 初始化失败退 CPU: {_cuda_err}")
+        ocr = RapidOCR()
+
+    import subprocess as _sp
+    import tempfile as _tf
+
+    stage = _stage(video_id)
+    manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
+    n_clean = n_dirty = 0
+    for c in manifest["clips"]:
+        if "ocr_clean" in c:
+            n_clean += bool(c["ocr_clean"])
+            n_dirty += not c["ocr_clean"]
+            continue
+        clip = ROOT / c["file"]
+        dur = c["end"] - c["start"]
+        n_frames = max(2, min(5, int(dur * fps_sample)))  # 每秒1帧, 上限5
+        tmp = _tf.mkdtemp(prefix="ocr_")
+        _sp.run([FF, "-y", "-v", "error", "-i", str(clip)],
+                cwd=tmp, capture_output=True)  # noop 占位防引号问题
+        frames = []
+        for k in range(n_frames):
+            t = dur * (k + 0.5) / n_frames
+            fp = Path(tmp) / f"f{k}.jpg"
+            _sp.run([FF, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", str(clip),
+                     "-frames:v", "1", "-vf", "scale=1280:-2",
+                     "-pix_fmt", "yuvj420p", str(fp)],
+                    capture_output=True)
+            if fp.exists():
+                frames.append(str(fp))
+        has_text_frames = 0
+        for fp in frames:
+            try:
+                result, _ = ocr(fp)
+            except Exception:
+                result = None
+            if result:
+                # 文字框阈值: 高≥9px (1280宽下, 实测 640 会漏 IISS 署名小水印);
+                # conf 偶发字符串类型 → float 容错
+                def _f(v):
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return 0.0
+                boxes = [r for r in result if _f(r[2]) >= 0.55
+                         and (r[0][3][1] - r[0][1][1]) >= 9]
+                if boxes:
+                    has_text_frames += 1
+            Path(fp).unlink(missing_ok=True)
+        c["ocr_clean"] = has_text_frames == 0
+        n_clean += c["ocr_clean"]
+        n_dirty += not c["ocr_clean"]
+    (stage / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[ocr] {video_id}: 干净 {n_clean} / 脏 {n_dirty} / 共 {n_clean + n_dirty}")
+    return {"clean": n_clean, "dirty": n_dirty, "total": n_clean + n_dirty}
 
 
 def cmd_tag(video_id: str) -> None:
-    """llama 逐片段打标 — GPU 任务, VPN 互斥守卫在 llama 拉起内建."""
+    """llama 逐片段打标 — GPU 任务, VPN 互斥守卫在 llama 拉起内建.
+
+    两段制 (2026-08-30 用户单): OCR 先筛 (ocr_clean=False 的跳过, CPU 免费),
+    只干净片段进 LLM 内容识别 — GPU 用量砍半以上。
+    """
     stage = _stage(video_id)
     manifest = json.loads((stage / "manifest.json").read_text(encoding="utf-8"))
     sys.path.insert(0, str(ROOT))
@@ -120,6 +205,10 @@ def cmd_tag(video_id: str) -> None:
     for c in manifest["clips"]:
         if c.get("tags"):
             continue
+        if c.get("ocr_clean") is False:
+            c["tags"] = {"desc_zh": "", "keywords_en": [],
+                         "has_burned_text": True, "text_content": "[OCR快筛: 带文字]"}
+            continue  # 脏片不烧 GPU
         clip = ROOT / c["file"]
         out = _run([FF, "-y", "-v", "error", "-ss", "0.5", "-i", str(clip),
                     "-frames:v", "1", str(stage / f"frame_{c['n']:03d}.png")])
@@ -225,6 +314,9 @@ def main() -> int:
     p_t = sub.add_parser("tag")
     p_t.add_argument("video_id", nargs="?", default=None)
     p_t.add_argument("--all", action="store_true", help="所有未打标 manifest")
+    p_o = sub.add_parser("ocr")
+    p_o.add_argument("video_id", nargs="?", default=None)
+    p_o.add_argument("--all", action="store_true", help="所有未筛 manifest")
     sub.add_parser("register").add_argument("video_id")
     p_b = sub.add_parser("batch")
     p_b.add_argument("--company", required=True)
@@ -234,11 +326,20 @@ def main() -> int:
     a = ap.parse_args()
     if a.cmd == "split":
         cmd_split(a.video, a.video_id, a.entity, a.title)
+    elif a.cmd == "ocr":
+        if getattr(a, "all", False):
+            for mf in sorted(STAGE_DIR.glob("*/manifest.json")):
+                m = json.loads(mf.read_text(encoding="utf-8"))
+                if any("ocr_clean" not in c for c in m.get("clips", [])):
+                    ocr_screen(mf.parent.name)
+        elif a.video_id:
+            ocr_screen(a.video_id)
     elif a.cmd == "tag":
         if a.all:
             for mf in sorted(STAGE_DIR.glob("*/manifest.json")):
                 m = json.loads(mf.read_text(encoding="utf-8"))
-                if any(not c.get("tags") for c in m.get("clips", [])):
+                if any(not c.get("tags") and c.get("ocr_clean") is not False
+                       for c in m.get("clips", [])):
                     print(f"━━ {mf.parent.name} ({m.get('title','')[:40]}) ━━")
                     cmd_tag(mf.parent.name)
         else:
