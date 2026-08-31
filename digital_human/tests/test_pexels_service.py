@@ -138,11 +138,17 @@ def test_resolve_min_duration_filter(svc: PexelsService) -> None:
 
 def test_resolve_auth_error_without_key(monkeypatch) -> None:
     """缺少 API key 时抛 PexelsAuthError."""
-    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    # ⚠️ 顺序: load_config 必须在 delenv 之前 — 其内部 _load_dotenv 会把 .env 的
+    # key setdefault 回环境 (曾致本测试静默失效: key 永不缺失, 走到 DB 才炸).
     cfg = load_config()
     set_config(cfg)
-    with pytest.raises(PexelsAuthError):
-        pexels_service.resolve(query="test")
+    monkeypatch.delenv("PEXELS_API_KEY", raising=False)
+    pexels_service._api_key = None  # 单例缓存 key, 须重置才会重读 env
+    try:
+        with pytest.raises(PexelsAuthError):
+            pexels_service.resolve(query="test")
+    finally:
+        pexels_service._api_key = None  # 复原, 防真 key 缺失状态泄漏到后续测试
 
 
 def test_download_log_table(svc: PexelsService) -> None:
@@ -158,9 +164,28 @@ def test_download_log_table(svc: PexelsService) -> None:
 
 @pytest.mark.real_api
 def test_resolve_invalid_api_key_degraded(svc: PexelsService, monkeypatch) -> None:
-    """无效 key 应抛 PexelsAuthError(不静默)."""
+    """无效 key (API 返 401) 应抛 PexelsAuthError, 不静默降级.
+
+    2026-09-01 改 mock 401: 原版真打 Pexels 曾在 pytest 进程内被某全局状态
+    干扰 (invalid header 拿 200, 裸进程 10/10 全 401) — 本测试的意图是
+    "401 → 抛 PexelsAuthError" 这条代码路径, 不依赖服务端行为.
+    """
     monkeypatch.setenv("PEXELS_API_KEY", "invalid_key_for_test")
     svc._api_key = None  # 强制重新读取
     svc._requests_session = None
+
+    class _Resp401:
+        status_code = 401
+        text = "unauthorized"
+
+        def json(self):  # pragma: no cover - 401 不走 json
+            raise ValueError("no json")
+
+    class _FakeSession:
+        def get(self, *args, **kwargs):
+            return _Resp401()
+
+    import app.services.pexels_service._http as pexels_http
+    monkeypatch.setattr(pexels_http, "http_session", lambda _svc: _FakeSession())
     with pytest.raises(PexelsAuthError):
         svc.resolve(query="port", max_results=1)

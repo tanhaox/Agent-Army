@@ -198,7 +198,6 @@ def test_cli_exposes_master_flags(flag: str) -> None:
 
 def test_backend_literal_includes_indextts() -> None:
     """The backend Literal type must include 'indextts' to keep type-checkers honest."""
-    import typing
     source = inspect.getsource(tts_client._synthesize_single)
     # The annotation `Literal["fish", "f5", "indextts", "auto"]` lives in
     # the signature. Look for the literal set.

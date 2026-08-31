@@ -108,7 +108,9 @@
 - [剪映模板拆解-45期-音字稿协同.md](teardown/剪映模板拆解-45期-音字稿协同.md) — 45 期音字稿协同拆解
 - [剪映模板拆解-学习25期-抖音是小鼎呀.md](teardown/剪映模板拆解-学习25期-抖音是小鼎呀.md) — 25 期完整拆解（写入路径实验样本）
 
-### improvements/（29 篇，按日期序）
+### improvements/（31 篇，按日期序）
+- [已完成-20260901-三大文件架构拆包.md](improvements/已完成-20260901-三大文件架构拆包.md) — jy_draft_service/boost_service 拆包 + orchestrator 三分 (函数原样搬运零行为变更)
+- [已完成-20260901-安全密钥迁移与代码健康清理.md](improvements/已完成-20260901-安全密钥迁移与代码健康清理.md) — siliconflow key 入 .env / 死代码清理 / 回收站函数三合一(safe_trash 永久删除红线违规修复) / 安全扫描
 - [参考-20260807-Python大文件架构重构-规范.md](improvements/参考-20260807-Python大文件架构重构-规范.md) — 大文件拆包规范（2026-08-08 重构批的依据）
 - [审计-孤岛孤儿盘点-20260827.md](improvements/审计-孤岛孤儿盘点-20260827.md) — 孤岛/孤儿资产盘点与清理记录（遗留：`_ref_*` 待回收）
 - 已完成-20260726 ~ 已完成-20260813 共 24 篇：4层产物集成测试 / LTX23端到端 / IndexTTS2对照测试 / ID002视觉导演Agent2 / 全项目排查 / 素材生命周期 / 架构重构×13（alignment/composition/director×4/gpu_service/pexels/routers/slot_workflows/tts_client/video_tagging）/ P线本地碰撞ID034 / 抽帧修复 / 本地碰撞门槛 / P5情绪标注千问flash / 老谭提示词精进（[目录清单](improvements/)）
