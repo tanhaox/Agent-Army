@@ -15,44 +15,9 @@ from typing import Any, Iterator
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from .file_utils import recycle_file  # noqa: F401 — re-export, routers/library.py 经本模块调用
+
 logger = logging.getLogger(__name__)
-
-
-def recycle_file(path: str) -> bool:
-    r"""Move a single file to the Windows recycle bin (never permanent delete).
-
-    CLAUDE.md 红线: 禁止直接删除用户数据, 必须走回收站.
-    与 scripts.py::_recycle_file 同一实现 (PowerShell Microsoft.VisualBasic).
-    `app/services/file_utils.py::safe_trash` 不可用 — send2trash 未安装时它
-    回退到 shutil.rmtree 永久删除. 这里用 PowerShell 实现, 满足红线且不引入新依赖.
-
-    Args:
-        path: Windows 绝对路径 (可为 E:\数字人计划\... 或 F:\AI-Agent-Local\...).
-
-    Returns:
-        True 若文件已移入回收站 (或路径不存在视为无需处理), False 若失败.
-    """
-    if not path or not os.path.exists(path):
-        return False
-    # PowerShell 单引号字面量内唯一需要转义的字符是单引号本身 ('' 转义)
-    escaped = path.replace("'", "''")
-    cmd = (
-        "Add-Type -AssemblyName Microsoft.VisualBasic; "
-        "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile("
-        f"'{escaped}', 'OnlyErrorDialogs', 'SendToRecycleBin')"
-    )
-    try:
-        # 列表传参 (shell=False) 不经 cmd.exe, 反斜杠/中文路径均为字面量
-        subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
-            capture_output=True,
-            timeout=30,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        return True
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning("recycle failed for %s: %s", path, exc)
-        return False
 
 
 def parse_range(range_header: str, file_size: int) -> tuple[int, int] | None:

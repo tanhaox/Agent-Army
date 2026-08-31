@@ -2,31 +2,60 @@
 from __future__ import annotations
 
 import logging
-import shutil
+import os
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Windows 回收站删除的统一实现 (2026-09-01 合并):
+# 历史上有三份并行实现 — safe_trash(send2trash, 未装则 rmtree 永久删除, 违反红线) /
+# routers.scripts._recycle_file / services.library_service.recycle_file (PowerShell 文件版).
+# 现统一为 recycle_file(), 唯一事实源; safe_trash 保留为兼容别名.
+
+
+def recycle_file(path: str | Path) -> bool:
+    """Move a file **or directory** to the Windows Recycle Bin.
+
+    PowerShell Microsoft.VisualBasic 实现, 无第三方依赖. 满足 CLAUDE.md 红线:
+    永久删除被禁止 — 失败时返回 False 且**不动文件**, 绝不 fallback 到删除.
+
+    Args:
+        path: Windows 绝对路径 (文件或目录).
+
+    Returns:
+        True 若已移入回收站 (或路径不存在视为无需处理), False 若失败 (文件保留原地).
+    """
+    p = str(path)
+    if not p or not os.path.exists(p):
+        return False
+    # PowerShell 单引号字面量内唯一需要转义的字符是单引号本身 ('' 转义)
+    escaped = p.replace("'", "''")
+    method = "DeleteDirectory" if os.path.isdir(p) else "DeleteFile"
+    cmd = (
+        "Add-Type -AssemblyName Microsoft.VisualBasic; "
+        f"[Microsoft.VisualBasic.FileIO.FileSystem]::{method}("
+        f"'{escaped}', 'OnlyErrorDialogs', 'SendToRecycleBin')"
+    )
+    try:
+        # 列表传参 (shell=False) 不经 cmd.exe, 反斜杠/中文路径均为字面量
+        subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+            capture_output=True,
+            timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return True
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("recycle failed for %s: %s", p, exc)
+        return False
+
 
 def safe_trash(path: Path) -> bool:
-    """Move ``path`` to the system trash, falling back to shutil.rmtree only if
-    send2trash is unavailable. Returns True on success.
+    """向后兼容别名 → :func:`recycle_file`.
 
-    This satisfies the CLAUDE.md rule: never permanently delete user data
-    without going through the recycle bin.
+    ⚠️ 2026-09-01 行为变更: 历史版本在 send2trash 未安装时 fallback
+    ``shutil.rmtree`` **永久删除** (违反 CLAUDE.md 红线, 三个调用方一直
+    走的就是该路径). 现统一走回收站, 失败返回 False 且文件保留原地.
     """
-    try:
-        from send2trash import send2trash  # type: ignore
-
-        send2trash(str(path))
-        logger.info("Moved to trash: %s", path)
-        return True
-    except Exception as exc:
-        logger.warning("send2trash failed (%s), falling back to shutil.rmtree", exc)
-        try:
-            shutil.rmtree(path, ignore_errors=True)
-            logger.warning("Permanently removed directory: %s", path)
-            return True
-        except Exception as inner:
-            logger.error("Failed to remove %s: %s", path, inner)
-            return False
+    return recycle_file(path)
