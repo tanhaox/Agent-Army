@@ -92,7 +92,9 @@ def _concat_wavs_with_ffmpeg(wav_paths: list[Path], output_path: Path) -> Path:
 
     concat_script = None
     try:
-        concat_script = Path(tempfile.mktemp(suffix=".txt"))
+        _tf = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+        _tf.close()
+        concat_script = Path(_tf.name)
         concat_script.write_text(
             "\n".join(f"file '{p.resolve().as_posix()}'" for p in wav_paths),
             encoding="utf-8",
@@ -133,7 +135,9 @@ def apply_ffmpeg_params(
         return wav_path
 
     filter_str = ",".join(filters)
-    tmp = Path(tempfile.mktemp(suffix=".wav"))
+    _tf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    _tf.close()
+    tmp = Path(_tf.name)
 
     try:
         cmd = [

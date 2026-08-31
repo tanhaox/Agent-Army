@@ -327,7 +327,7 @@ def load_config(path: Path | str | None = None) -> Config:
     # 硅基流动 (可选, 缺失时用空值替代)
     sf_raw = raw.get("siliconflow", {})
     siliconflow = SiliconFlowConfig(
-        api_key=sf_raw.get("api_key", ""),
+        api_key=_resolve_env(sf_raw.get("api_key", "")),
         base_url=sf_raw.get("base_url", "https://api.siliconflow.cn/v1"),
         model_flash=sf_raw.get("model_flash", "deepseek-ai/DeepSeek-V4-Flash"),
         model_pro=sf_raw.get("model_pro", "deepseek-ai/DeepSeek-V4-Pro"),

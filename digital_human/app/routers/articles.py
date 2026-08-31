@@ -360,7 +360,7 @@ def rewrite_article(
                     # (_raw_sha 匹配) → 直接复用, 免每次洗稿白烧一次解构 LLM;
                     # sha 不匹配或旧数据无键 → 照旧重跑并落新 sha (自愈)。
                     import hashlib as _hl
-                    _cur_sha = _hl.sha1((article.raw_text or "").encode("utf-8")).hexdigest()[:16]
+                    _cur_sha = _hl.sha1((article.raw_text or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:16]  # noqa: S324 — 缓存指纹非密码学, 与 boost_service._raw_sha 同算法
                     _cached = article.deconstruct_json or None
                     if (
                         isinstance(_cached, dict)

@@ -81,8 +81,10 @@ def test_voice(voice_id: str, body: VoiceTestRequest, db: Session = Depends(get_
 
     cfg, merged_params = voice_service.prepare(voice, body.params)
 
-    # 输出到临时文件以便流式返回
-    tmp = Path(tempfile.mktemp(suffix=".wav"))
+    # 输出到临时文件以便流式返回 (mktemp 有竞态, NamedTemporaryFile 原子创建)
+    _tf = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    _tf.close()
+    tmp = Path(_tf.name)
     try:
         voice_service.synthesize_voice(
             cfg,

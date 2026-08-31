@@ -4,7 +4,7 @@ import json
 import re
 from collections import defaultdict, Counter
 from datetime import datetime
-from typing import List, Dict, Set
+from typing import List, Dict
 
 # 从配置文件导入
 from config import HOT_KEYWORDS, CATEGORIES, HOT_NEWS_PARAMS

@@ -34,8 +34,8 @@ class NewsFilter:
             link = news.get('link', '')
             identifier = f"{title}_{link}"
 
-            # 使用md5生成哈希值
-            hash_object = hashlib.md5(identifier.encode())
+            # 使用md5生成哈希值 (去重指纹, 非密码学用途)
+            hash_object = hashlib.md5(identifier.encode(), usedforsecurity=False)  # noqa: S324
             hash_value = hash_object.hexdigest()
 
             if hash_value not in seen:
