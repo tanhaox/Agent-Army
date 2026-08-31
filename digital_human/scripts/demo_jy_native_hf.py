@@ -52,8 +52,8 @@ SZ = {"hero": 13, "hot": 8, "sub": 7,            # 开场卡
 CARD_ANIMS = ["放大", "开幕", "折叠", "跃进", "轻微放大", "向上滑动", "雪光模糊", "模糊发光"]
 SUB_ANIMS = ["向上滑动", "渐显", "向右露出", "轻微放大"]
 
-import app.services.jy_draft_service as _jds
-_jds._SUBTITLE_SIZE = 5.0   # 回滚产线标准 (v3/v4 误改)
+import app.services.jy_draft_service.subtitle_style as _subtitle_style
+_subtitle_style._SUBTITLE_SIZE = 5.0   # 回滚产线标准 (v3/v4 误改; 拆包后须改到定义模块)
 _CAP_MAX_CHARS = 30
 W, H = 1920, 1080  # 横屏
 ROOT = Path(__file__).resolve().parents[1]
