@@ -39,6 +39,7 @@ VPN_POLL_SEC = 5
 VPN_WAIT_TIMEOUT_SEC = 30 * 60
 STAGE_DIR = ROOT / "data" / "materials" / "youtube"
 FF = r"C:\Programs\ffmpeg\bin\ffmpeg.exe"
+OCR_FRAME_SCALE = 1280  # v2.2 管道抽帧宽度 (83ms/帧与 720/960 持平, 取最高召回档)
 
 # 阶段序 (resume 从当前 stage 重入)
 STAGES = ["download", "probe", "ocr", "split", "tag", "register"]
@@ -147,15 +148,42 @@ def _split(job: MaterialIngestJob) -> dict:
             ns, ne = max(s, ws), min(e, we)
             if ne - ns >= 4.0:  # 最小可用片段
                 final.append((round(ns, 2), round(ne, 2)))
-    # 无切点兜底: 干净窗 >12s 未被覆盖 → 均匀切
-    covered = final or []
+
+    def _fill_uniform(dest: list, hs: float, he: float) -> None:
+        """长镜头内部均匀 ~10s 分块 (同镜头内均分, 不跨切点). ceil: 16s→2×8s 而非 1 块."""
+        import math
+        n = max(1, math.ceil((he - hs) / 10))
+        step = (he - hs) / n
+        dest += [(round(hs + i * step, 2), round(hs + (i + 1) * step, 2))
+                 for i in range(n)]
+
+    # 洞填补 (2026-09-01 修): 只补 final 未覆盖的窗部分。原版无条件把所有 >4s 窗
+    # 均匀再切一遍追加 → 同素材双份 (clip_005≡clip_024 实测) + 均匀切跨镜头拼接
+    # (V20260901-5496 起批次 "2-3 素材拼在一片" 根因)。
+    covered = sorted(final)
     for ws, we in windows:
         if we - ws < 4.0:
             continue
-        n = max(1, int((we - ws) // 10))
-        step = (we - ws) / n
-        covered += [(round(ws + i * step, 2), round(ws + (i + 1) * step, 2))
-                    for i in range(n)]
+        cur = ws
+        for fs, fe in covered:
+            if fe <= ws or fs >= we:
+                continue
+            if fs - cur >= 4.0:
+                _fill_uniform(final, cur, min(fs, we))
+            cur = max(cur, fe)
+        if we - cur >= 4.0:
+            _fill_uniform(final, cur, we)
+    final = sorted(set(final))
+    # seg∩win 交集段也可能超 10s (切点稀疏的长镜头) — 统一 ceil 均分, 片长封顶 ~10s
+    capped: list[tuple[float, float]] = []
+    for s, e in final:
+        if e - s > 10.0:
+            _fill_uniform(capped, s, e)
+        else:
+            capped.append((s, e))
+    # 尾部收缩 (2026-09-01): 叠化转场中段的切点前 0.2~0.5s 已是混合画面 —
+    # 窗尾让出 0.25s 防止片尾串镜; 收缩后 <4s 的碎窗丢弃
+    covered = sorted({(s, e - 0.25) for s, e in set(capped) if e - 0.25 - s >= 4.0})
 
     clips_dir = STAGE_DIR / job.video_id / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -163,8 +191,19 @@ def _split(job: MaterialIngestJob) -> dict:
     for i, (s, e) in enumerate(covered):
         out = clips_dir / f"clip_{i:03d}.mp4"
         if not out.exists():
-            subprocess.run([FF, "-y", "-v", "error", "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
-                            "-i", video, "-c", "copy", str(out)],
+            # 重编码精确切 (2026-09-01 修): -c copy 受 GOP 关键帧对齐约束, 片尾会
+            # 多出下镜头若干帧 ("最后几帧突然切其他画面" 用户实测) — veryfast/crf21
+            # 实测 2.1s/10s片, 8000 片 4 进程 ~1h, 换精确帧切值得。
+            # 输出 seek (-ss 在 -i 后, 2026-09-01 二修): 输入 seek 时音/视频流各自
+            # seek 落点可差 0.1~0.3s → 重编码后容器 0/0 但内容错位 (V20260901-3973
+            # 音画不同步实测); 输出 seek 从关键帧解码裁剪, A/V 严格同点。
+            # -an (2026-09-01 用户令): 素材只要画面 — 草稿挂载本就 volume=0 (声音
+            # 归 TTS 轨), 音轨是死重且是音画不同步的载体, 直接不带。
+            # +faststart: moov 前置, web 播放器边下边播不起竞态。
+            subprocess.run([FF, "-y", "-v", "error", "-i", video,
+                            "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                            "-an", "-movflags", "+faststart", str(out)],
                            capture_output=True, timeout=120)
         if out.exists() and out.stat().st_size > 50000:
             clips.append({"n": i, "start": s, "end": e,
@@ -185,15 +224,32 @@ def _probe(job: MaterialIngestJob) -> dict:
         capture_output=True, text=True, timeout=60)
     total = float((out.stdout or "0").strip() or 0)
     r = subprocess.run([FF, "-i", video, "-vf",
-                        "select='gt(scene,0.20)',metadata=print", "-f", "null", "-"],
+                        # 0.05 + 簇合并 (2026-09-01 修, 实测校准): RLR 式叠化转场 +
+                        # 地图低对比内容的镜头边界 scene score 仅 0.05~0.08, 0.12/0.20
+                        # 全漏 (390s 实测 9 切点, 快剪频道应 80~150) → 切片跨镜头拼接。
+                        # 0.05 档叠化过程会连续命中 (0.2s 间隔) → 下方 <0.6s 并簇取簇首。
+                        "select='gt(scene,0.05)',metadata=print", "-f", "null", "-"],
                        capture_output=True, text=True, timeout=600)
-    cuts = sorted(float(m.group(1)) for m in
-                  re.finditer(r"pts_time:([0-9.]+)", r.stderr or ""))
+    raw_cuts = sorted(float(m.group(1)) for m in
+                      re.finditer(r"pts_time:([0-9.]+)", r.stderr or ""))
+    cuts: list[float] = []
+    for t in raw_cuts:
+        if cuts and t - cuts[-1] < 0.6:
+            continue  # 同一叠化转场簇, 只取簇首
+        cuts.append(round(t, 2))
     d = STAGE_DIR / job.video_id
     d.mkdir(parents=True, exist_ok=True)
-    (d / "timeline.json").write_text(
-        json.dumps({"total_sec": total, "cuts": cuts}, ensure_ascii=False),
-        encoding="utf-8")
+    tl_path = d / "timeline.json"
+    # merge 写 (2026-09-01): 保留 _ocr 已产出的 clean_windows/dirty_sec_list/sec_flags —
+    # 原版覆盖写, 重切批 re-probe 时会把 OCR 结果全抹掉 (OCR 是全链最贵 CPU 段)
+    tl: dict = {}
+    if tl_path.exists():
+        try:
+            tl = json.loads(tl_path.read_text(encoding="utf-8"))
+        except Exception:
+            tl = {}
+    tl.update({"total_sec": total, "cuts": cuts})
+    tl_path.write_text(json.dumps(tl, ensure_ascii=False), encoding="utf-8")
     return {"total_sec": round(total, 1), "cuts": len(cuts)}
 
 
@@ -201,8 +257,12 @@ def _new_ocr():
     """RapidOCR CUDA 工厂 (2026-08-31): DLL 目录注入 + GPU EP + v3 模型路径.
 
     Windows 坑: Py3.8+ 不继承 PATH → cudnn/cublas 系列必须 add_dll_directory;
-    实测预热后 655ms/帧 (CPU 1800ms, 2.7x — GPU P5 省电态下)。
+    RapidOCR 1.2.3 坑: rec_use_cuda=True 不生效, rec session 静默落 CPU-only
+    (det 也可能未真启) → 构造后手动重建双 session 强制 CUDA EP。
+    实测 (4090): det 960x960 原生 CUDA 10.3ms/帧; 修复前 rec 纯 CPU 逐行推理,
+    缩帧尺寸不提速 (~300ms/帧固定开销) 即此病灶。
     """
+    from rapidocr_onnxruntime import RapidOCR
     import rapidocr_onnxruntime as _r
     _models = Path(_r.__file__).parent / "models"
     _nv = ROOT / ".venv/Lib/site-packages/nvidia"
@@ -212,13 +272,33 @@ def _new_ocr():
             import os as _os
             _os.add_dll_directory(str(d))
             _os.environ["PATH"] = str(d) + _os.pathsep + _os.environ.get("PATH", "")
-    return RapidOCR(det_use_cuda=True, rec_use_cuda=True,
-                    det_model_path=str(_models / "ch_PP-OCRv3_det_infer.onnx"),
-                    rec_model_path=str(_models / "ch_PP-OCRv3_rec_infer.onnx"))
+    ocr = RapidOCR(det_use_cuda=True, rec_use_cuda=True,
+                   det_model_path=str(_models / "ch_PP-OCRv3_det_infer.onnx"),
+                   rec_model_path=str(_models / "ch_PP-OCRv3_rec_infer.onnx"))
+
+    # 强制 CUDA: 只替换包装器内层的原生 session (包装器本身可调用, 不能整个换)
+    import onnxruntime as _ort
+
+    def _rebind(wrapper, model_path):
+        try:
+            s = _ort.InferenceSession(str(model_path), providers=[
+                ("CUDAExecutionProvider", {"device_id": 0}),
+                "CPUExecutionProvider"])
+            if s.get_providers()[0] == "CUDAExecutionProvider":
+                wrapper.session = s
+        except Exception as _exc:
+            logger.warning("[ocr] CUDA session 重建失败留原样: %s", _exc)
+
+    _rebind(ocr.text_detector.infer, _models / "ch_PP-OCRv3_det_infer.onnx")
+    _rebind(ocr.text_recognizer.session, _models / "ch_PP-OCRv3_rec_infer.onnx")
+    return ocr
 
 
 def _ocr(job: MaterialIngestJob) -> dict:
-    """OCR 时间轴 (v2.1): 整片 1fps 逐秒判定 → 干净窗清单写 timeline.json."""
+    """OCR 时间轴 (v2.2, 2026-08-31 瓶颈重构): 单遍 ffmpeg 管道 fps=1,scale →
+    ndarray 直喂 GPU OCR。v2.1 每帧独立 spawn ffmpeg(-ss seek+jpg) 757ms/帧;
+    v2.2 管道直喂 + _new_ocr 强制双 session CUDA (rec 此前静默落 CPU)。
+    基准: sandbox/_ocr_bench_result.json; 秒号口径与 v2.1 一致 (第k帧=第k秒)。"""
     try:
         ocr = _new_ocr()
     except ImportError:
@@ -228,12 +308,15 @@ def _ocr(job: MaterialIngestJob) -> dict:
         from rapidocr_onnxruntime import RapidOCR
         ocr = RapidOCR()
 
-    import tempfile
-    video = str(STAGE_DIR / f"yt_{job.video_id}.mp4")
+    import numpy as np
+    video = Path(STAGE_DIR) / f"yt_{job.video_id}.mp4"
+    if not video.exists():
+        return {"error": "源文件缺失"}  # 护栏: 不写垃圾 timeline (v2.1 事故根源)
     tl_path = STAGE_DIR / job.video_id / "timeline.json"
     tl = json.loads(tl_path.read_text(encoding="utf-8"))
     total = tl.get("total_sec") or 0.0
-    tmp = tempfile.mkdtemp(prefix="ocrfull_")
+    if total <= 0:
+        return {"error": "total_sec 异常, 疑探测失败"}
 
     def _f(v):
         try:
@@ -241,28 +324,48 @@ def _ocr(job: MaterialIngestJob) -> dict:
         except (TypeError, ValueError):
             return 0.0
 
-    # 逐秒抽帧+OCR (长片 ~100ms/帧; 25min≈1500帧≈3-4min CPU)
+    scale = OCR_FRAME_SCALE
+    probe = subprocess.run([FF, "-v", "error", "-i", str(video), "-vf",
+                            f"fps=1,scale={scale}:-2", "-frames:v", "1",
+                            "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"],
+                           capture_output=True)
+    fb = len(probe.stdout)
+    if fb == 0 or fb % (scale * 3) != 0:
+        return {"error": "帧尺寸探测失败"}
+    height = fb // (scale * 3)
+
     dirty_secs: set[int] = set()
-    t = 0.5
-    while t < total:
-        fp = Path(tmp) / f"{int(t*2)}.jpg"
-        subprocess.run([FF, "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", video,
-                        "-frames:v", "1", "-vf", "scale=1280:-2",
-                        "-pix_fmt", "yuvj420p", str(fp)], capture_output=True)
-        if fp.exists():
+    # fps=3 (2026-09-01 修, 实锤盲区): fps=1 每秒只看首帧, RLR 式"飞入即出"的
+    # 动效闪字 (<1s) 两采样帧全错过 (V20260901-4417 第4s STEEL AND CONC 实测:
+    # 同管道 sec 165-169 全空, 精确 seek 168.5 有 7% 大字) — 3 帧/秒把盲区缩到
+    # 0.33s; 帧号 k → 秒 = k // 3, 窗合并口径不变。
+    ocr_fps = 3
+    p = subprocess.Popen([FF, "-v", "error", "-i", str(video), "-vf",
+                          f"fps={ocr_fps},scale={scale}:-2", "-f", "rawvideo",
+                          "-pix_fmt", "bgr24", "pipe:1"], stdout=subprocess.PIPE)
+    try:
+        for k in range(int(total) * ocr_fps):
+            raw = p.stdout.read(fb)
+            if len(raw) < fb:
+                break
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape(height, scale, 3)
             try:
-                result, _ = ocr(str(fp))
+                result, _ = ocr(frame)
             except Exception:
                 result = None
             if result:
                 for r in result:
                     if _f(r[2]) >= 0.55 and (r[0][3][1] - r[0][1][1]) >= 9:
-                        dirty_secs.add(int(t))
+                        dirty_secs.add(k // ocr_fps)
                         break
-            fp.unlink(missing_ok=True)
-        t += 1.0
+    finally:
+        try:
+            p.stdout.close()
+        except Exception:
+            pass
+        p.kill()
 
-    # 干净窗合并 (脏秒即断窗; 连续干净段收窗)
+    # 干净窗合并 (脏秒即断窗; 连续干净段收窗) — 与 v2.1 同口径
     windows: list[list[float]] = []
     run_start = None
     for sec in range(int(total) + 1):
@@ -275,7 +378,11 @@ def _ocr(job: MaterialIngestJob) -> dict:
                 run_start = float(sec)
     if run_start is not None:
         windows.append([run_start, total])
-    windows = [[max(0.0, ws - 0.5), min(total, we + 0.5)] for ws, we in windows]  # 半秒容差
+    # 内收 0.6s (2026-09-01 修, 方向反转): 原版向外扩 0.5s 把脏秒边缘的字幕半秒
+    # 包进"干净窗" (V20260901-4787 窗首/4788 窗尾带字实测) — 脏边应向内让:
+    # 0.6 同时覆盖帧采样(秒首 1 帧)的秒中段盲区。4s 下限在 _split 收缩后判, 不碎。
+    windows = [[max(0.0, ws + 0.6), min(total, we - 0.6)] for ws, we in windows]
+    windows = [[ws, we] for ws, we in windows if we - ws >= 2.0]
     tl["clean_windows"] = windows
     # 逐秒标记保留 (2026-08-31 用户设计要求: 第N秒有无字幕可查, 为切分/复核
     # 提供依据 — 之前只存 len(dirty_secs) 计数, 逐秒信息被扔掉)
@@ -311,7 +418,11 @@ def _register(db: Session, job: MaterialIngestJob) -> dict:
     n = 0
     for c in m.get("clips", []):
         t = c.get("tags") or {}
-        if not t or t.get("has_burned_text") or c.get("ocr_clean") is False:
+        # is_real_footage (2026-09-01 用户令, 收敛判定): 只收摄像机实拍的真实世界
+        # 画面; 博主自制/合成一律拒 — 地图/地形渲染/国旗叠加/图表/CG/AI生成感/
+        # 剪影渐变/商品棚拍/截图/黑白老胶片 (原 is_map/is_bw 并入本判据)
+        if not t or not t.get("is_real_footage") or t.get("has_burned_text") \
+                or c.get("ocr_clean") is False:
             continue
         if c["end"] - c["start"] < 4.0:
             continue
@@ -369,8 +480,17 @@ def _backfill_dims(db: Session, job: MaterialIngestJob) -> int:
             d = by_i.get(j)
             if not d:
                 continue
-            a.scenes = json.dumps(d.get("scenes") or [], ensure_ascii=False)
-            a.shot_types = json.dumps(d.get("shot_types") or [], ensure_ascii=False)
+            # 直接赋 list (2026-09-01 修): 原版 json.dumps 手动转 str 存 JSON 列
+            # → 6400+ 行 '["工业"]' 脏格式, VideoAssetOut 序列化 500 (library 翻页炸)
+            def _as_list(v):
+                if isinstance(v, str):
+                    try:
+                        v = json.loads(v)
+                    except (ValueError, TypeError):
+                        return []
+                return v if isinstance(v, list) else []
+            a.scenes = _as_list(d.get("scenes"))
+            a.shot_types = _as_list(d.get("shot_types"))
             a.tone = d.get("tone") or "neutral"
             a.motion_level = d.get("motion_level") or "slow"
             a.content_density = d.get("content_density") or "moderate"

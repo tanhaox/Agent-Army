@@ -36,6 +36,10 @@ for mf in sorted(glob.glob("data/materials/youtube/*/manifest.json")):
         if src.exists():
             send2trash(str(src))
         purged_videos += 1
+        # 整片的全部切片行也要进除名集合 (2026-09-01 修: 此前只 ② 切片级收集,
+        # ① 分支的 DB 行永远漏删 → library 出现 615+ 播 404 的孤儿行)
+        for c in clips:
+            dirty_files.add(str(ROOT / c["file"]))
         print(f"  整片回收 {vid} [{m.get('entity','?')}] 净{clean_dur:.0f}s/{len(clips)}片")
         continue
 

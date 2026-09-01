@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+import json
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .voices import VoiceOut
 from .roles import RoleOut
@@ -52,6 +54,21 @@ VIDEO_SHOT_TYPE_CHOICES = (
 )
 
 
+def _coerce_json_list(v):
+    """SQLite JSON 列偶被写成 str 形态的 '["a","b"]' (RLR 批量导入 2026-08-28~ 脏格式).
+
+    读侧宽容: JSON str → 解析回 list; 非数组 JSON/普通 str → 单元素列表。
+    治本修复在 scripts/fix_json_columns.py (数据回写), 此处保证页面不 500。
+    """
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+            return parsed if isinstance(parsed, list) else [parsed]
+        except (ValueError, TypeError):
+            return [v]
+    return v
+
+
 class VideoAssetOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,6 +100,11 @@ class VideoAssetOut(BaseModel):
     used_count: int
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("scenes", "shot_types", "tags", mode="before")
+    @classmethod
+    def _tolerate_str_json(cls, v):
+        return _coerce_json_list(v)
 
 
 class VideoAssetUpdate(BaseModel):

@@ -46,10 +46,18 @@ def _run(cmd: list[str]) -> str:
     return (r.stdout or "") + (r.stderr or "")
 
 
-def detect_cuts(video: str, threshold: float = 0.20) -> list[float]:
+def detect_cuts(video: str, threshold: float = 0.05) -> list[float]:
+    """scene 切点 + 叠化簇合并 (2026-09-01 校准): RLR 式叠化转场边界 score 仅
+    0.05~0.08 (0.20 全漏 → 跨镜头拼接片); 0.05 档叠化过程 0.2s 间隔连命中,
+    相邻 <0.6s 只取簇首。"""
     out = _run([FF, "-i", video, "-vf", f"select='gt(scene,{threshold})',metadata=print",
                 "-f", "null", "-"])
-    return sorted(float(m.group(1)) for m in re.finditer(r"pts_time:([0-9.]+)", out))
+    cuts: list[float] = []
+    for t in sorted(float(m.group(1)) for m in re.finditer(r"pts_time:([0-9.]+)", out)):
+        if cuts and t - cuts[-1] < 0.6:
+            continue
+        cuts.append(round(t, 2))
+    return cuts
 
 
 def build_clip_ranges(video: str, cuts: list[float], total: float) -> list[tuple[float, float]]:
@@ -105,8 +113,16 @@ def cmd_split(video: str, video_id: str, entity: str, title: str) -> None:
 TAG_PROMPT = """你是视频素材打标员。看这个视频片段的一帧。只输出 JSON:
 {"desc_zh": "画面内容中文描述(≤20字)",
  "keywords_en": ["英文画面词2-4个"],
+ "is_real_footage": true/false,
  "has_burned_text": true/false,
  "text_content": "画面里烧录的文字内容, 无则空"}
+is_real_footage=true 当且仅当: 摄像机实拍的真实世界画面 —
+ 真实人物/街景/城市/自然/建筑/工厂/交通/器物/真实事件现场 (照片感, 有生活质感)。
+is_real_footage=false 当画面是任何博主自制/合成/非实拍产物 (2026-09-01 用户令,
+ 宁可错杀): 地图/地形图/国界/大面积国旗或旗帜画面(特写/飘扬/纯色块国旗也算)/
+ 国旗叠加/图表/数据可视化/3D地形渲染/CG动画/游戏画面/AI生成感画面/
+ 剪影+纯色渐变背景/纯色背景+构图元素示意图/商品棚拍展示图/截图/文字卡/
+ 黑白老胶片/历史档案资料画面。
 has_burned_text=true 当画面有: 字幕/台词文字/大标题/产品名大字/水印文字;
 产品上的小logo(芯片上的NVIDIA刻字)不算。注意角落小字水印(Courtesy:/频道名)也算。"""
 
@@ -210,9 +226,12 @@ def cmd_tag(video_id: str) -> None:
                          "has_burned_text": True, "text_content": "[OCR快筛: 带文字]"}
             continue  # 脏片不烧 GPU
         clip = ROOT / c["file"]
+        # 768px JPG (2026-08-31): 全分辨率 PNG 让 VLM 吃 ~2900 视觉token/帧 (~27s/条);
+        # 缩图后 token÷4 payload÷10。烧录字幕已由 OCR 干净窗把关, VLM 只做内容描述+兜底复查。
         out = _run([FF, "-y", "-v", "error", "-ss", "0.5", "-i", str(clip),
-                    "-frames:v", "1", str(stage / f"frame_{c['n']:03d}.png")])
-        frame = stage / f"frame_{c['n']:03d}.png"
+                    "-frames:v", "1", "-vf", "scale=768:-2", "-q:v", "3",
+                    str(stage / f"frame_{c['n']:03d}.jpg")])
+        frame = stage / f"frame_{c['n']:03d}.jpg"
         if not frame.exists():
             continue
         raw = analyze([str(frame)], TAG_PROMPT)
