@@ -445,16 +445,18 @@ def batch_fetch_urls(urls: list[str]) -> list[dict[str, Any]]:
     def _fetch(idx_url: tuple[int, str]) -> tuple[int, dict[str, Any]]:
         idx, url = idx_url
         try:
-            r = fetch_url(url)
+            # 证据图管线①: 顺手提取候选图 (零额外请求)
+            r = fetch_url(url, with_images=True)
             return idx, {
                 "url": url,
                 "ok": bool(r.get("ok")),
                 "title": r.get("title") or "",
                 "raw_text": r.get("raw_text") or "",
                 "error": r.get("error") or "",
+                "images": r.get("images") or [],
             }
         except Exception as exc:  # 单条失败不拖垮整批
-            return idx, {"url": url, "ok": False, "title": "", "raw_text": "", "error": str(exc)}
+            return idx, {"url": url, "ok": False, "title": "", "raw_text": "", "error": str(exc), "images": []}
 
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="material") as pool:
         futures = [pool.submit(_fetch, (i, u)) for i, u in enumerate(urls)]

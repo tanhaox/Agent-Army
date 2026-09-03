@@ -100,6 +100,9 @@ class Article(Base):
     # 评论层 (2026-08-15): 解构层产物 (reactions/comment_archetypes/narrative/research),
     # 洗稿时自动生成, 也可单独触发; 新闻线索页「评论层」面板展示, 供人工洞察
     deconstruct_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
+    # 证据图管线① (2026-09-04): 抓取 URL 时「搜图」开关产物 [{url,alt,w,h}],
+    # 非空 = 总闸开过, 素材包建包时自动扫图
+    images_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending / rewritten / generated / failed
@@ -289,6 +292,9 @@ class MaterialItem(Base):
     char_count: Mapped[int] = mapped_column(Integer, default=0)
     search_query: Mapped[str | None] = mapped_column(String(256), default=None)  # 补搜来源查询词
     layer_tags: Mapped[list[str] | None] = mapped_column(JSON, default=None)  # 审计标注 ["L3","L4"]
+    # 证据图管线① (2026-09-04): 扫图产物 [{url, alt, w, h, local_path,
+    # source_media, vlm:{is_chart,kind,desc_zh,numbers,quality,watermark}|null}]
+    images_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

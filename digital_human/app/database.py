@@ -192,6 +192,19 @@ def _apply_manual_migrations(engine) -> None:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE articles ADD COLUMN track VARCHAR(16) DEFAULT 'tech'"))
                 logger.info("[db] migrated: articles.track column added")
+            # 证据图管线① (2026-09-04): 抓取 URL「搜图」开关产物, 搜图总闸标记
+            if "images_json" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE articles ADD COLUMN images_json TEXT"))
+                logger.info("[db] migrated: articles.images_json column added")
+
+        # material_items 证据图 (2026-09-04 证据图管线①): 扫图产物 (URL+VLM 打标+本地缓存)
+        if "material_items" in tables:
+            mi_cols = {c["name"] for c in inspector.get_columns("material_items")}
+            if "images_json" not in mi_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE material_items ADD COLUMN images_json TEXT"))
+                logger.info("[db] migrated: material_items.images_json column added")
 
         # video_assets 内容质量分 (2026-08-16 烂素材治理③): VLM 质量打分产物,
         # matcher 硬底线+排序依据 — 治"分辨率没问题但内容平庸"的主病

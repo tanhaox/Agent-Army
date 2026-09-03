@@ -136,7 +136,7 @@ def delete_prompt_template(template_id: str):
 
 @router.post("/fetch-url", response_model=FetchUrlResponse)
 def fetch_url_endpoint(payload: FetchUrlRequest):
-    result = fetch_url(payload.url)
+    result = fetch_url(payload.url, with_images=payload.with_images)
     return result
 
 
@@ -171,6 +171,8 @@ def create_article(payload: ArticleCreate, db: Session = Depends(get_db)):
         source_url=payload.source_url,
         raw_text=payload.raw_text,
         track=payload.track or "tech",
+        # 证据图管线①: 抓取时「搜图」开关抓到的本页图随稿入库 (非空=总闸开)
+        images_json=[img for img in (payload.images or []) if isinstance(img, dict) and img.get("url")] or None,
         status="pending",
     )
     db.add(article)

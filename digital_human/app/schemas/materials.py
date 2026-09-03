@@ -30,6 +30,8 @@ class MaterialItemOut(BaseModel):
     char_count: int
     search_query: str | None = None
     layer_tags: list[str] | None = None
+    # 证据图管线① (2026-09-04): 扫图产物, 前端缩略图行渲染
+    images_json: list[dict[str, Any]] | None = None
     created_at: datetime
 
 

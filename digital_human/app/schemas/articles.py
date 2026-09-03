@@ -34,6 +34,10 @@ class ArticleCreate(BaseModel):
     track: Literal["tech", "geo"] | None = Field(
         default="tech", description="赛道: tech=科技/商业(默认) / geo=地缘/国际 — 驱动评论层与七层审计分支"
     )
+    # 证据图管线① (2026-09-04): 抓取 URL 时「搜图」开关抓到的本页候选图
+    images: list[dict[str, Any]] | None = Field(
+        default=None, description="原文页 <img> 候选图 [{url,alt,w,h}]; 非空=搜图总闸开"
+    )
 
 
 class RewriteRequest(BaseModel):
@@ -61,6 +65,8 @@ class TtsAdaptRequest(BaseModel):
 
 class FetchUrlRequest(BaseModel):
     url: str = Field(..., min_length=5)
+    # 证据图管线① (2026-09-04): 搜图总闸 — 开时顺手提取本页 <img> 候选图
+    with_images: bool = Field(default=False, description="是否提取页面候选证据图")
 
 
 class FetchUrlResponse(BaseModel):
@@ -69,6 +75,7 @@ class FetchUrlResponse(BaseModel):
     source_url: str | None = None
     raw_text: str | None = None
     error: str | None = None
+    images: list[dict[str, Any]] | None = None  # with_images=True 时返回
 
 
 class ArticleUpdate(BaseModel):
@@ -87,6 +94,7 @@ class ArticleOut(BaseModel):
     track: str | None = None  # 赛道 tech/geo (2026-08-16)
     perspective_1: str | None = None
     deconstruct_json: dict[str, Any] | None = None  # 评论层 (2026-08-15)
+    images_json: list[dict[str, Any]] | None = None  # 证据图管线① (2026-09-04)
     created_at: datetime
     updated_at: datetime
 
