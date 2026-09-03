@@ -205,6 +205,21 @@ class TestPoolAndVlmParse:
             assert collect_evidence_pool(db, script) == []  # 无素材包
 
 
+# ── ② scan_package_images 烟雾 (config/缓存目录路径 + 空包零开销返回) ──
+
+class TestScanSmoke:
+    def test_empty_package_smoke(self, tmp_db):
+        # 踩到 get_config().defaults.materials_dir + cache mkdir (真机曾在此 AttributeError)
+        from app.services.evidence_service import scan_package_images
+        with db_session() as db:
+            art = Article(title="t", raw_text="x" * 10, track="tech")
+            db.add(art); db.flush()
+            pkg = MaterialPackage(article_id=art.id)
+            db.add(pkg); db.commit()
+            stats = scan_package_images(db, pkg)
+        assert stats == {"scanned_items": 0, "candidates": 0, "downloaded": 0, "charts": 0}
+
+
 # ── ④ 闸门 (_enforce_evidence_gates) ──
 
 class TestEvidenceGates:

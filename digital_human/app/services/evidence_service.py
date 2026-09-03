@@ -257,7 +257,7 @@ def scan_package_images(db: Session, package: MaterialPackage,
             except Exception:
                 pass
 
-    cache_dir = Path(get_config().materials_dir) / "evidence" / "cache"
+    cache_dir = Path(get_config().defaults.materials_dir) / "evidence" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. 收集候选: 原文条目 (article.images_json, 不重抓) 优先, 其余条目逐页提取
