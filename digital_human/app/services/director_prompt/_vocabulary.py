@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import VideoAsset
 from app.services.director_prompt._constants import (
+    BASE_SHOT_TYPES,
     MAX_WORDS_PER_DIM,
     VOCABULARY_PACK_PATH,
     _CLEANUP_PREFIXES,
@@ -63,7 +64,8 @@ def _collect_enum_dims(assets: list[Any]) -> dict[str, list[str]]:
                 scene_seen.add(scene)
                 dims["scenes"].append(scene)
         for shot in asset.shot_types or []:
-            if shot and shot not in shot_seen:
+            # "空镜"退役 (2026-09-02): 语义≈无人与 people=none 同义, 聚合时即洗掉
+            if shot and shot != "空镜" and shot not in shot_seen:
                 shot_seen.add(shot)
                 dims["shot_types"].append(shot)
 
@@ -81,6 +83,14 @@ def _collect_enum_dims(assets: list[Any]) -> dict[str, list[str]]:
                 if v and v not in ai_extra_seen[dim]:
                     ai_extra_seen[dim].add(v)
                     dims[dim].append(v)
+
+    # shot_types 基础枚举兜底 (2026-09-02): 纯聚合只能拿到库里已标的值,
+    # 新扩充的镜头语言 (中景/全景/跟拍…) 库里没人标过 → 与基础枚举取并集,
+    # 导演才选得到; "空镜"已在聚合层洗掉, 不在基础枚举内
+    for shot in BASE_SHOT_TYPES:
+        if shot not in shot_seen:
+            shot_seen.add(shot)
+            dims["shot_types"].append(shot)
 
     return dims
 

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 __all__ = [
     "P1_PROMPT", "P2_PROMPT", "P3_PROMPT", "P4_PROMPT", "P5_PROMPT",
-    "P5_SPAN_PROMPT", "P7_PROMPT", "P_LOOP_PROMPT", "DECONSTRUCT_PROMPT",
-    "_GEO_DECONSTRUCT_ADDON", "TTS_ADAPT_PROMPT",
+    "P5_SPAN_PROMPT", "P5_SPAN_PROMPT_BOOK", "P7_PROMPT", "P_LOOP_PROMPT",
+    "DECONSTRUCT_PROMPT", "_GEO_DECONSTRUCT_ADDON", "TTS_ADAPT_PROMPT",
 ]
 
 # ⚠️ ARCHIVED (2026-08-25): P1/P2/P3_PROMPT 及 _run_p1/_run_p2/_run_p3 已于
@@ -262,6 +262,28 @@ calm / serious / surprised / happy / angry / sad / afraid / disgusted / melancho
 # 输出（严格 JSON, 不要其他文字）
 {"spans": [[起始句号, 结束句号, "情绪", 强度], ...]}
 例: {"spans": [[1, 3, "surprised", 2], [4, 18, "surprised", 5], [19, 24, "surprised", 3], [25, 30, "happy", 4]]}"""
+
+
+# P5 span 协议·读书版 (2026-09-03 拆书线定稿): calm+confident 混合打底 —
+# 叙述/共情段 calm 温柔陪伴, 拆解观点段 confident 笃定讲书; 新闻线惊讶铁律不动,
+# 读书线整篇惊讶不合"治愈听书"人设 (用户 2026-09-03 拍板)。
+P5_SPAN_PROMPT_BOOK = """你是{persona}的【情绪标注师】。下面是编号好的读书拆解口播句子表。你的唯一任务：把句子分组连续区间，给每个区间标「情绪 + 强度档」。不评价、不改写、不解释。
+
+# 情绪枚举（只能从中选, 英文小写）
+calm / confident / melancholic / surprised / happy / serious
+
+# 标注规则
+- 分 6~10 个区间，区间连续不重叠，合起来覆盖全部句子；区间边界只在语义模块切换处（开场→书中情节→拆解观点→共情→方法→收尾）。
+- **calm+confident 混合打底（读书陪伴基调, 2026-09-03 用户定稿）**：转述书中情节/人物/过渡句默认 calm（2-3 档，温柔不拖沓）；进入拆解观点/方法论/给出判断的区间切 confident（3-4 档，"我读懂了讲给你"的笃定）。
+- melancholic 用于书中人物的低落/困境/共情段（2-3 档）——陪着叹一口气，不煽情不说教。
+- surprised 仅用于反常识/意外的知识点爆点（4-5 档），全篇 ≤2 个区间。
+- happy 仅用于结尾成长/收获/升华区间（3-4 档）。
+- serious 仅用于郑重核心提醒（≤1 个区间, 3 档）。
+- 禁止 angry / sad / afraid / disgusted；相邻区间强度差 ≤2。
+
+# 输出（严格 JSON, 不要其他文字）
+{"spans": [[起始句号, 结束句号, "情绪", 强度], ...]}
+例: {"spans": [[1, 3, "calm", 2], [4, 12, "melancholic", 3], [13, 24, "confident", 4], [25, 30, "happy", 4]]}"""
 
 
 # P7 流量评审 (2026-08-25): 复刻豆包五维测评框架 — 发布前仪表盘, 只评审不改稿。

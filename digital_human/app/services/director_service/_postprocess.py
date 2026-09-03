@@ -32,6 +32,18 @@ _MIN_DUR = {
 _HF_TITLE_CAP = 5  # 含尾部参考卡(clamp 后追加, 不占此额度)
 _PROTECTED = {"host", "mixed_host_broll", "hf_opening"}
 
+# HF 线最小时间间隔 (2026-09-02 用户令): 连续/近距离 HF 文字卡观感疲劳且
+# 挤占实拍画面 — 两张 HF 卡(除片头 hf_opening)间隔不足此值的, 后者降级
+# broll_pexels 走实拍/下载, 画面不断档。
+_HF_MIN_GAP_SEC = 20.0
+
+# HF 卡时长上限 (2026-09-02 用户令): HF 模板动画设计轴 ~3.6s (S 缩放封顶
+# 1.6x ≈ 5-8s), 超时长卡必然动画循环重播/长静置 → 超限部分拆 broll_pexels
+# 补画面 (口播时间轴不动, 只换画面源)。
+# 开篇 (首个 slot) 更紧: 纯文字卡是跳出率杀手, 6s 内必须让位实拍/出镜。
+_HF_MAX_DUR = 8.0
+_HF_OPENING_MAX_DUR = 6.0
+
 
 def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
     """质量钳制: 重叠去重 + 最小时长 + hf_title 数量上限 + 时序重排.
@@ -42,6 +54,8 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
     slots = sorted(plan.slots, key=lambda s: (s.start_sec, s.slot_index))
     kept: list[Any] = []
     hf_title_seen = 0
+    last_hf_end = -9999.0  # 上一张 HF 卡结束时刻 (2026-09-02 间隔约束)
+    hf_gap_demoted = 0
     cursor = 0.0
     dropped = 0
     for slot in slots:
@@ -56,6 +70,15 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
                 logger.info("[director] drop excess hf_title (cap %d)", _HF_TITLE_CAP)
                 dropped += 1
                 continue
+        # HF 最小间隔 (2026-09-02): 距上一张 HF 卡 < 20s 的非片头 HF 卡
+        # 降级 broll_pexels (真实画面优先; params 的 9 维/keywords 对 broll 兼容)
+        if slot.workflow.startswith("hf") and slot.workflow != "hf_opening":
+            if slot.start_sec - last_hf_end < _HF_MIN_GAP_SEC:
+                logger.info("[director] hf gap demote %s@%.1fs (距上张 HF %.1fs < %.0fs)",
+                            slot.workflow, slot.start_sec,
+                            slot.start_sec - last_hf_end, _HF_MIN_GAP_SEC)
+                slot.workflow = "broll_pexels"
+                hf_gap_demoted += 1
         min_dur = _MIN_DUR.get(slot.workflow, 0.0)
         if dur < min_dur:
             if slot.workflow in _PROTECTED or slot.workflow.startswith("hf"):
@@ -80,6 +103,8 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
             dropped += 1
             continue
         cursor = slot.end_sec
+        if slot.workflow.startswith("hf"):
+            last_hf_end = slot.end_sec  # 钳后时刻为准, 供后续间隔判定
         kept.append(slot)
     for i, slot in enumerate(kept):
         slot.slot_index = i
@@ -102,7 +127,46 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
                     gap, total_duration)
     if filled:
         logger.info("[director] timeline tiling: filled %d gap(s), slots now tile audio fully", filled)
+
+    # ── HF 卡时长上限 (2026-09-02): 超限拆 broll 补画面 ──
+    # 动画 ~5-8s, 超长卡循环重播; 开篇首 slot 更紧 (跳出率)。截短后剩余时段
+    # 用 broll_pexels slot 补 (继承 params 的 keywords/9 维, 时间轴不动)。
+    import copy as _copy
+    hf_capped = 0
+    split_out: list[Any] = []
+    first_slot = kept[0] if kept else None
+    for slot in kept:
+        dur = slot.end_sec - slot.start_sec
+        is_first = (slot is first_slot)
+        cap = _HF_OPENING_MAX_DUR if is_first else _HF_MAX_DUR
+        if slot.workflow.startswith("hf") and dur > cap + 0.05:
+            old_end = slot.end_sec
+            slot.end_sec = round(slot.start_sec + cap, 3)
+            slot.duration_sec = cap
+            if old_end - slot.end_sec > 1.0:  # 余段够 1s 才补 broll
+                tail = _copy.deepcopy(slot)
+                tail.workflow = "broll_pexels"
+                tail.start_sec = slot.end_sec
+                tail.end_sec = round(old_end, 3)
+                tail.duration_sec = round(tail.end_sec - tail.start_sec, 3)
+                # HF 的 params (keywords/scenes/9 维) 对 broll_pexels 兼容
+                split_out.append(tail)
+            hf_capped += 1
+            logger.info("[director] hf cap: %s@%.1fs %.1fs→%.1fs%s",
+                        slot.workflow, slot.start_sec, dur, cap,
+                        " +broll 补段" if old_end - slot.end_sec > 1.0 else "")
+    if split_out:
+        kept = sorted(kept + split_out, key=lambda s: (s.start_sec, s.slot_index))
+        for i, slot in enumerate(kept):
+            slot.slot_index = i  # 拆分插入后全局重排
+    if hf_capped:
+        logger.info("[director] hf max-dur: %d 张超长 HF 卡截断 (上限 开篇%.0fs/其余%.0fs)",
+                    hf_capped, _HF_OPENING_MAX_DUR, _HF_MAX_DUR)
+
     plan.slots = kept
+    if hf_gap_demoted:
+        logger.info("[director] hf min-gap: %d 张过近 HF 卡降级 broll (间隔 <%ss)",
+                    hf_gap_demoted, _HF_MIN_GAP_SEC)
     if dropped:
         logger.info("[director] quality clamp: kept %d slots, dropped %d (碎片/超限/重叠)",
                     len(kept), dropped)

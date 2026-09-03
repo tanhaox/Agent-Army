@@ -205,7 +205,7 @@ class AudioJob(Base):
     output_dir: Mapped[str] = mapped_column(String(1024), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
-    )  # pending / running / completed / failed
+    )  # pending / running / cancelling / cancelled / completed / failed / stale
     total_segments: Mapped[int] = mapped_column(Integer, default=0)
     completed_segments: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, default=None)

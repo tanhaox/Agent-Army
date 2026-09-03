@@ -38,7 +38,19 @@ LOCATION_VALUES = ("domestic", "foreign")
 ORIENTATION_VALUES = ("portrait", "landscape", "square")
 PEOPLE_VALUES = ("people", "none")
 
+# shot_types 基础枚举 (2026-09-02 用户令重构):
+#   - "空镜"退役 — 语义≈无人, 与硬维度 people=none 同义双轨, 是"无人素材
+#     使用率畸高"的根因 (存量已同步剥离, 无人语义由 people 独占)
+#   - 扩充真实镜头语言 (远景~特写/俯拍/跟拍/延时…); 交通/建筑属内容类,
+#     因存量大量已标保留兼容
+BASE_SHOT_TYPES = (
+    "远景", "全景", "中景", "近景", "特写", "人像",
+    "航拍", "俯拍", "跟拍", "延时", "交通", "建筑",
+)
+
 # 词表清洗：定向剔除的脏词（脚本残留 ||、方位/国家词、噪音）
+# (2026-09-02: city/street/traffic/building/crowd 移出 — 正当画面词被误杀,
+#  keywords 组系统性贫瘠, 间接加剧导演对 shot_types 的依赖)
 _CLEANUP_PREFIXES = ("||", "[", "]", "{", "}", "(", ")")
 _CLEANUP_RAW = frozenset({
     "vertical", "wide", "east", "west", "western", "in", "up", "us", "list", "back",
@@ -46,8 +58,8 @@ _CLEANUP_RAW = frozenset({
     "analysis", "pressure", "risk", "determination", "war", "stock", "history",
     "progress", "comparison", "alignment", "diplomacy", "manipulation", "exploitation",
     "achievement", "warning", "competition", "production", "supply", "industry",
-    "official", "document", "crowd", "island", "people", "world", "market",
-    "city", "street", "traffic", "car", "price", "busy", "urban", "building",
+    "official", "document", "island", "people", "world", "market",
+    "price", "busy", "urban",
     "usa", "russia", "taiwan", "shanghai", "china", "yeltsin",
 })
 # 额外定向剔除的国家/城市/方位词（地域语义已由 location 硬维度承载, 词表里不重复）

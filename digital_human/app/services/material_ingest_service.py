@@ -181,9 +181,11 @@ def _split(job: MaterialIngestJob) -> dict:
             _fill_uniform(capped, s, e)
         else:
             capped.append((s, e))
-    # 尾部收缩 (2026-09-01): 叠化转场中段的切点前 0.2~0.5s 已是混合画面 —
-    # 窗尾让出 0.25s 防止片尾串镜; 收缩后 <4s 的碎窗丢弃
-    covered = sorted({(s, e - 0.25) for s, e in set(capped) if e - 0.25 - s >= 4.0})
+    # 头尾收缩 (2026-09-01): 叠化转场中段的切点前 0.2~0.5s 已是混合画面 —
+    # 尾让 0.25s; 头让 0.3s (对称, 抽验实证片头 0.0~0.6s 残留叠化尾段);
+    # 收缩后 <4s 的碎窗丢弃
+    covered = sorted({(s + 0.3, e - 0.25) for s, e in set(capped)
+                      if e - 0.25 - (s + 0.3) >= 4.0})
 
     clips_dir = STAGE_DIR / job.video_id / "clips"
     clips_dir.mkdir(parents=True, exist_ok=True)
@@ -202,7 +204,7 @@ def _split(job: MaterialIngestJob) -> dict:
             # +faststart: moov 前置, web 播放器边下边播不起竞态。
             subprocess.run([FF, "-y", "-v", "error", "-i", video,
                             "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
-                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
                             "-an", "-movflags", "+faststart", str(out)],
                            capture_output=True, timeout=120)
         if out.exists() and out.stat().st_size > 50000:
@@ -442,6 +444,13 @@ def _register(db: Session, job: MaterialIngestJob) -> dict:
                           tags=tags, source_type="footage", location="foreign"))
         n += 1
     db.commit()
+    # 词表包自动重建 (2026-09-02): 新素材入库即重建 — 此前钩子只挂在旧打标线,
+    # yt 入库线不触发, 词表 stale 在 2026-08-09 (新批 1896 条从未进词表, 实锤)
+    try:
+        from app.services.director_prompt._vocabulary import rebuild_vocabulary_pack
+        rebuild_vocabulary_pack(db)
+    except Exception as exc:  # noqa: BLE001 — 重建失败不挡入库
+        logger.warning("[ingest] 词表包重建失败: %s", exc)
     return {"registered": n}
 
 

@@ -208,14 +208,19 @@ def _cleanup_zombie_audio_jobs():
     with db_session() as db:
         zombies = (
             db.query(AudioJob)
-            .filter(AudioJob.status.in_(["pending", "running"]))
+            .filter(AudioJob.status.in_(["pending", "running", "cancelling"]))
             .all()
         )
         if not zombies:
             return
         for job in zombies:
-            job.status = "failed"
-            job.error_message = "服务重启中断 TTS 任务，已标记失效，请重新生成音频"
+            if job.status == "cancelling":
+                # 2026-09-02: 停止请求已收到但线程随重启被杀 → 按停止落定, 不算失败
+                job.status = "cancelled"
+                job.error_message = "服务重启中断 — 已按停止处理，已生成音频保留"
+            else:
+                job.status = "failed"
+                job.error_message = "服务重启中断 TTS 任务，已标记失效，请重新生成音频"
         db.commit()
         logger.info("[lifespan] cleaned %d zombie audio job(s)", len(zombies))
 

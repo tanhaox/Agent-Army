@@ -31,6 +31,7 @@ class TTSService:
         voice: Voice | None,
         progress_callback: Callable[[int, int, str | None, AudioFile], None] | None = None,
         emotion_annotations: list[dict[str, Any]] | None = None,
+        status_callback: Callable[[str, str], None] | None = None,
     ) -> dict[str, Any]:
         """Generate per-line WAV files and manifest.
 
@@ -39,6 +40,7 @@ class TTSService:
             segments: List of Segment instances to synthesize.
             voice: Voice configuration.
             progress_callback: Called with (completed, total, current_text, audio_file) after each line.
+            status_callback: (消息, 级别) 状态事件 (ASR 回听校验等非逐段进度)。
         """
         output_dir = Path(job.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +166,63 @@ class TTSService:
             emotion_segments=emotion_segments,
         )
 
+        # ── ASR 回听校验 (2026-09-03): 拼接前逐行回听, 错音自动 <字|PINYIN> 重合成 ──
+        # 多音字偶发错读此前只能人工听成片发现; 现在合成后秒级发现+修复。
+        # 手术式单行重合成 (_synthesize_single) 不动邻行; 失败回滚原音频宁可不修。
+        # 任何异常静默降级 (whisper 缺失/显存不足) — 校验是增值不是依赖。
+        verify_report = None
+        if getattr(self.defaults, "tts_verify_asr", True) and manifest.get("segments"):
+            try:
+                from .tts_verify import verify_pronunciation
+
+                def _resynth_line(idx: int, clean_line: str, marked_line: str) -> None:
+                    from scripts.tts_lib.orchestrator import _synthesize_single
+                    from scripts.tts_lib.text import _tts_text
+                    import re as _re
+
+                    wav = output_dir / f"{idx:03d}.wav"
+                    # 情绪段按干净行文本匹配 (标注行与段文本对不上, 会落 calm)
+                    _n = lambda s: _re.sub(r"\s+", "", s or "")
+                    emo = next((s for s in (emotion_segments or [])
+                                if clean_line and _n(clean_line) in _n(s.get("text", ""))), None)
+                    tmp = output_dir / f"_verify_{idx:03d}.wav"
+                    _synthesize_single(
+                        text=_tts_text(marked_line, keep_breaks=(backend == "indextts")),
+                        output_path=tmp, backend=backend, voice_id=voice_id,
+                        reference_audio=ref_audio, reference_text=ref_text,
+                        base_url_fish=base_url_fish, base_url_f5=base_url_f5,
+                        base_url_indextts=base_url_indextts,
+                        master_audio=master_audio, master_text=master_text,
+                        params=voice_params,
+                        emo_vector=emo.get("vector") if emo else None,
+                        emo_alpha=(emo.get("alpha", 1.0) if emo else 1.0),
+                    )
+                    # 与产线一致: loudnorm 归一后原位覆盖
+                    try:
+                        from app.infrastructure.ffmpeg import normalize_audio
+                        normalize_audio(tmp, wav)
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        tmp.replace(wav)
+
+                verify_report = verify_pronunciation(
+                    output_dir=output_dir, manifest=manifest,
+                    resynth_line=_resynth_line,
+                    on_event=(lambda m, lv: status_callback(m, lv)) if status_callback else None,
+                )
+                # 修复行时长已变 → 同步 AudioFile 行 (调用方稍后 commit)
+                for fix in verify_report.get("fixed", []):
+                    for af in audio_files:
+                        if af.filename == fix.get("file") and fix.get("duration"):
+                            af.duration = fix["duration"]
+            except Exception as exc:
+                logger.warning("[tts %s] ASR 回听校验跳过: %s", job.id[:8], exc)
+                if status_callback:
+                    try:
+                        status_callback(f"ASR 回听校验不可用 (跳过): {exc}", "warn")
+                    except Exception:
+                        pass
+
         # ── Concatenate all segment WAVs into one paragraph-level file ──
         combined_path = output_dir / "full_paragraph.wav"
         existing_wavs = [af.file_path for af in audio_files if Path(af.file_path).exists()]
@@ -198,6 +257,7 @@ class TTSService:
             "manifest": manifest,
             "audio_files": audio_files,
             "output_dir": str(output_dir),
+            "tts_verify": verify_report,
             "combined_file": {
                 "file": "full_paragraph.wav",
                 "file_path": str(combined_path) if combined_path else None,

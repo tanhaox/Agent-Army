@@ -197,6 +197,37 @@ async function applyPersonaLockByTemplate(template) {
 }
 
 // ── TTS 生成 (从 app.js v6 迁入) ──
+// ── 停止按钮 (2026-09-02): 任务进行中显示; 段间软取消, 已生成段保留断点续传 ──
+let _activeAudioJobId = null;
+
+function showAudioStop(jobId) {
+  _activeAudioJobId = jobId;
+  const btn = document.getElementById('btn-audio-stop');
+  if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = '⏹ 停止'; }
+}
+
+function hideAudioStop() {
+  _activeAudioJobId = null;
+  const btn = document.getElementById('btn-audio-stop');
+  if (btn) btn.style.display = 'none';
+}
+
+async function cancelAudio() {
+  if (!_activeAudioJobId) return;
+  const btn = document.getElementById('btn-audio-stop');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 停止中…'; }
+  try {
+    const job = await api('POST', `/audio/jobs/${_activeAudioJobId}/cancel`);
+    // 二次点击仍 cancelling (线程已死的僵尸) → 后端已强制落 cancelled, SSE 会推 tts_cancelled
+    if (job && job.status === 'cancelling') {
+      setStatus('status-audio', '已请求停止 — 当前批次完成后中断');
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⏹ 停止'; }
+    setStatus('status-audio', '停止失败: ' + e.message, true);
+  }
+}
+
 async function generateAudio() {
   if (!currentScript) return;
   toggle('btn-audio', false);
@@ -207,6 +238,7 @@ async function generateAudio() {
     const query = voiceId ? `?voice_id=${encodeURIComponent(voiceId)}&selected_only=true` : '?selected_only=true';
     const job = await api('POST', `/audio/scripts/${currentScript.id}/generate-audio${query}`);
     setStatus('status-audio', `任务已创建: ${job.id}`);
+    showAudioStop(job.id);
     const container = document.getElementById('audio-list');
     container.innerHTML = '';
     connectAudioSSE(job.id);
@@ -230,6 +262,7 @@ async function oneStop() {
     const query = voiceId ? `?voice_id=${encodeURIComponent(voiceId)}&selected_only=true` : '?selected_only=true';
     const job = await api('POST', `/audio/scripts/${currentScript.id}/generate-audio${query}`);
     setStatus('status-audio', `一键成片: 音频任务已提交 (${job.id})`);
+    showAudioStop(job.id);
     const container = document.getElementById('audio-list');
     container.innerHTML = '';
     if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
@@ -242,10 +275,22 @@ async function oneStop() {
       } else if (data.type === 'tts_progress') {
         setStatus('status-audio', `一键成片: 音频进度 ${data.completed}/${data.total}`);
         if (data.audio_file) appendAudioItem(data.audio_file);
+      } else if (data.type === 'tts_cancelling') {
+        setStatus('status-audio', data.message || '已请求停止 — 当前批次完成后中断');
+      } else if (data.type === 'tts_cancelled') {
+        if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
+        const btnOnestop = document.getElementById('btn-onestop');
+        if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
+        toggle('btn-audio', true);
+        hideAudioStop();
+        setStatus('status-audio', '已停止 — 一键成片中止，已生成音频保留', false, true);
+        loadAudioFiles(job.id);
+        try { localStorage.removeItem('dh_onestop'); } catch (_) {}
       } else if (data.type === 'tts_done') {
         if (_onestopAudioSSE) { _onestopAudioSSE.close(); _onestopAudioSSE = null; }
         const btnOnestop = document.getElementById('btn-onestop');
         if (btnOnestop) btnOnestop.textContent = '🚀 一键成片';
+        hideAudioStop();
         setStatus('status-audio', '音频就绪 — 即将进入导演台自动跑完剩余步骤', false, true);
         if (data.combined_audio) prependCombinedAudio(data.combined_audio);
         loadAudioFiles(job.id);
@@ -258,6 +303,7 @@ async function oneStop() {
         const btnOnestop = document.getElementById('btn-onestop');
         if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
         toggle('btn-audio', true);
+        hideAudioStop();
         setStatus('status-audio', data.error, true);
         try { localStorage.removeItem('dh_onestop'); } catch (_) {}
       }
@@ -268,6 +314,7 @@ async function oneStop() {
         const btnOnestop = document.getElementById('btn-onestop');
         if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
         toggle('btn-audio', true);
+        hideAudioStop();
         setStatus('status-audio', 'SSE 连接错误', true);
       }
     };
@@ -275,6 +322,7 @@ async function oneStop() {
     const btnOnestop = document.getElementById('btn-onestop');
     if (btnOnestop) { btnOnestop.disabled = false; btnOnestop.textContent = '🚀 一键成片'; }
     toggle('btn-audio', true);
+    hideAudioStop();
     setStatus('status-audio', e.message, true);
   }
 }
@@ -289,14 +337,24 @@ function connectAudioSSE(jobId) {
     try { data = JSON.parse(ev.data); } catch (_) { return; }  // P2-4: 坏数据不崩
     if (data.type === 'tts_service') {
       setStatus('status-audio', data.message);
+    } else if (data.type === 'tts_cancelling') {
+      setStatus('status-audio', data.message || '已请求停止 — 当前批次完成后中断');
     } else if (data.type === 'tts_progress') {
       setStatus('status-audio', `进度 ${data.completed}/${data.total}`);
       if (data.audio_file) {
         appendAudioItem(data.audio_file);
       }
+    } else if (data.type === 'tts_cancelled') {
+      _audioSSE.close(); _audioSSE = null;
+      setStatus('status-audio', '已停止 — 已生成音频保留，重新生成将从断点继续', false, true);
+      hideAudioStop();
+      toggle('btn-audio', true);
+      toggle('btn-onestop', true);
+      loadAudioFiles(jobId);
     } else if (data.type === 'tts_done') {
       _audioSSE.close(); _audioSSE = null;
       setStatus('status-audio', '音频生成完成', false, true);
+      hideAudioStop();
       if (data.combined_audio) {
         prependCombinedAudio(data.combined_audio);
       }
@@ -307,14 +365,18 @@ function connectAudioSSE(jobId) {
     } else if (data.type === 'tts_error') {
       _audioSSE.close(); _audioSSE = null;
       setStatus('status-audio', data.error, true);
+      hideAudioStop();
       toggle('btn-audio', true);
+      toggle('btn-onestop', true);
     }
   };
   _audioSSE.onerror = () => {
     if (_audioSSE && _audioSSE.readyState === EventSource.CLOSED) {
       _audioSSE.close(); _audioSSE = null;
       setStatus('status-audio', 'SSE 连接错误', true);
+      hideAudioStop();
       toggle('btn-audio', true);
+      toggle('btn-onestop', true);
     }
   };
 }
@@ -328,21 +390,27 @@ async function restoreAudioJobs() {
     .catch(() => []);
   if (!jobs || !jobs.length) return;
 
-  const active = jobs.find(j => j.status === 'pending' || j.status === 'running');
+  const active = jobs.find(j => j.status === 'pending' || j.status === 'running' || j.status === 'cancelling');
   if (active) {
-    setStatus('status-audio', `任务进行中 (${active.id.slice(0, 8)}…) 已恢复订阅`);
+    // 任务进行中: 禁生成 (防并发二任务) + 显示停止按钮 (2026-09-02)
+    toggle('btn-audio', false);
+    toggle('btn-onestop', false);
+    setStatus('status-audio', active.status === 'cancelling'
+      ? `任务停止中 (${active.id.slice(0, 8)}…) — 当前批次完成后中断，再点一次停止可强制复位`
+      : `任务进行中 (${active.id.slice(0, 8)}…) 已恢复订阅`);
+    showAudioStop(active.id);
     connectAudioSSE(active.id);
     return;
   }
 
-  // P0-1 方案 1: 最新 failed 任务提示可续传 — 已生成段保留在盘, 重试自动跳过
-  const latestFailed = jobs.find(j => j.status === 'failed');
-  if (latestFailed) {
-    const done = latestFailed.completed_segments || 0;
-    const total = latestFailed.total_segments || 0;
+  // P0-1 方案 1: 最新 failed/cancelled 任务提示可续传 — 已生成段保留在盘, 重试自动跳过
+  const latestInterrupted = jobs.find(j => j.status === 'failed' || j.status === 'cancelled');
+  if (latestInterrupted) {
+    const done = latestInterrupted.completed_segments || 0;
+    const total = latestInterrupted.total_segments || 0;
     if (done > 0 && done < total) {
-      setStatus('status-audio', `上次生成失败于 ${done}/${total} 段 — 重新生成将从断点继续`, true);
-    } else {
+      setStatus('status-audio', `上次生成中断于 ${done}/${total} 段 — 重新生成将从断点继续`, true);
+    } else if (latestInterrupted.status === 'failed') {
       setStatus('status-audio', '上次生成失败 — 重新生成将从头开始', true);
     }
   }

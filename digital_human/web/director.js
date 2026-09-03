@@ -159,7 +159,7 @@ function onScriptSelect(val) {
 async function restoreActiveAudioJob(scriptId) {
   try {
     const jobs = await fetch(`/api/audio/jobs?script_id=${encodeURIComponent(scriptId)}&limit=5`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
-    const active = (jobs || []).find(j => j.status === 'pending' || j.status === 'running');
+    const active = (jobs || []).find(j => j.status === 'pending' || j.status === 'running' || j.status === 'cancelling');
     if (!active) return;
     if (_audioGenES) { _audioGenES.close(); _audioGenES = null; }
     _audioGenJob = active.id;
@@ -1223,7 +1223,7 @@ async function regenerateAudio() {
   // 注意: GET /api/audio/jobs?status= 是精确匹配, 无 "active" 复合值, 需取全量列表自行判断
   try {
     const jobs = await fetch(`/api/audio/jobs?script_id=${encodeURIComponent(scriptId)}&limit=5`).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
-    const active = (jobs || []).find(j => j.status === 'pending' || j.status === 'running');
+    const active = (jobs || []).find(j => j.status === 'pending' || j.status === 'running' || j.status === 'cancelling');
     if (active) { _audioGenJob = active.id; }
   } catch (_) {}
 

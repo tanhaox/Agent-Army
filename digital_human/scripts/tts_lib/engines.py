@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -19,7 +20,26 @@ from .audio import _write_wav
 from .constants import DEFAULT_F5_URL, DEFAULT_FISH_URL, DEFAULT_INDEXTTS_URL
 from .http import _http_post_bytes, _http_post_json, _pack_msgpack, requests
 
-__all__ = ["fish_speech_tts", "f5_tts", "indextts_tts"]
+__all__ = ["fish_speech_tts", "f5_tts", "indextts_tts",
+           "_marks_to_bare_pinyin", "_strip_pinyin_marks"]
+
+# 拼音标注协议 <字|PINYIN> (repo 内部通用形态, 见 app/services/pinyin_fix.py)。
+# IndexTTS2 前端不认该协议 — 只认**裸内联拼音** (拼音代替字, 官方测例
+# "受不liao3你了"): 原样发会被 BPE 切成 [字, |, PINYIN] → 字和拼音各读一遍
+# (2026-09-03 蛤蟆先生 PPT 实听抓到 "蛤HA2蟆MA2" 连读)。引擎边界统一转换。
+_MARK_RE = re.compile(r"<(\S{1,4})\|([A-Z]+[1-5])>")
+
+
+def _marks_to_bare_pinyin(text: str) -> str:
+    """indextts: <蛤|HA2> → ``HA2 `` (裸拼音替代字; 相邻标注间留空格防 ASCII 粘连)。
+
+    服务端 front.correct_pinyin 自动把 jqx+u 纠成 v (ju2→jv2), 无需本地处理。"""
+    return _MARK_RE.sub(lambda m: f"{m.group(2)} ", text)
+
+
+def _strip_pinyin_marks(text: str) -> str:
+    """fish/f5 (无拼音能力): <蛤|HA2> → 蛤 — 退化为裸字, 避免拼音被当英文读。"""
+    return _MARK_RE.sub(r"\1", text)
 
 
 def fish_speech_tts(
@@ -34,6 +54,7 @@ def fish_speech_tts(
     seed: int | None = None,
 ) -> Path:
     """Call Fish Speech /v1/tts and save WAV."""
+    text = _strip_pinyin_marks(text)
     payload = _build_fish_payload(text, reference_audio, reference_text,
                                   temperature, top_p, repetition_penalty, seed)
     url = base_url.rstrip("/") + "/v1/tts"
@@ -101,6 +122,7 @@ def f5_tts(
     ref_text: str = "",
 ) -> Path:
     """Call F5-TTS Gradio API and save WAV."""
+    text = _strip_pinyin_marks(text)
     url = base_url.rstrip("/") + "/api/predict"
     ref_audio_b64 = ""
     if ref_audio and ref_audio.exists():
@@ -163,6 +185,8 @@ def indextts_tts(
         raise RuntimeError(
             f"indextts requires master_audio_path, got {master_audio}"
         )
+    # 拼音标注协议 → 裸拼音 (协议原样发 = 字+拼音各读一遍, 见 _MARK_RE 注释)
+    text = _marks_to_bare_pinyin(text)
     payload = _build_indextts_payload(
         text, master_audio, master_text, master_style, do_sample, top_p,
         top_k, temperature, max_text_tokens_per_segment, seed,

@@ -33,6 +33,71 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["export_element_draft"]
 
+
+def _caption_bounds_snapped(
+    audio_file: str | Path | None,
+    chunks: list[str],
+    page_dur: float,
+) -> list[float] | None:
+    """页内字幕时间边界吸附真实语音停顿 (2026-09-02).
+
+    长页 (60-95s) 内字幕按字数均分, 与真实语音停顿不均 → 后半段字幕漂移
+    数秒 (拆书 P5 94.8s 页实测)。用 ffmpeg silencedetect 找句间停顿 (≥0.25s),
+    把字数比例边界吸附到最近停顿中点 — 句界处字幕与语音严格同步; 吸附不到
+    (如逗号断句处无停顿) 保持比例值。页边界 (wav 时长) 本就精确, 不动。
+    Returns: 页内相对边界 [0, b1, …, 页末] (len(chunks)+1 个, 严格递增),
+    无音频/检测失败/单块 → None (调用方回退字数比例)。
+    """
+    n = len(chunks)
+    if n <= 1 or not audio_file:
+        return None
+    p = Path(audio_file)
+    if not p.exists():
+        return None
+
+    import sys
+    _root = Path(__file__).resolve().parents[3]
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    from scripts.tts_lib.silence_split import (
+        _detect_silences,
+        _silence_candidates,
+        _wav_duration,
+    )
+
+    dur = _wav_duration(p)
+    if dur <= 0:
+        return None
+    cands = _silence_candidates(_detect_silences(p), dur)
+    end = min(page_dur if page_dur > 0 else dur, dur)
+    if not cands or end <= 0.3:
+        return None
+
+    total = sum(len(c) for c in chunks) or 1
+    # 字数比例期望内部边界 (与旧 alloc 同口径)
+    exp_bounds: list[float] = []
+    cum = 0
+    for c in chunks[:-1]:
+        cum += len(c)
+        exp_bounds.append(cum / total * dur)
+
+    tol = max(0.5, 0.30 * dur / n)
+    picked = [0.0]
+    prev = 0.0
+    for exp in exp_bounds:
+        best = None
+        for cd in cands:
+            if cd <= prev + 0.1:
+                continue
+            if best is None or abs(cd - exp) < abs(best - exp):
+                best = cd
+        pick = best if best is not None and abs(best - exp) <= tol else exp
+        pick = min(max(pick, prev + 0.15), end - 0.1)
+        picked.append(pick)
+        prev = pick
+    picked.append(max(end, picked[-1] + 0.05))
+    return picked
+
 _ELEMENT_ENTRANCE = draft_mod.IntroType.渐显
 _BASE_TRANSITION = draft_mod.TransitionType.上移
 # 首帧免责字幕最小停留时长 (豆包统一约束: 右上角常驻≥20秒)
@@ -59,8 +124,9 @@ _CAPTION_TRANSFORM_Y = -0.75
 # 读数仍按 transform×画布(1920,1080) 显示 → 免责跑偏到(386,530)。实测校准:
 # transform(0.201,0.491) → 剪映读数(386,530) = transform×(1920,1080)。
 _DISCLAIMER_TRANSFORM = (0.259, 0.890)
-# 角标: 剪映面板读数(-961, 961) 左上 → transform = (-961/1920, 961/1080)=(-0.501, 0.890)
-_BADGE_TRANSFORM = (-0.501, 0.890)
+# 角标: 左上. 2026-09-03 实测: 长角标 (~30字×字号5×0.7缩放 ≈ 1000px 宽)
+# 以中心点 (-0.501) 锚定时左缘出画布贴边界 → 右移约两字 (~82px = 0.085).
+_BADGE_TRANSFORM = (-0.416, 0.890)
 # 免责/角标缩放 (2026-08-22 用户定稿: 剪映缩放 70%)
 _BADGE_SCALE = 0.7
 _DISCLAIMER_SCALE = 0.7
@@ -89,6 +155,7 @@ def _build_caption_track(
              "anim": 0, "caption_suppressed": 0}
     _last_sfx = [None]
     _first_caption = [True]
+    _last_cap_end_us = [0]  # 跨页链: 下页首条字幕起点钳制 (防页起点取整差 1µs 重叠)
     n_text = 0
     max_chars = 18 if height > width else 30
 
@@ -101,11 +168,34 @@ def _build_caption_track(
         washed = wash_subtitle_text(narration)
         chunks = split_subtitle(washed, max_chars)
         total_len = max(len(washed), 1)
-        seg_start_us = int(round(start_sec * _US))
         seg_dur_us = int(round(dur_sec * _US))
-        alloc = [seg_dur_us * len(c) // total_len for c in chunks]
-        alloc[-1] = seg_dur_us - sum(alloc[:-1])
-        for chunk, chunk_us in zip(chunks, alloc):
+        # 字幕边界: 优先吸附页音频的真实句间停顿 (2026-09-02, 修后半段漂移),
+        # 无页音频/检测失败回退字数比例均分 (旧行为)
+        snapped = _caption_bounds_snapped(pg.get("audio_file"), chunks, dur_sec)
+        if snapped is not None:
+            bounds = snapped
+        else:
+            alloc = [seg_dur_us * len(c) // total_len for c in chunks]
+            alloc[-1] = seg_dur_us - sum(alloc[:-1])
+            bounds = []
+            cum_us = 0
+            for c_us in alloc:
+                bounds.append(cum_us / _US)
+                cum_us += c_us
+            bounds.append(cum_us / _US)
+        # 放段: 链式推起点 (start=上段末), 杜绝 start/duration 各自取整产生
+        # 1µs 重叠 → SegmentOverlap 整条字幕被静默丢弃 (2026-09-02 实测踩中);
+        # 跨页同样防重叠 (页起点取整与上页末尾可能差 1µs)
+        page_start_us = int(round(start_sec * _US))
+        page_end_us = page_start_us + seg_dur_us
+        cursor_us = max(page_start_us, _last_cap_end_us[0])
+        for i, chunk in enumerate(chunks):
+            want_end_us = (page_start_us + int(round(bounds[i + 1] * _US))
+                           if i + 1 < len(chunks) else page_end_us)
+            seg_start_us = cursor_us
+            chunk_us = want_end_us - cursor_us
+            if chunk_us <= 0:
+                chunk_us = 1000  # 取整边界重合: 让位 1ms, 链式保证不重叠
             gold, red, anim, anim_ms = _auto_choreograph(
                 script, chunk, seg_start_us, stats, _last_sfx, first=_first_caption[0])
             _first_caption[0] = False
@@ -114,7 +204,7 @@ def _build_caption_track(
             try:
                 seg = _StyledTextSegment(
                     chunk,
-                    trange(seg_start_us, max(chunk_us, 1000)),
+                    trange(seg_start_us, chunk_us),
                     font=_JY_FONT_CAPTION,
                     border=_CAPTION_BORDER,
                     shadow=_CAPTION_SHADOW,
@@ -130,7 +220,8 @@ def _build_caption_track(
                 n_text += 1
             except Exception as exc:
                 logger.warning("[jy_export] 元素稿字幕段失败: %s | %s", chunk[:20], exc)
-            seg_start_us += chunk_us
+            cursor_us = seg_start_us + chunk_us
+        _last_cap_end_us[0] = max(_last_cap_end_us[0], cursor_us)
     return {"text": n_text, "sfx": stats["sfx"], "emphasis": stats["emphasis"]}
 
 
@@ -209,6 +300,7 @@ def export_element_draft(
     disclaimer: str | None = None,
     book_title: str | None = None,
     ep_index: int | None = None,
+    watermark: str | Path | None = None,
 ) -> dict[str, Any]:
     """元素级剪映草稿: 每页 base 层 + 逐元素透明层, 各自 video 轨, 渐显错峰.
 
@@ -219,17 +311,19 @@ def export_element_draft(
     - base 层 → 'main' 轨 (无入场动画), 页间 上移 转场
     - text/image 层 → e0..eK 轨, 按角色序错峰, 渐显入场 (全画布透明层, 动画安全)
     - 轨道按全稿最大元素数建, 跨页复用 (时序不重叠)
+    - watermark (2026-09-03): 透明 PNG 路径 → 'logo' 轨右下角间歇台标
     """
     width, height = canvas
     folder = draft_mod.DraftFolder(str(_drafts_dir()))
     script = folder.create_draft(draft_name, width, height, allow_replace=True)
 
-    # 轨道: voice/sfx 底, main(base) 中, e0..eK 元素, caption 最上 (后来居上)
+    # 轨道: voice/sfx 底, main(base) 中, e0..eK 元素, logo 台标, caption 最上 (后来居上)
     max_elements = max((len([l for l in pg.get("layers", []) if l["kind"] != "base"]) for pg in pages), default=0)
     track_specs = [draft_mod.TrackSpec(draft_mod.TrackType.audio, "voice"),
                    draft_mod.TrackSpec(draft_mod.TrackType.audio, "sfx"),
                    draft_mod.TrackSpec(draft_mod.TrackType.video, "main")]
     track_specs += [draft_mod.TrackSpec(draft_mod.TrackType.video, f"e{i}") for i in range(max_elements)]
+    track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.video, "logo"))  # 静姐读书台标 (元素层上, 字幕下)
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "caption"))
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "badge"))  # 系列角标(左上角)
     track_specs.append(draft_mod.TrackSpec(draft_mod.TrackType.text, "disclaimer"))  # 免责(右上角, 独立轨防与字幕重叠)
@@ -283,8 +377,12 @@ def export_element_draft(
             n_base += 1
 
         # 元素层 → e0..eK: 有口播时序(start_sec)用之, 否则按角色序错峰
+        # 2026-09-02: tie-break 从 shape_id 改阅读序 (top,left); 角色由
+        # compute_page_timing 入口注入 (_ROLE_PRIORITY 不再空转)
         elems = [l for l in layers if l["kind"] != "base"]
-        elems.sort(key=lambda l: (l.get("start_sec", 1e9), _ROLE_PRIORITY.get(l.get("role", "other"), 4), l.get("order", 0)))
+        elems.sort(key=lambda l: (l.get("start_sec", 1e9),
+                                  _ROLE_PRIORITY.get(l.get("role", "other"), 4),
+                                  float(l.get("top", 0)), float(l.get("left", 0))))
         page_dur_s = max(1.5, float(pg["duration_sec"]))
         n = max(len(elems), 1)
         step = min(stagger, page_dur_s / (n + 1.5))  # 自适应: 页短时压缩错峰
@@ -306,6 +404,13 @@ def export_element_draft(
 
     # 字幕轨 (每页口播稿, R9 v3 动态字幕 + 同帧音效)
     cap_stats = _build_caption_track(script, pages, width, height)
+    # 静姐读书 logo 台标 (2026-09-03): 右下角间歇出现, 防伪+品牌识别
+    n_logo = 0
+    if watermark:
+        from app.services.jy_draft_service.watermark import add_watermark
+        total_us = max((int(round((float(pg["start_sec"]) + float(pg["duration_sec"])) * _US))
+                        for pg in pages), default=0)
+        n_logo = add_watermark(script, total_us, Path(watermark), width, height)
     # 首帧免责字幕 (视觉化, 口播不念)
     n_disclaimer = 0
     if disclaimer:
@@ -332,6 +437,7 @@ def export_element_draft(
         "sfx_segments": cap_stats["sfx"],
         "disclaimer": n_disclaimer,
         "series_badge": n_badge,
+        "logo_watermark": n_logo,
         "emphasis_words": cap_stats["emphasis"],
         "max_tracks": 4 + max_elements,
         "audio": bool(audio_path),

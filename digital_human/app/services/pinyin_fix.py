@@ -7,6 +7,10 @@
    由 ``strip_pinyin_marks`` 在字幕/显示层剥离, 只有 TTS 读到标注。
 
 - 注入点: tts_service 拼 TTS 输入时 ``apply_pinyin_marks`` (词表 + 手写标注透传)
+- 引擎边界 (tts_lib/engines.py, 2026-09-03): IndexTTS2 只认**裸内联拼音** (拼音代替
+  字, 官方测例 "受不liao3你了"), 不认 <字|PINYIN> — 协议原样发会被 BPE 切成
+  [字, |, PINYIN] 字拼音各读一遍 (蛤蟆先生 PPT 实听实锤)。indextts 边界转
+  ``<蛤|HA2> → HA2 ``; fish/f5 无拼音能力剥回裸字。repo 内部协议不变。
 - 剥离点: wash_subtitle_text (J线字幕) / hf_extract / 文稿导出 — 观众可见文本全剥离
 - 审计点: boost (爆品改造) 尾部 ``scan_pinyin_hits`` — SSE 提示命中词
 """

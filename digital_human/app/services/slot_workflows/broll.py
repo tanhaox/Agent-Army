@@ -17,6 +17,7 @@ from app.models import DirectorSlot
 from app.schemas import get_video_format_spec
 from app.services.asset_matcher import (
     MIN_HIT_RATIO,
+    match_entity_bullseye,
     match_local_assets,
     register_asset_usage,
 )
@@ -54,10 +55,38 @@ def _match_local(db: Session, slot: DirectorSlot, spec: dict, keywords: list[str
 
     精确时长防护 (2026-08-09): render_scale_pad 无 loop, 素材短于 slot 时长
     会黑尾截断, 因此按 slot 精确时长过滤, 只返回时长足够的素材。
+    实体靶心 (2026-08-28 开闸验证): slot 关联实体 (params.entities) 时先走
+    match_entity_bullseye (实体英文query × 素材英文指纹, 命中即正解, 绕9维门槛);
+    未命中回退常规语义匹配。
     """
     duration = round(slot.end_sec - slot.start_sec, 3)
     location = (slot.params_json or {}).get("location")
     people = (slot.params_json or {}).get("people")
+    exclude = _collect_used_local_files(db, slot)  # 同 job 硬排除 (2026-08-12)
+
+    # ── 实体靶心通道: entities(中文名) → plan_json 取英文 query ──
+    ent_names = (slot.params_json or {}).get("entities") or []
+    if ent_names:
+        try:
+            from app.models import DirectorJob
+            job = db.query(DirectorJob).filter(
+                DirectorJob.id == slot.director_job_id).first()
+            pool = ((job.plan_json or {}).get("material_entities")) if job else []
+            queries = [q.lower() for e in (pool or []) if e.get("name") in ent_names
+                       for q in (e.get("queries") or {}).values() if q]
+            if queries:
+                hits = match_entity_bullseye(
+                    db, queries,
+                    min_duration_sec=duration,
+                    orientation=spec.get("pexels_orientation") if spec else None,
+                    exclude=exclude, limit=1)
+                if hits:
+                    logger.info("[broll_local] slot %s 实体靶心命中: %s (实体 %s)",
+                                slot.slot_index, hits[0]["asset_no"], ent_names)
+                    return hits[0]
+        except Exception as exc:  # noqa: BLE001 — 靶心失败静默回退常规
+            logger.warning("[broll_local] 实体靶心通道异常(回退常规): %s", exc)
+
     return match_local_assets(
         db,
         keywords=keywords,
@@ -73,7 +102,7 @@ def _match_local(db: Session, slot: DirectorSlot, spec: dict, keywords: list[str
         min_duration_sec=duration,
         limit=1,
         relax_location=True,  # 地域 C 折中 (2026-08-12): strict 为空才放宽 foreign
-        exclude=_collect_used_local_files(db, slot),  # 同 job 硬排除 (2026-08-12)
+        exclude=exclude,  # 同 job 硬排除 (2026-08-12)
     )
 
 

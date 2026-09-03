@@ -139,6 +139,9 @@ class DefaultsConfig:
     # 质检模式 (2026-08-16 生产考量): sync=同步打分不合格换候选(最严, 每片+4~6分钟) /
     # async=默认, 下载即返回后台补打分(当前slot可能带病, 后续与未来全片受保护)
     pexels_quality_gate_mode: str
+    # TTS ASR 回听校验 (2026-09-03): 合成后每行过 whisper 拼音对比, 错音自动
+    # <字|PINYIN> 重合成修复, 修不了标红人工听。False=关闭 (旧行为)。
+    tts_verify_asr: bool
 
 
 @dataclass(frozen=True)
@@ -311,6 +314,7 @@ def load_config(path: Path | str | None = None) -> Config:
         book_source_dir=defaults_raw.get("book_source_dir", "G:/Desktop/畅销书"),
         pexels_download_quality_gate=bool(defaults_raw.get("pexels_download_quality_gate", True)),
         pexels_quality_gate_mode=defaults_raw.get("pexels_quality_gate_mode", "async"),
+        tts_verify_asr=bool(defaults_raw.get("tts_verify_asr", True)),
         # IndexTTS2 / 对齐 / 导演 2.0
         indextts_timeout_sec=int(defaults_raw.get("indextts_timeout_sec", 300)),
         whisper_model_size=defaults_raw.get("whisper_model_size", "large-v3"),

@@ -108,9 +108,13 @@ def _run_ppt_pipeline(job_id: str) -> None:
             # TTS 缓存 key (2026-08-21): 音色+全段台词哈希, 稿没变复用音频免重跑合成
             # 引擎因子 (2026-08-25): 换引擎语速/音色风格全变, 旧缓存复用会拿到异引擎
             # 音频混拼; key 掺引擎版号, 升引擎自动失效全部缓存。(产线现 IndexTTS2)
+            # 情绪因子 (2026-09-03): PPT 线接入情绪标注后合成产物不同 (旧缓存=整篇
+            # calm), key 掺 emo 版号自动失效旧无情绪音频。
+            # 拼音因子 (2026-09-03): <字|PINYIN> 引擎边界改裸拼音输出 (旧缓存=字拼音
+            # 双读坏音频), key 掺 py1 自动失效旧标注音频。
             import hashlib as _hl
             cache_key = _hl.sha256(
-                ("indextts2" + "\x00" + str(voice_id or "") + "\x00"
+                ("indextts2+emo+py1" + "\x00" + str(voice_id or "") + "\x00"
                  + "\x00".join(seg.text for seg in segments)).encode()
             ).hexdigest()
             cached_job = (
@@ -175,11 +179,50 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     _evt(job_id, f"TTS {completed}/{total}: {text[:20]}…", "info",
                          type="tts_progress", progress=f"{completed}/{total}")
 
+                # ── 情绪标注 (2026-09-03 复用新闻线 audio._do_tts 同款) ──
+                # PPT 线此前直调 tts.generate 未传情绪 → IndexTTS 整篇 calm。
+                # 同源现场标注 (与 TTS 输入完全同文本, 零错配窗口)。拆书线走
+                # 读书版规则 (calm+confident 混合打底 + melancholic 共情,
+                # 2026-09-03 用户定稿); 失败落整篇 calm/2 兜底 (读书人设)。
+                from app.services.pinyin_fix import apply_pinyin_marks, scan_pinyin_hits
+                from app.services.boost_service import (
+                    _parse_emotion_annotations,
+                    annotate_emotions,
+                )
+                clean_text = "\n".join(seg.text for seg in segments)
+                # 词表命中提示 (2026-09-03): 扫干净文本 (标注后原文子串已不存在),
+                # 让用户在 SSE 流里看到哪些词被系统纠音。
+                hits = scan_pinyin_hits(clean_text)
+                if hits:
+                    _evt(job_id, f"纠音词表命中 {len(hits)} 处: {'、'.join(hits)}", "ok")
+                tts_text = apply_pinyin_marks(clean_text)
+                emotion_segments = [{"emotion": "calm", "strength": 2, "text": tts_text}]
+                _evt(job_id, "情绪标注中…", "info")
+                try:
+                    persona_name = ((getattr(host, "stamp_name", None) or host.name)
+                                    if host else "静姐")
+                    raw_anno = annotate_emotions(tts_text, persona_name, style="book")
+                    parsed = _parse_emotion_annotations(raw_anno) if raw_anno else None
+                    if parsed:
+                        emotion_segments = parsed
+                        _evt(job_id, f"情绪标注完成: {len(parsed)} 段", "ok")
+                    else:
+                        _evt(job_id, "情绪标注解析失败, 整篇平静温柔打底(2档)", "warn")
+                except Exception as exc:
+                    logger.warning("[ppt %s] emotion annotate failed, fallback calm: %s",
+                                   job_id[:8], exc)
+                    _evt(job_id, f"情绪标注失败, 整篇平静温柔打底(2档): {exc}", "warn")
+                if _JOBS.get(job_id, {}).get("cancel"):
+                    raise _Cancelled()
+
                 # 用 GPU 服务管理器会话: 自动拉起 IndexTTS (与 audio 端点一致)
                 backend = voice.backend if voice and voice.backend else cfg.defaults.backend
                 manager = get_gpu_service_manager()
                 with manager.session(backend, status_callback=lambda m: _evt(job_id, m, "info")):
-                    result = tts.generate(job, segments, voice, progress_callback=_progress)
+                    result = tts.generate(job, segments, voice,
+                                          emotion_annotations=emotion_segments,
+                                          progress_callback=_progress,
+                                          status_callback=lambda m, lv: _evt(job_id, m, lv))
                 # 整段拼接: tts.generate 已产出 full_paragraph.wav (combined_file)
                 combined = result.get("combined_file") or {}
                 combined_path = combined.get("file_path")
@@ -255,6 +298,15 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 seg_wav_map = {af.segment_id: af.file_path for af in audio_files
                                if af.segment_id and af.file_path and Path(af.file_path).exists()}
             element_pages: list[dict] = []  # jy2: 逐页层+编排数据
+            # 尾页书籍信息卡 (2026-09-03): 绑书且有元数据时预渲染, 替换原尾页
+            # 画面 (口播/时长/字幕不变). 时长仅影响卡内动画停留, 取末页窗口估计.
+            book_card = None
+            if mode == "jy2" and bound.get("book_id"):
+                t_last = max(timings, key=lambda t: float(t.get("end", 0))) if timings else None
+                last_dur = max(1.0, float(t_last["end"]) - float(t_last["start"])) if t_last else 6.0
+                book_card = _render_book_card(db, bound["book_id"], workdir, last_dur)
+                if book_card:
+                    _evt(job_id, "尾页书籍信息卡就绪 (作者/出版社/ISBN)", "ok")
             for i, s in enumerate(slides):
                 if bound.get("cancel"):
                     raise _Cancelled()
@@ -280,6 +332,18 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     from app.services.jy_draft_service import compute_page_timing
                     pd = workdir / "layers" / f"p{s.index:02d}"
                     pd.mkdir(parents=True, exist_ok=True)
+
+                    # 尾页替换 (2026-09-03): 书籍信息卡整页设计, 只留 base 层,
+                    # 原尾页文字层不叠加; 口播/字幕照旧.
+                    if i == len(slides) - 1 and book_card:
+                        element_pages.append({
+                            "start_sec": round(start, 3), "duration_sec": round(dur, 3),
+                            "audio_file": seg_wav_map.get(seg_id), "narration": s.notes or "",
+                            "layers": [{"kind": "base", "file": str(book_card)}],
+                        })
+                        _evt(job_id, f"元素层 {s.index}/{len(slides)} (尾页=书籍信息卡, {dur:.1f}s)",
+                             "ok", progress=f"{s.index}/{len(slides)}")
+                        continue
 
                     def _cap(name: str, html_txt: str) -> Path:
                         (pd / f"{name}.html").write_text(html_txt, encoding="utf-8")
@@ -359,13 +423,21 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     except Exception:
                         book_title = ""
                 try:
+                    from app.services.jy_draft_service.watermark import (
+                        WATERMARK_ASSET, prepare_watermark,
+                    )
+                    logo_png = prepare_watermark()
+                    if not logo_png:
+                        _evt(job_id, "logo 台标跳过 (素材缺失且源 logo 不可达)", "warn")
                     draft = export_element_draft(draft_name, element_pages, canvas=(1920, 1080),
                                                  disclaimer=disclaimer,
-                                                 book_title=book_title, ep_index=ep_index)
+                                                 book_title=book_title, ep_index=ep_index,
+                                                 watermark=logo_png)
                     _JOBS[job_id]["draft"] = draft
                     _evt(job_id, f"元素级剪映草稿就绪: {draft['draft_name']} "
                                  f"(base{draft['base_segments']}+元素{draft['element_segments']}"
-                                 f"+字幕{draft['caption_segments']}+音效{draft['sfx_segments']})", "ok",
+                                 f"+字幕{draft['caption_segments']}+音效{draft['sfx_segments']}"
+                                 f"+logo{draft.get('logo_watermark', 0)})", "ok",
                          type="ppt_done")
                 except Exception as exc:
                     _evt(job_id, f"元素级草稿导出失败: {exc}", "error", type="ppt_error")
@@ -399,6 +471,59 @@ def _run_ppt_pipeline(job_id: str) -> None:
         j = _JOBS[job_id]
         j["status"] = "cancelled" if j.get("error") == "用户取消" else (
             "done" if not j.get("error") else "failed")
+
+
+def _render_book_card(db, book_id: str, workdir: Path, page_dur: float) -> Path | None:
+    """尾页书籍信息卡 (2026-09-03): hf-source-v1 渲《书名》+作者/出版社/ISBN.
+
+    学新闻线片尾来源声明卡 (director _append_source_slot → hf-source-v1):
+    无口播信息页承载元数据, 替换拆书 PPT 原尾页 ("下期见"页信息量低).
+    书库元数据缺 (无作者/出版社/ISBN) 或渲染/抽帧失败 → None,
+    调用方回退原尾页不阻断.
+    """
+    try:
+        from app.models import BookProject, VisualRenderJob
+        from app.services.visual_render_service import execute_visual_render_job
+        from app.infrastructure.ffmpeg import run_ffmpeg
+
+        book = db.query(BookProject).filter(BookProject.id == book_id).first()
+        if not book:
+            return None
+        sources = []
+        if book.author:
+            sources.append({"media": "作者", "title": str(book.author)[:60]})
+        if book.publisher:
+            sources.append({"media": "出版社", "title": str(book.publisher)[:60]})
+        if book.isbn:
+            sources.append({"media": "ISBN", "title": str(book.isbn)[:60]})
+        if not sources:
+            return None
+        dur = max(4, min(10, round(page_dur)))
+        input_data = {
+            "title": f"《{book.book_title}》"[:64],
+            "sources": sources[:5],
+            "disclaimer": "静姐读书 · 读透一本好书",
+            "brand_name": "静姐读书",
+            "duration_sec": dur,
+        }
+        job = VisualRenderJob(template_id="hf-source-v1", input_json=input_data, status="queued")
+        db.add(job); db.commit(); db.refresh(job)
+        result = execute_visual_render_job(db, job.id, "hf-source-v1", input_data)
+        if result.get("status") != "completed":
+            logger.warning("[ppt] 书籍信息卡渲染失败: %s", result.get("error_message"))
+            return None
+        mp4 = Path(result.get("output_path") or "")
+        if not mp4.exists():
+            return None
+        out = workdir / "book_card.png"
+        # 抽稳定末帧 (模板动画 ~2.4s 完成, 末帧为静止完稿画面)
+        run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error",
+                    "-ss", str(max(0.0, dur - 0.5)), "-i", str(mp4),
+                    "-frames:v", "1", str(out)], timeout=60)
+        return out if out.exists() else None
+    except Exception as exc:
+        logger.warning("[ppt %s] 书籍信息卡渲染失败(回退原尾页): %s", book_id, exc)
+        return None
 
 
 def _concat_with_audio(clip_paths: list[Path], audio_path: str | None,

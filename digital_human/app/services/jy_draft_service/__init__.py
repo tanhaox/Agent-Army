@@ -23,6 +23,7 @@ shim 不可达故不留, 本 __init__ 即转发层):
   ppt_layout.py      元素级布局分析 (分带/分列/宫格检测)
   ppt_timing.py      元素级时序编排 (element/cell/block/page)
   ppt_element.py     export_element_draft (元素级草稿 + 免责/角标/字幕轨)
+  watermark.py       静姐读书 logo 台标 (右下角间歇, 白底转透明预处理)
 """
 from __future__ import annotations
 

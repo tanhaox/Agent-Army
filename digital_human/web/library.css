@@ -185,6 +185,14 @@ nav .spacer { flex: 1; }
 .page-num:hover { border-color: var(--border-active); color: var(--text-primary); background: rgba(255,255,255,0.05); }
 .page-num.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; cursor: default; }
 .page-info { font-size: 0.75rem; color: var(--text-muted); margin-left: 0.4rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.page-jump {
+  width: 3.2em; padding: 0.15rem 0.3rem; margin-right: 0.25rem;
+  font: inherit; color: var(--text-primary); text-align: center;
+  background: transparent; border: 1px solid var(--border); border-radius: 4px;
+  -moz-appearance: textfield; appearance: textfield;
+}
+.page-jump::-webkit-outer-spin-button, .page-jump::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.page-jump:focus { outline: none; border-color: var(--accent); }
 
 /* AI Tagging Button */
 .tagging-btn {

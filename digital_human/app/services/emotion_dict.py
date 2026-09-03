@@ -101,12 +101,22 @@ EMOTIONS: dict[str, EmotionDef] = {
         visual_intent="确信/有力",
         search_terms=["实力", "底气", "突破", "胜局", "成果"],
     ),
+    # 2026-09-03: 补 melancholic (读书线共情段) — P5 prompt 一直枚举它但字典缺定义,
+    # 标了也被 normalize 降级 calm。怅然=低回陪伴不是悲伤 (sad 只占 0.10)。
+    "melancholic": EmotionDef(
+        key="melancholic",
+        vector=[0.00, 0.00, 0.10, 0.00, 0.00, 0.70, 0.00, 0.00],
+        base_alpha=0.4,
+        visual_intent="共情/低回",
+        search_terms=["夜色", "窗", "雨", "背影", "独处"],
+    ),
 }
 
 # 情绪中文名 (P5 标注用)
 EMOTION_CN = {
     "calm": "平静", "serious": "严肃", "angry": "愤怒",
     "surprised": "惊讶", "happy": "高兴", "confident": "确信",
+    "melancholic": "怅然",
 }
 # 中→英解析 (2026-08-25 修复): P5 输出中文情绪名, 而 EMOTIONS 字典 key 是英文 —
 # 此前无人转换, tts_service 的 resolve_emotion('惊讶') KeyError 被 except 吞掉,
@@ -118,6 +128,7 @@ CN_TO_KEY.update({
     "震惊": "surprised", "意外": "surprised",
     "开心": "happy", "喜悦": "happy", "欢快": "happy", "升华": "happy",
     "生气": "angry", "恼火": "angry",
+    "忧郁": "melancholic", "伤感": "melancholic", "低回": "melancholic",
 })
 
 

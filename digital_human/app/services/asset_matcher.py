@@ -374,7 +374,9 @@ def match_local_assets(
         out = []
         for score, _ratio, asset in scored[:limit]:
             out.append({
-                "file": fp.name,
+                # 2026-09-02 修: 原版 fp 为打分循环残留变量, 所有条目的 file 都是
+                # 最后一个候选的文件名 (file_path 正确, file 全错 — 潜伏雷)
+                "file": Path(asset.file_path).name,
                 "file_path": asset.file_path,
                 "score": score,
                 # 门槛维命中率; 未传门槛维时返回 None (无命中率约束)

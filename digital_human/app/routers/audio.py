@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -21,6 +22,28 @@ from .jobs import _publish
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
 logger = logging.getLogger(__name__)
+
+# ── TTS 任务停止 (2026-09-02): 段间软取消 ──
+# cancel 端点把 job_id 放入集合; _do_tts 在段间检查点 (情绪标注后 / 每段 progress 回调)
+# 抛 _TTSCancelled 中断合成。已生成段 wav 保留, 重新生成走 _skip_batch 断点续传。
+# 不强杀 GPU 服务: 进行中的批次 (一次 HTTP 合成调用) 做完后才中断, 前端提示"当前批次完成后中断"。
+_cancel_requested: set[str] = set()
+_cancel_lock = threading.Lock()
+
+
+class _TTSCancelled(Exception):
+    """用户点了停止按钮 (audio.html), TTS 任务在段间检查点主动中断。"""
+
+
+def _check_cancel(job_id: str) -> None:
+    with _cancel_lock:
+        if job_id in _cancel_requested:
+            raise _TTSCancelled()
+
+
+def _cancel_done(job_id: str) -> None:
+    with _cancel_lock:
+        _cancel_requested.discard(job_id)
 
 
 def get_tts() -> TTSService:
@@ -166,22 +189,34 @@ def _do_tts(job_id: str):
 
             # ── 情绪标注 (2026-08-25 从爆品改造拆出, 移至生成音频时刻) ──
             # 单一事实源: 用与 TTS 完全同源的文本现场标注 → 不存在"改稿后旧标注
-            # 错配"窗口 (此前靠改稿清空+异步重跑兜)。失败落整篇 surprised/3 兜底
-            # (2026-08-27 惊讶打底定稿; 原 calm 兜底听着平)。
+            # 错配"窗口 (此前靠改稿清空+异步重跑兜)。失败落整篇兜底: 新闻线
+            # surprised/3 (2026-08-27 惊讶打底定稿), 读书线 calm/2 (2026-09-03)。
             # 耗时 ~10-30s, 藏在 TTS 引擎冷启动 (~2min) 里零感知。
             emotion_segments: list | None = None
-            from ..services.pinyin_fix import apply_pinyin_marks
+            from ..services.pinyin_fix import apply_pinyin_marks, scan_pinyin_hits
             from ..services.boost_service import annotate_emotions, _parse_emotion_annotations
-            tts_text = apply_pinyin_marks("\n".join(t for _, t in seg_pairs))
+            clean_text = "\n".join(t for _, t in seg_pairs)
+            # 词表命中提示 (2026-09-03): 扫干净文本, 命中即推 SSE。
+            hits = scan_pinyin_hits(clean_text)
+            if hits:
+                _publish(job_id, {"type": "tts_service",
+                                  "message": f"纠音词表命中 {len(hits)} 处: {'、'.join(hits)}"})
+            tts_text = apply_pinyin_marks(clean_text)
             _publish(job_id, {"type": "tts_service", "message": "情绪标注中…"})
+            # 读书线分流 (2026-09-03): 拆书稿 prompt_template="jingshu-book" (persona.py
+            # 定死, 逐集继承) → 读书版情绪规则 (calm+confident 混合打底 + melancholic
+            # 共情), 惊讶打底铁律只属新闻线。
+            style = ("book" if script and script.prompt_template
+                     and "book" in script.prompt_template else "news")
+            fallback = ({"emotion": "calm", "strength": 2, "text": tts_text} if style == "book"
+                        else {"emotion": "surprised", "strength": 3, "text": tts_text})
             try:
                 persona_name = "老谭"
                 if script and script.host:
                     persona_name = (
                         getattr(script.host, "stamp_name", None) or script.host.name
-                    ) or "老谭"
-                # (2026-08-27 撤 geo 分赛道: 全赛道统一惊讶打底)
-                raw_anno = annotate_emotions(tts_text, persona_name)
+                    ) or ("静姐" if style == "book" else "老谭")
+                raw_anno = annotate_emotions(tts_text, persona_name, style=style)
                 parsed = _parse_emotion_annotations(raw_anno) if raw_anno else None
                 if parsed:
                     emotion_segments = parsed
@@ -190,17 +225,22 @@ def _do_tts(job_id: str):
                     _publish(job_id, {"type": "tts_service",
                                       "message": f"情绪标注完成: {len(parsed)} 段"})
                 else:
-                    emotion_segments = [{"emotion": "surprised", "strength": 3, "text": tts_text}]
+                    emotion_segments = [dict(fallback)]
                     _publish(job_id, {"type": "tts_service",
-                                      "message": "情绪标注解析失败, 本篇整篇惊讶打底(3档)"})
+                                      "message": "情绪标注解析失败, 整篇打底兜底"})
             except Exception as exc:
-                logger.warning("[tts %s] emotion annotate failed, fallback surprised: %s",
+                logger.warning("[tts %s] emotion annotate failed, fallback: %s",
                                job_id[:8], exc)
-                emotion_segments = [{"emotion": "surprised", "strength": 3, "text": tts_text}]
+                emotion_segments = [dict(fallback)]
                 _publish(job_id, {"type": "tts_service",
-                                  "message": "情绪标注失败, 本篇整篇惊讶打底(3档)"})
+                                  "message": "情绪标注失败, 整篇打底兜底"})
+
+            # 停止检查点 1/2 (2026-09-02): 情绪标注 (~10-30s) 期间收到的停止请求在此生效
+            _check_cancel(job_id)
 
             def _progress(completed: int, total: int, text: str | None, audio_file: AudioFile | None = None) -> None:
+                # 停止检查点 2/2: 每段 progress 回调 (合成循环的段间边界)
+                _check_cancel(job_id)
                 job.completed_segments = completed
                 db.commit()
                 event: dict = {
@@ -234,6 +274,8 @@ def _do_tts(job_id: str):
                 result = tts.generate(
                     job, seg_pairs, voice, progress_callback=_progress,
                     emotion_annotations=emotion_segments,  # 现场标注 (同源文本), 不读库
+                    status_callback=lambda m, lv: _publish(
+                        job_id, {"type": "tts_service", "message": m}),
                 )
             # audio_files rows are already committed one-by-one inside _progress,
             # so no add_all here — a second add would double-insert (P0-1 related).
@@ -271,6 +313,16 @@ def _do_tts(job_id: str):
                     "duration": combined_audio_file.duration,
                 }
             _publish(job_id, done_event)
+        except _TTSCancelled:
+            try:
+                job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
+                if job:
+                    job.status = "cancelled"
+                    job.error_message = "用户停止 — 已生成音频保留，重新生成将从断点继续"
+                    db.commit()
+            except Exception:
+                pass
+            _publish(job_id, {"type": "tts_cancelled", "job_id": job_id})
         except Exception as exc:
             try:
                 job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
@@ -282,6 +334,8 @@ def _do_tts(job_id: str):
             except Exception:
                 pass
             _publish(job_id, {"type": "tts_error", "error": str(exc)})
+        finally:
+            _cancel_done(job_id)
 
 
 @router.get("/jobs", response_model=list[AudioJobOut])
@@ -305,6 +359,35 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
     job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
+    return job
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=AudioJobOut)
+def cancel_job(job_id: str, db: Session = Depends(get_db)):
+    """请求停止 TTS 任务 (段间软取消, 已生成段保留断点续传).
+
+    首次点击: pending/running → cancelling, 合成线程在下个检查点中断。
+    二次点击 (仍 cancelling): 强制落 cancelled — 兜底线程已死 (服务重启/HTTP 卡死)
+    的僵尸 cancelling, 让前端立即复位。
+    """
+    job = db.query(AudioJob).filter(AudioJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Audio job not found")
+    if job.status in ("completed", "failed", "cancelled"):
+        return job  # 已终态, 幂等返回
+    with _cancel_lock:
+        _cancel_requested.add(job_id)
+    if job.status == "cancelling":
+        job.status = "cancelled"
+        job.error_message = "用户停止（强制）— 已生成音频保留，重新生成将从断点继续"
+        db.commit()
+        db.refresh(job)
+        _publish(job_id, {"type": "tts_cancelled", "job_id": job_id})
+    else:
+        job.status = "cancelling"
+        db.commit()
+        db.refresh(job)
+        _publish(job_id, {"type": "tts_cancelling", "message": "已请求停止 — 当前批次完成后中断"})
     return job
 
 
@@ -386,11 +469,16 @@ def replace_char(
 
     manager = get_gpu_service_manager()
     replaced = 0
+    # 词表校正 (2026-09-03): 此路径直调 synthesize_lines 绕过了 tts_service 的
+    # apply_pinyin_marks 注入 — 改错字重合成时词表词 (铟/昇) 会退回错读, 补上。
+    # 标注只进 TTS 输入, DB 稿件存干净文本。
+    from ..services.pinyin_fix import apply_pinyin_marks
+
     with manager.session(voice.backend if voice else "auto"):
         for seg in segments:
-            new_text = seg.text.replace(from_char, to_char)
-            seg.text = new_text
+            seg.text = seg.text.replace(from_char, to_char)
             db.commit()
+            new_text = apply_pinyin_marks(seg.text)
 
             temp_dir = output_dir / f"replace_{seg.id[:8]}"
             temp_dir.mkdir(parents=True, exist_ok=True)

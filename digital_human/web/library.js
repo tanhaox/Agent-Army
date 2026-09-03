@@ -41,10 +41,13 @@ function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   document.getElementById('grid-assets').classList.toggle('hidden', tab !== 'assets');
   document.getElementById('grid-outputs').classList.toggle('hidden', tab !== 'outputs');
+  const ing = document.getElementById('tab-ingest');
+  if (ing) ing.classList.toggle('hidden', tab !== 'ingest');
   document.getElementById('asset-filters').classList.toggle('hidden', tab !== 'assets');
   document.getElementById('batch-bar').classList.toggle('hidden', tab !== 'assets');
   _assetPage = 0;
   _outputPage = 0;
+  if (tab === 'ingest') { ingestLoadEntities(); ingestPollJobs(); }
   loadCurrentTab();
 }
 
@@ -130,7 +133,6 @@ function renderAssets(items) {
         <label class="card-check"><input type="checkbox" ${selected} onchange="toggleSelect('${a.id}')"></label>
         <div class="thumb">
           <video src="${API}/assets/${a.id}/file" controls playsinline preload="metadata"></video>
-          <div class="play-overlay"><div class="play-icon">▶</div></div>
           <span class="asset-no">${escHtml(a.asset_no)}</span>
           <span class="duration">${a.duration_sec?.toFixed(1) || '?'}s</span>
           <span class="orient-badge">${orientLabel}</span>
@@ -206,7 +208,6 @@ function renderOutputs(items) {
       <div class="video-card">
         <div class="thumb">
           <video src="${API}/outputs/${o.id}/file" controls playsinline preload="metadata"></video>
-          <div class="play-overlay"><div class="play-icon">▶</div></div>
           <span class="duration">${o.duration_sec?.toFixed(1) || '?'}s</span>
           <span class="orient-badge">${orientLabel}</span>
         </div>
@@ -248,13 +249,18 @@ function renderPager(kind, page, total) {
     <a class="page-btn ${current === 0 ? 'disabled' : ''}" href="javascript:void(0)" onclick="goPage('${kind}', ${current - 1})">‹ 上一页</a>
     ${nums.join('')}
     <a class="page-btn ${current === totalPages - 1 ? 'disabled' : ''}" href="javascript:void(0)" onclick="goPage('${kind}', ${current + 1})">下一页 ›</a>
-    <span class="page-info">${current + 1}/${totalPages}</span>`;
+    <span class="page-info">
+      <input class="page-jump" type="number" min="1" max="${totalPages}" value="${current + 1}"
+             title="输入页码, 回车跳转"
+             onkeydown="if(event.key==='Enter')goPage('${kind}', parseInt(this.value,10)-1)">
+      / ${totalPages}
+    </span>`;
 }
 
 function goPage(kind, page) {
   const total = kind === 'assets' ? _assetTotal : _outputTotal;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  if (page < 0 || page >= totalPages) return;
+  page = Math.max(0, Math.min(page, totalPages - 1));  // 页码框手输越界钳回边界
   if (kind === 'assets') { _assetPage = page; loadAssets(); }
   else { _outputPage = page; loadOutputs(); }
   const gridId = kind === 'assets' ? 'grid-assets' : 'grid-outputs';

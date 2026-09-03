@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from app.services.boost_service.llm import _call, _extract_json
-from app.services.boost_service.prompts import P5_SPAN_PROMPT
+from app.services.boost_service.prompts import P5_SPAN_PROMPT, P5_SPAN_PROMPT_BOOK
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,13 @@ def _parse_emotion_annotations(text: str) -> list[dict[str, Any]] | None:
     return segs if segs else None
 
 
-def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None = None) -> str | None:
+def annotate_emotions(
+    text: str,
+    persona_name: str = "老谭",
+    track: str | None = None,
+    *,
+    style: str = "news",
+) -> str | None:
     """生成音频时刻的 P5 情绪标注 (2026-08-25 拆离 boost, 移入 _do_tts).
 
     v2 协议 (2026-08-25): **句编号+区间标签** — 代码用与 TTS 完全相同的分行逻辑编号,
@@ -50,9 +56,12 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
     旧协议 (LLM 复写全文 3000+ 字) 触发大输出空响应, 需 thinking 压制约 48s;
     新协议 flash 直跑 ~10-15s, 且段文本与 TTS 行天然逐行对齐 (零漂移)。
     track: 2026-08-27 起不再分赛道 — 全程惊讶打底 (实测 serious 打底在 IndexTTS2
-    上听着平/困, 且 LLM 把带数据的科技稿也误判成"严肃分析")。失败返回 None
-    (调用方落整篇 surprised 兜底)。
+    上听着平/困, 且 LLM 把带数据的科技稿也误判成"严肃分析")。
+    style (2026-09-03): "news" 新闻线惊讶打底不动; "book" 读书版 — calm+confident
+    混合打底 + melancholic 共情 (P5_SPAN_PROMPT_BOOK, 拆书线定稿), 漏句兜底 calm/2。
+    失败返回 None (调用方落整篇兜底)。
     """
+    is_book = style == "book"
     try:
         from scripts.tts_lib.lines import _split_line_indices
         lines = _split_line_indices(text)
@@ -60,7 +69,8 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
             return None
         numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
 
-        prompt = P5_SPAN_PROMPT.replace('{persona}', persona_name)
+        prompt = (P5_SPAN_PROMPT_BOOK if is_book else P5_SPAN_PROMPT).replace(
+            '{persona}', persona_name)
         # (2026-08-27 撤 geo serious 赛道提示: 全赛道统一惊讶打底, 起伏靠强度档。)
         prompt += f"\n\n【编号句子表（共 {len(lines)} 句）】\n" + numbered
         raw = _call(prompt, json_mode=True, max_tokens=1200)
@@ -69,8 +79,8 @@ def annotate_emotions(text: str, persona_name: str = "老谭", track: str | None
             logger.warning("[p5] span parse failed: %s", str(raw)[:80])
             return None
 
-        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (初始兜底 surprised/2)
-        emo_of: list[tuple[str, int]] = [("surprised", 2)] * len(lines)
+        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (兜底: 新闻 surprised/2, 读书 calm/2)
+        emo_of: list[tuple[str, int]] = [("calm" if is_book else "surprised", 2)] * len(lines)
         spans = data.get("spans") or []
         for sp in spans:
             try:

@@ -35,6 +35,7 @@ from app.services.boost_service.prompts import (
     P4_PROMPT,
     P5_PROMPT,
     P5_SPAN_PROMPT,
+    P5_SPAN_PROMPT_BOOK,
     P7_PROMPT,
     P_LOOP_PROMPT,
     DECONSTRUCT_PROMPT,
