@@ -28,9 +28,14 @@ _MIN_DUR = {
     "hf_title": 3.0,
     "hf_chart": 3.0,
     "hf_quote": 3.0,
+    "evidence_image": 3.0,  # 证据图要给观众读数字的时间 (2026-09-04 管线③)
 }
 _HF_TITLE_CAP = 5  # 含尾部参考卡(clamp 后追加, 不占此额度)
 _PROTECTED = {"host", "mixed_host_broll", "hf_opening"}
+
+# 证据图数量上限 (2026-09-04 管线④): 用户口径"有测试/比较的都要图",
+# 上限仅防 LLM 病态滥用; 超限者降级 broll_pexels。
+_EVIDENCE_CAP = 10
 
 # HF 线最小时间间隔 (2026-09-02 用户令): 连续/近距离 HF 文字卡观感疲劳且
 # 挤占实拍画面 — 两张 HF 卡(除片头 hf_opening)间隔不足此值的, 后者降级
@@ -281,6 +286,54 @@ def _append_source_slot(db: Session, plan: Any, script: Any, total_duration: flo
                 _SOURCE_CARD_DURATION, subtitle[:60])
 
 
+def _enforce_evidence_gates(db: Session, job: DirectorJob, plan: Any) -> None:
+    """证据图三道闸门 (2026-09-04 管线④, 用户硬条件的代码防线).
+
+    LLM 提示词是第一层防线, 这里是第二层 (P线 ID-050 双层防线先例):
+      1. 可用性: script 无素材包或池空 → 全部降级 (防必败 slot)
+      2. 语义:   text_context+claim 不构成测试/比较论断 → 降级
+                 (保证"只有测试/比较段才上证据图")
+      3. 数量:   超过 _EVIDENCE_CAP → 多余降级 (防病态滥用)
+    降级 = workflow/visual_type 改 broll_pexels + params.fallback_reason 记因。
+    """
+    ev_slots = [s for s in plan.slots if s.workflow == "evidence_image"]
+    if not ev_slots:
+        return
+    pool: list = []
+    try:
+        from ..evidence_service import collect_evidence_pool
+        script = getattr(job, "script", None)
+        pool = collect_evidence_pool(db, script) if script is not None else []
+    except Exception:  # noqa: BLE001 — 池查询失败按空池处理 (全降级, 不挡规划)
+        logger.warning("[director] evidence pool collect failed", exc_info=True)
+        pool = []
+    from ..evidence_service import is_evidence_claim
+
+    kept = 0
+    demoted: list[str] = []
+    for s in ev_slots:
+        claim = (s.params or {}).get("claim") or ""
+        reason = ""
+        if not pool:
+            reason = "证据图池为空(素材包无合格图)"
+        elif not is_evidence_claim(f"{s.text_context or ''} {claim}".strip()):
+            reason = "段落非测试/比较论断(无数字或无比较语义)"
+        elif kept >= _EVIDENCE_CAP:
+            reason = f"超数量上限({_EVIDENCE_CAP})"
+        if reason:
+            s.workflow = "broll_pexels"
+            s.visual_type = "broll_pexels"
+            s.params = {**(s.params or {}), "fallback_reason": f"evidence_gate: {reason}"}
+            demoted.append(f"#{s.slot_index}({reason})")
+        else:
+            kept += 1
+    if demoted:
+        logger.info("[director] evidence gates: kept %d, demoted %d -> %s",
+                    kept, len(demoted), "; ".join(demoted[:5]))
+        append_trace(db, job, "evidence_gate", "done",
+                     f"证据图闸门: 保留 {kept} / 降级 {len(demoted)}\n" + "\n".join(demoted[:8]))
+
+
 def _persist_plan(
     db: Session,
     job: DirectorJob,
@@ -288,6 +341,8 @@ def _persist_plan(
     script_title: str | None,
 ) -> None:
     """plan 落库 (保留既有 trace) + slots 持久化."""
+    # 证据图闸门 (2026-09-04 管线④): 落库前降级不合格 evidence slot
+    _enforce_evidence_gates(db, job, plan)
     # 保留既有 trace (alignment/plan_llm 已写入), 再覆盖 plan 主体, 避免 trace 被 model_dump 清空
     prev_trace = list((job.plan_json or {}).get("trace", []) or [])
     job.plan_json = plan.model_dump()

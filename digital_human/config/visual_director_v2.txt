@@ -152,6 +152,7 @@
 | `hf_title` | `hf_title` | HyperFrames 标题卡渲染 | 仅用于参考来源卡(尾部) |
 | `hf_opening` | `hf_opening` | HyperFrames 开场字幕卡渲染 | **仅用于第 1 个 slot（前 5 秒）**：把开场台词贴成大字（禁忌警告风），视觉兜听觉。禁止用于其他位置 |
 | `hf_quote` | `hf_quote` | HyperFrames 引用卡渲染 | 花边/金句/名人言（"马斯克说X""圈内有个梗"），把一句话做成引用卡。与 broll/hf_title 交替，禁止连用 |
+| `evidence_image` | `evidence_image` | 素材包里的**真实证据图**（榜单/跑分/基准/价格截图，Ken Burns 缩放+图源角标） | **仅当**该段口播含测试成绩/基准对比/榜单排名/价格数据（有具体数字）时选——真实截图比通用空镜说服力强得多；无则用 `broll_pexels` |
 
 ## params 字段约定(按 workflow)
 
@@ -222,6 +223,12 @@
 
 **信号词**：出现"XX说""XX表示""圈内有""有句话""据XX" + 完整引语 → hf_quote。
 
+**evidence_image**: `{"claim": "<该段要证明的核心事实一句话, 必须含数字, 如'SWE基准得分73.7%创纪录'>", "keywords": ["<主题词1>", "<主题词2>", ...], "intensity": "...", "emotion": "..."}`
+- **选它唯一理由**：该段口播在讲**测试成绩/基准跑分/榜单排名/价格对比**（含具体数字）。系统会自动从素材包里按 `claim` 里的数字匹配真实截图（榜单/跑分表/价格页），并打图源角标。
+- **不满足上述条件一律不选**：普通叙述、场景、观点、金句段都不配证据图——通用画面即可。选了也会被系统闸门降级成 `broll_pexels`。
+- **与 hf_chart 分工**：真实截图（别家媒体/机构发布的榜单、跑分表、价格页）→ `evidence_image`；自己把口播数字做成动态图表 → `hf_chart`。同一优先级下真实截图优先。
+- `claim` 里的数字要**原样照抄口播数字**（如 "73.7"、"每秒305词"、"便宜一半"），这是下游选图的匹配依据；`keywords` 给主题词（如 ["SWE-bench", "Gemini", "跑分"]）2~4 个。
+
 
 # 决策规则
 
@@ -233,6 +240,7 @@
 | 包含"评论区聊聊"/"您觉得呢"等互动提问 | `host` | 需要人格面对观众 |
 | 包含金句/结论/观点性陈述 | `host` | 人格传递观点更有说服力 |
 | 包含"XX说/XX表示/引用X的话"或花边梗、名人言 | `hf_quote` | 把一句话做成引用卡(带人物), 视觉聚焦那句话 |
+| 讲**测试成绩/基准跑分/榜单排名/价格对比**且有具体数字 | `evidence_image` | 真实截图(素材包内)是最强画面证据, 比空镜有说服力 |
 | 包含具体数字、百分比、金额、年份 | `broll_pexels` | 用真实画面做数据背景 |
 | 引用外部事件、历史案例、他国情况 | `broll_pexels` | 需要画面建立场景 |
 | 核心结论 + 关键数据同时出现 | `mixed_host_broll` | 双重传递,信息密度最大 |
@@ -260,6 +268,7 @@
 | **按语义段配画面，禁止句级切换** | 一个论点/一个画面单元一个 slot（3~8s）。禁止逐句换画面。5 分钟口播全片 **≤30 slot** |
 | **`hf_title` 全篇 ≤5 张** | 额度分配建议：开场 1 + 三张牌关键卡 2~3 + 尾部参考来源 1。超过 5 张执行层直接丢弃 |
 | **`hf_chart` 全篇 ≤3 张** | 只给最核心的数据对比，其余数据用 broll + 口播承载 |
+| **`evidence_image` 只给测试/比较段** | 有测试成绩/基准对比/榜单排名/价格数字的段落才配证据图，其余段落禁止用；全篇 ≤10 张（超过会被闸门降级 broll_pexels） |
 | **叙事段用长画面** | 讲故事/讲案例的连续段落（实测/修罗场/大案叙事），单 slot 5~10s 长画面，靠画面内动势维持注意力，不靠频繁切换 |
 
 ### 规则2.8：七层稿视觉节奏映射（2026-08-15，配合 laotan-tech_7layer_v2 稿型）
@@ -486,8 +495,22 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
     {
       "slot_index": 4,
       "start_sec": 16.40,
-      "end_sec": 21.80,
+      "end_sec": 20.00,
       "segment_refs": ["S005"],
+      "visual_type": "evidence_image",
+      "workflow": "evidence_image",
+      "params": {
+        "claim": "上半年进口10.74万亿, 增长22.1%, 创近十年新高",
+        "keywords": ["海关总署", "进口数据", "增长"],
+        "intensity": "high",
+        "emotion": "rising"
+      }
+    },
+    {
+      "slot_index": 5,
+      "start_sec": 20.00,
+      "end_sec": 25.50,
+      "segment_refs": ["S006"],
       "visual_type": "mixed_host_broll",
       "workflow": "mixed_host_broll",
       "params": {
@@ -499,19 +522,19 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
       }
     },
     {
-      "slot_index": 5,
-      "start_sec": 21.80,
-      "end_sec": 25.50,
-      "segment_refs": ["S006"],
+      "slot_index": 6,
+      "start_sec": 25.50,
+      "end_sec": 28.50,
+      "segment_refs": ["S007"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "low", "emotion": "closing"}
     },
     {
-      "slot_index": 6,
-      "start_sec": 25.50,
+      "slot_index": 7,
+      "start_sec": 28.50,
       "end_sec": 30.00,
-      "segment_refs": ["S007"],
+      "segment_refs": ["S008"],
       "visual_type": "host",
       "workflow": "host",
       "params": {"intensity": "low", "emotion": "closing"}
