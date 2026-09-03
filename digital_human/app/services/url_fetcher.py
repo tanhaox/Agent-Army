@@ -18,7 +18,9 @@ _TOUTIAO_HOSTS = {"toutiao.com", "toutiao.cn", "www.toutiao.com", "www.toutiao.c
 # 装饰图黑名单: icon/logo/头像/表情/占位符/按钮等 URL 模式
 _IMG_JUNK_RE = re.compile(
     r"icon|logo|avatar|emoji|spacer|pixel|badge|qrcode|favicon|rating|arrow|"
-    r"btn|button|loading|placeholder|/small_|face/|\.svg",
+    r"btn|button|loading|placeholder|/small_|face/|\.svg|"
+    r"login|logout|register|/thumb_|_default\.|share[_-]|follow[_-]|weibo[_-]?(btn|share)|"
+    r"app\d?[x@]|_app\d|download[_-]|qr[_-]?code|comment[_-]|zanshang|reward",
     re.I,
 )
 # 懒加载属性优先于 src (正文图多为 data-src 懒加载, src 常是占位 1px 图)

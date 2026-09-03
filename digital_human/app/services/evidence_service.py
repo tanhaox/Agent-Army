@@ -42,7 +42,7 @@ __all__ = [
 # ── 扫图预算 ──
 _SCAN_ITEM_CAP = 20        # 单包最多扫的条目页数 (article 条目优先占位)
 _SCAN_PER_ITEM = 4         # 每条目页候选图上限
-_SCAN_PER_ARTICLE = 6      # 原文条目 (用户搜图总闸抓的) 候选上限
+_SCAN_PER_ARTICLE = 8      # 原文条目 (用户搜图总闸抓的) 候选上限 = extract cap, 全量进扫
 _SCAN_TOTAL_CAP = 24       # 整包候选总上限
 _DL_TIMEOUT = (5, 20)      # 连接/读取超时
 _DL_MAX_BYTES = 12 * 1024 * 1024  # 单图 12MB 上限
@@ -63,9 +63,11 @@ _CLAIM_CMP = re.compile(
     r"比[^，。；！？、\s]{0,8}?(高|快|强|便宜|贵|低|慢|多|少|好|大|小|领先)"
 )
 _CLAIM_NUM = re.compile(r"[\d零一二三四五六七八九十百千万亿两]")
-# "一"字词素剥离: 一样/一下/一般… 的"一"不是数字, 不然中文几乎句句有"一"
+# "一"字词素剥离: 一样/一下/一般…及功能计数词 (一个/一条/一点点/第一张牌)
+# 的"一"不是数据数字, 不然中文几乎句句有"一" (真机 Gemini 稿 21/106 段漏判实证)
 _NUM_MORPHEME = re.compile(
-    r"一样|一下|一起|一般|一切|一直|统一|唯一|一边|一旦|一些|一丝|一味|一边倒"
+    r"一样|一下|一起|一般|一切|一直|统一|唯一|一边|一旦|一些|一丝|一味|一边倒|"
+    r"一个|一条|一点点|一点|一手|一次|一代|一季度|凑一块|第[一二三]张牌"
 )
 
 # ── VLM 打标 ──
@@ -154,7 +156,7 @@ def _tag_image(client: Any, img_path: str) -> dict[str, Any] | None:
         raw = client.chat_with_images([Path(img_path)], _VLM_SYSTEM, _VLM_USER)
         return _parse_vlm_json(raw)
     except Exception as exc:
-        logger.debug("[evidence] VLM tag failed for %s: %s", img_path, exc)
+        logger.warning("[evidence] VLM tag failed for %s: %s", img_path, exc)
         return None
 
 
@@ -229,13 +231,15 @@ def _download_image(url: str, cache_dir: Path) -> tuple[str, int, int] | None:
 
 
 def _has_scan_product(item: MaterialItem) -> bool:
-    """条目是否已有扫图产物 (带 local_path 的条目) — 幂等跳过判据.
+    """条目是否已扫完 (可作为幂等跳过判据): 每条都带 local_path 且 VLM 打标非空.
 
-    区别于 URL 级 images_json (add_item 抓取时只存 {url,alt,w,h}): 那种
-    条目恰恰是待扫对象, 不能跳过。
+    - add_item 抓取时存的 URL 级 images_json (只有 {url,alt,w,h}) → 未扫, 恰是待扫对象
+    - 首扫遇 VLM 预算耗尽/服务挂 (vlm:null) → 未扫完, 手动补扫可重试这些图
     """
-    return any(
-        isinstance(e, dict) and e.get("local_path") for e in (item.images_json or [])
+    entries = item.images_json or []
+    return bool(entries) and all(
+        isinstance(e, dict) and e.get("local_path") and isinstance(e.get("vlm"), dict)
+        for e in entries
     )
 
 
@@ -332,7 +336,13 @@ def scan_package_images(db: Session, package: MaterialPackage,
             "vlm": vlm,
         }
         existing = list(item.images_json or [])
-        if any(isinstance(e, dict) and e.get("url") == img["url"] for e in existing):
+        old = next((e for e in existing
+                    if isinstance(e, dict) and e.get("url") == img["url"]), None)
+        if vlm is None and old and isinstance(old.get("vlm"), dict):
+            # 重扫不降级: 本轮 VLM 失败时保住旧标签 (真机二扫 5/8 null 冲掉好标签实证)
+            entry["vlm"] = old["vlm"]
+            vlm = old["vlm"]
+        if old is not None:
             item.images_json = [
                 entry if (isinstance(e, dict) and e.get("url") == img["url"]) else e
                 for e in existing
@@ -434,12 +444,17 @@ def _num_variants(num_str: str) -> list[str]:
     return out
 
 
+# 中文数字字符集 (读法匹配的边界判定, 防部分撞车: 图'60'读'六十' 撞 文'六十二')
+_CN_NUM_BOUND = "零一二三四五六七八九十百千万亿两点"
+
+
 def _number_in_text(num: str, variants: list[str], text: str) -> bool:
-    """数字与段落文本匹配: 中文读法子串, 或阿拉伯数字独立 token (前后非数字)."""
+    """数字与段落文本匹配: 中文读法带边界的子串, 或阿拉伯数字独立 token (前后非数字)."""
     small = bool(re.fullmatch(r"\d", num))  # 单个数字 ("5") 的中文读法太泛 (五), 只认阿拉伯
     for v in variants:
         if len(v) > 1 and not v.isdigit():
-            if v in text:
+            # 边界: 匹配段前后不能再贴中文数字字符 ('六十'不得命中'六十二')
+            if re.search(rf"(?<![{_CN_NUM_BOUND}]){re.escape(v)}(?![{_CN_NUM_BOUND}])", text):
                 return True
         elif v.isdigit():
             if not small and v in text:

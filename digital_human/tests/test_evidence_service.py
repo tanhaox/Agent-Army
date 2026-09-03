@@ -101,9 +101,13 @@ class TestIsEvidenceClaim:
     @pytest.mark.parametrize("text", [
         "这一招确实是狠招，直接改写了行业玩法",   # 无数字
         "第三周的时候事情有了转机",               # 数字但无比较语义
-        "便宜到像白送一样",                       # 便宜但无数字
         "大家好我是老谭",                         # 口播套话
         "",                                      # 空
+        # 真机 Gemini 稿漏判段 (功能计数词供假数字, 2026-09-04 E2E 实证):
+        "谷歌刚扔出一个模型，便宜到像白送。",     # "一个"不算数据
+        "原因只有一条，它们没比Flash强出足够身位",
+        "旗舰要是只比便宜货强一点点",
+        "留了一手",                               # "一手"不算
     ])
     def test_negative(self, text):
         from app.services.evidence_service import is_evidence_claim
@@ -113,6 +117,26 @@ class TestIsEvidenceClaim:
         from app.services.evidence_service import is_evidence_claim
         # "比如" 不是比较句式, 不应触发 _CLAIM_CMP
         assert not is_evidence_claim("比如前年就有了类似的产品")
+
+
+# ── ② _number_in_text 边界判定 (防部分撞车) ──
+
+class TestNumberBoundary:
+    def test_cn_reading_partial_no_match(self):
+        # 图 '60' 读 '六十' 不得命中文 '六十二' (真机 E2E 撞车实证)
+        from app.services.evidence_service import _num_variants, _number_in_text
+        v = _num_variants("60")
+        assert not _number_in_text("60", v, "满分约六十二，它跑到五十九")
+
+    def test_cn_reading_exact_match(self):
+        from app.services.evidence_service import _num_variants, _number_in_text
+        v = _num_variants("73.7")
+        assert _number_in_text("73.7", v, "在软件工程基准上，它考了七十三点七。什么概念？")
+
+    def test_cn_reading_standalone(self):
+        from app.services.evidence_service import _num_variants, _number_in_text
+        v = _num_variants("60")
+        assert _number_in_text("60", v, "帧率稳定在六十附近")
 
 
 # ── ② pick_image_for_slot (数字重合最强信号) ──
@@ -218,6 +242,64 @@ class TestScanSmoke:
             db.add(pkg); db.commit()
             stats = scan_package_images(db, pkg)
         assert stats == {"scanned_items": 0, "candidates": 0, "downloaded": 0, "charts": 0}
+
+    def test_rescan_preserves_vlm_on_failure(self, tmp_db, tmp_path, monkeypatch):
+        # 真机实证: 二扫 VLM 挂 → vlm:null 不得冲掉旧标签; null 条目可补扫
+        from app.services import evidence_service as es
+
+        img = tmp_path / "c.jpg"
+        from PIL import Image
+        Image.new("RGB", (640, 480), (10, 20, 30)).save(img)
+
+        good = '{"is_chart": true, "kind": "leaderboard", "desc_zh": "榜", "numbers": ["73.7"], "quality": 9, "watermark": "none"}'
+        state = {"reply": good}
+
+        class StubClient:
+            def chat_with_images(self, paths, sys, user):
+                if state["reply"] is None:
+                    raise RuntimeError("server hiccup")
+                return state["reply"]
+
+        monkeypatch.setattr(es, "_get_vlm_client", lambda: StubClient())
+        monkeypatch.setattr(es, "_download_image", lambda url, cache: (str(img), 640, 480))
+
+        URLS = ["https://a.com/a.jpg", "https://a.com/b.jpg"]
+        with db_session() as db:
+            art = Article(title="t", raw_text="x" * 10, track="tech", source_url="https://a.com/p",
+                          images_json=[{"url": u, "alt": "", "w": 640, "h": 480} for u in URLS])
+            db.add(art); db.flush()
+            pkg = MaterialPackage(article_id=art.id)
+            db.add(pkg); db.commit()
+
+            # 首扫 VLM 全挂 → vlm:null, 条目未扫完 (可补扫)
+            state["reply"] = None
+            s1 = es.scan_package_images(db, pkg)
+            assert s1["charts"] == 0
+            item = pkg.items[0]
+            assert all(e["vlm"] is None for e in item.images_json)
+
+            # 补扫 VLM 恢复 → 打上标签
+            state["reply"] = good
+            s2 = es.scan_package_images(db, pkg)
+            assert s2["charts"] == 2
+            assert item.images_json[0]["vlm"]["numbers"] == ["73.7"]
+
+            # 扫完条目 → 幂等跳过 (VLM 再挂也不重扫不降级)
+            state["reply"] = None
+            s3 = es.scan_package_images(db, pkg)
+            assert s3["downloaded"] == 0
+            assert item.images_json[0]["vlm"]["numbers"] == ["73.7"]
+
+            # 混合态 (模拟预算中断): b 条 null + VLM 仍挂 → 重试但 a 好标签保住
+            # (注意深拷贝: 浅拷贝原地改会连同旧值一起脏, SQLAlchemy 判无变化不 flush)
+            ij = [dict(e) for e in item.images_json]
+            ij[1]["vlm"] = None
+            item.images_json = ij; db.commit()
+            s4 = es.scan_package_images(db, pkg)
+            assert s4["downloaded"] == 2  # 未扫完 → 整条目重试
+            by_url = {e["url"]: e["vlm"] for e in item.images_json}
+            assert by_url[URLS[0]]["numbers"] == ["73.7"]  # 失败不降级
+            assert by_url[URLS[1]] is None  # 本轮仍失败, 维持 null
 
 
 # ── ④ 闸门 (_enforce_evidence_gates) ──
