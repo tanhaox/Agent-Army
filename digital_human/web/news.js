@@ -2,6 +2,10 @@
 // 依赖 app.js v7 共享层 (api/setStatus/toggle/toast/currentArticle/currentPackageId)
 
 // ── 文章输入 (从 app.js v6 迁入) ──
+// 证据图管线① (2026-09-04): 抓取时「📷 搜图」开关 → with_images 提取本页候选图,
+// 暂存于此 → 建稿时存 articles.images_json (非空 = 搜图总闸开, 建包自动扫图)。
+let fetchedImages = [];
+
 async function fetchUrl() {
   const urlInput = document.getElementById('article-url');
   const url = urlInput.value.trim();
@@ -12,15 +16,19 @@ async function fetchUrl() {
   const btn = document.getElementById('btn-fetch-url');
   btn.disabled = true;
   setStatus('status-create', '正在抓取...');
+  const imgToggle = document.getElementById('fetch-images');
+  const withImages = imgToggle ? imgToggle.checked : false;
   try {
-    const result = await api('POST', '/articles/fetch-url', { url });
+    const result = await api('POST', '/articles/fetch-url', { url, with_images: withImages });
     if (!result.ok) {
       setStatus('status-create', result.error || '抓取失败', true);
       return;
     }
     if (result.title) document.getElementById('article-title').value = result.title;
     if (result.raw_text) document.getElementById('article-text').value = result.raw_text;
-    setStatus('status-create', '已自动填入标题和正文', false, true);
+    fetchedImages = withImages ? (result.images || []) : [];
+    const imgNote = fetchedImages.length ? `（抓到 ${fetchedImages.length} 张图，建包时自动扫证据图）` : '';
+    setStatus('status-create', `已自动填入标题和正文${imgNote}`, false, true);
   } catch (e) {
     setStatus('status-create', e.message, true);
   } finally {
@@ -39,8 +47,12 @@ async function createArticle() {
   // 赛道 (2026-08-16 用户方案): 建稿勾选 → 评论层解构 + 七层审计走对应分支
   const trackEl = document.querySelector('input[name="article-track"]:checked');
   const track = trackEl ? trackEl.value : 'tech';
+  // 证据图管线①: 搜图开关抓到的候选图随稿落库 (非空 = 总闸开)
+  const body = { title, source_url: sourceUrl, raw_text: rawText, track };
+  if (fetchedImages.length) body.images = fetchedImages;
   try {
-    currentArticle = await api('POST', '/articles', { title, source_url: sourceUrl, raw_text: rawText, track });
+    currentArticle = await api('POST', '/articles', body);
+    fetchedImages = [];  // 已落库, 防重复提交
     setStatus('status-create', `稿件已创建: ${currentArticle.id}（${track === 'geo' ? '地缘/国际' : '科技/商业'}赛道）`, false, true);
     enablePackageUI();
     renderComments(null);  // 新稿无评论层
@@ -279,7 +291,7 @@ async function createPackage() {
   }
 }
 
-function subscribePackage(jobId) {
+function subscribePackage(jobId, scanOnly = false) {
   const source = new EventSource(`${API}/jobs/${jobId}/events`);
   source.onmessage = (ev) => {
     let data;
@@ -291,6 +303,23 @@ function subscribePackage(jobId) {
       setStatus('status-material', `智谱补搜中… (${(data.queries || []).length} 条查询词)`);
     } else if (t === 'material_audit_start') {
       setStatus('status-material', '七层覆盖审计中…');
+    } else if (t === 'material_scan_start') {
+      setStatus('status-material', `扫描证据图… 候选 ${data.total || 0} 张, 下载+视觉打标中`);
+    } else if (t === 'material_scan_progress') {
+      setStatus('status-material', `证据图打标中… ${data.done}/${data.total}`);
+    } else if (t === 'material_scan_done') {
+      // 自动扫 (scanOnly=false): 后面还有 material_done, 不关流;
+      // 手动扫 (scanOnly=true): 这就是终点
+      if (scanOnly) {
+        source.close();
+        setStatus('status-material',
+          `扫图完成 — 下载 ${data.downloaded || 0} 张, 证据图 ${data.charts || 0} 张`, false, true);
+        toggle('btn-scan-images', true);
+        refreshPackage();
+      }
+    } else if (t === 'material_scan_error') {
+      setStatus('status-material', `扫图失败: ${data.error || ''}（不影响素材包, 可重试）`, true);
+      if (scanOnly) toggle('btn-scan-images', true);
     } else if (t === 'material_done') {
       source.close();
       setStatus('status-material', `审计完成 — 覆盖 ${data.covered}/7 层`, false, true);
@@ -310,7 +339,22 @@ function subscribePackage(jobId) {
     source.close();
     setStatus('status-material', 'SSE 连接错误', true);
     toggle('btn-material-create', true);
+    toggle('btn-scan-images', true);
   };
+}
+
+// 手动补扫证据图 (2026-09-04 管线①): 不受「搜图」总闸限制, 老包回填用
+async function scanImages() {
+  if (!currentPackageId) return;
+  toggle('btn-scan-images', false);
+  setStatus('status-material', '扫图任务启动…');
+  try {
+    const r = await api('POST', `/materials/packages/${currentPackageId}/scan-images`);
+    subscribePackage(r.job_id, true);
+  } catch (e) {
+    setStatus('status-material', e.message, true);
+    toggle('btn-scan-images', true);
+  }
 }
 
 async function refreshPackage() {
@@ -323,6 +367,7 @@ async function refreshPackage() {
     toggle('btn-material-search', hasGapQueries && p.status !== 'collecting');
     toggle('btn-goto-writing', p.status === 'audited');
     toggle('btn-reaudit', p.status !== 'collecting');
+    toggle('btn-scan-images', p.status !== 'collecting');
     toggle('btn-material-create', true);
     if (p.status === 'failed' && p.error_message) {
       setStatus('status-material', p.error_message, true);
@@ -367,12 +412,33 @@ function renderItems(items) {
       .filter(t => layerNames()[t])
       .map(t => `<span class="layer-mini" title="${layerNames()[t]}">${t}</span>`)
       .join('');
+    // 证据图缩略图行 (2026-09-04 管线①): ≤4 张, is_chart 优先, 点击开原图
+    const imgs = (it.images_json || []).filter(e => e && e.url);
+    const sorted = [...imgs].sort((a, b) => {
+      const av = (a.vlm && a.vlm.is_chart) ? 1 : 0, bv = (b.vlm && b.vlm.is_chart) ? 1 : 0;
+      return bv - av;
+    }).slice(0, 4);
+    const thumbs = sorted.length ? `
+      <div style="display:flex;gap:0.4rem;margin-top:0.4rem;flex-wrap:wrap;">
+        ${sorted.map(e => {
+          const chartMark = (e.vlm && e.vlm.is_chart) ? '📊' : '🖼';
+          const tip = (e.vlm && e.vlm.desc_zh) ? e.vlm.desc_zh : (e.alt || '证据图');
+          return `<a href="${escapeHtml(e.url)}" target="_blank" rel="noopener"
+            title="${escapeHtml(tip)}" style="flex:0 0 auto;position:relative;display:inline-block;">
+            <img src="${escapeHtml(e.url)}" alt="" loading="lazy"
+              onerror="this.parentElement.style.display='none'"
+              style="height:52px;border-radius:4px;border:1px solid var(--border);object-fit:cover;max-width:120px;display:block;">
+            <span style="position:absolute;left:2px;top:1px;font-size:12px;text-shadow:0 1px 3px #000;">${chartMark}</span>
+          </a>`;
+        }).join('')}
+      </div>` : '';
     div.innerHTML = `
       <span class="mtype">${typeBadge}</span>
       ${tagChips}
       <div class="mmain">
         <div class="mtitle">${escapeHtml(it.title || src || '未命名素材')}${it.fetch_ok ? '' : ' <b style="color:#f87171;">抓取失败</b>'}</div>
         <div class="mmeta">${src ? escapeHtml(src) + ' · ' : ''}${it.char_count}字${it.search_query ? ' · 搜「' + escapeHtml(it.search_query.slice(0, 24)) + '」' : ''}</div>
+        ${thumbs}
       </div>
       <button class="btn btn-secondary btn-sm" onclick="deleteMaterialItem('${it.id}')">删除</button>
     `;

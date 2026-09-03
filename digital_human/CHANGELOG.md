@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-09-04｜证据图管线 evidence_image 全链（真实榜单/跑分/价格截图上片）
+
+**触发**: Gemini 3.8 稿测试/对比段全是 Pexels 空镜，说服力低。**用户硬条件: 只有测试/比较段才配图**；总闸 = index.html「🌐 抓取 URL」同行「📷 搜图」开关。
+
+- **① 抓图层**: `extract_images`（懒加载/装饰图黑名单/宽度≥400/cap8, 零额外请求）→ `articles.images_json`（非空=总闸开）；建包后台审计后自动扫图 + `POST /packages/{id}/scan-images` 手动补扫
+- **② 扫图/选图**: `evidence_service.py` — 条目页扫图（条目≤20/每页≤4/整包≤24）→ 下载缓存（Pillow 校验）→ 9B VLM 打标（is_chart/kind/numbers/quality/watermark, fail-closed）→ 池（is_chart∧quality≥4∧非heavy水印）→ 段级选图（**数字中文读法匹配 ×10**（复用 `_num_to_reading`, "73.7"↔"七十三点七"）+ 关键词×2 + kind×2）
+- **③ 执行器**: `evidence_image.py` — 等比+黑边（截图数字不变形）→ zoompan Ken Burns → fade → **drawtext 图源角标**（右下半透明, 避开字幕区）→ render_scale_pad 归一化；缓存丢失误下；params 写回 image_url（同 job 去重）；失败走 fallback 链 broll_pexels
+- **④ 导演接线**: visual_director_v2.txt 菜单/params{claim 含数字}/规则/约束≤10/示例 + **三道代码闸门**（可用性: 池空全降级 / 语义: 数字+测试比较词双条件（"一样"词素剥离防误过） / 数量: >10 降级），降级写 fallback_reason + trace；12 处注册点（Literal/白名单/PHASES/PIPELINE/fallback 链/WF_TIER/MIN_DUR/前端标签）全落
+- **⑤ 前端**: 搜图开关（默认开）+ 素材条目缩略图行（is_chart 优先, 点击开原图）+ 扫图 SSE + 素材包「🔍 扫图」按钮
+- **验证**: 30 单测（Gemini 稿真实段落正反例）+ 真机 ffmpeg（角标像素实证）+ 回归 78 用例全过；设计方案 `docs/design/证据图管线-设计方案.md`
+
+---
+
 ## 2026-09-01｜素材线切片质量攻坚（8 修）+ 垃圾三轮出清 + 只收实拍 + 大文件拆包
 
 ### 切片管线 8 项修复（material_ingest_service / yt_ingest，用户逐条验收驱动）

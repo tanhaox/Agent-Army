@@ -17,6 +17,7 @@ let _sseCollapseTimer = null; // 执行日志抽屉自动收起定时器（ID-01
 const WF_LABELS = {
   host: '数字人', mixed_host_broll: '数字人+素材',
   broll_pexels: '下载素材', broll_local: '本地素材',
+  evidence_image: '证据图',
   hf_chart: 'HF图表', hf_title: 'HF标题',
   black_placeholder: '黑屏兜底',
 };

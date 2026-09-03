@@ -43,8 +43,13 @@
           <input type="text" id="article-url" placeholder="https://...">
         </div>
       </div>
-      <div class="btn-group" style="margin-bottom:1rem;">
+      <div class="btn-group" style="margin-bottom:1rem;align-items:center;">
         <button class="btn btn-secondary btn-sm" type="button" id="btn-fetch-url" onclick="fetchUrl()">🌐 抓取 URL</button>
+        <!-- 证据图管线总闸 (2026-09-04): 开=抓取时同步提取页面图片, 建素材包时自动扫图进证据图池 -->
+        <label style="display:flex;gap:0.35rem;align-items:center;cursor:pointer;font-size:0.82rem;margin-bottom:0;"
+               title="开启后抓取时同步提取页面候选图（榜单/跑分/价格截图），素材包自动扫图打标，供导演在测试/对比段插入真实证据图">
+          <input type="checkbox" id="fetch-images" checked> 📷 搜图
+        </label>
       </div>
       <label>正文内容</label>
       <textarea id="article-text" placeholder="粘贴财经/科技/地缘新闻原文..." style="min-height:160px;"></textarea>
@@ -94,6 +99,8 @@
         <div style="display:flex;gap:0.5rem;align-items:flex-end;">
           <button class="btn btn-secondary btn-sm" id="btn-new-package" onclick="newPackage()" disabled>➕ 新建</button>
           <button class="btn btn-secondary btn-sm" id="btn-reaudit" onclick="reauditPackage()" disabled>🔄 重新分析</button>
+          <button class="btn btn-secondary btn-sm" id="btn-scan-images" onclick="scanImages()" disabled
+                  title="扫素材条目页面图片 → 下载 → 视觉模型打标 → 进证据图池（老包回填/补扫用）">🔍 扫图</button>
         </div>
       </div>
 
