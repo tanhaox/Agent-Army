@@ -30,9 +30,11 @@ __all__ = ["build_director_prompt", "load_director_prompt"]
 
 
 # ── 管线映射: 标签 → (中文名, 工作流列表) ──
+# "P线 在线素材" (2026-09-04): P 线不再只有 Pexels — evidence_image 证据图
+# 同走 pipeline p, 标签改为覆盖两类在线素材 (提示词管线约束块自动含)。
 _PIPELINE_MAP: dict[str, tuple[str, list[str]]] = {
     "c": ("C线 ComfyUI", ["host", "mixed_host_broll"]),
-    "p": ("P线 Pexels", ["broll_pexels"]),
+    "p": ("P线 在线素材", ["broll_pexels", "evidence_image"]),
     "h": ("H线 HuggingFace", ["hf_chart", "hf_title"]),
 }
 

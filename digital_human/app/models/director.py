@@ -81,7 +81,7 @@ class DirectorSlot(Base):
 
     visual_type: Mapped[str] = mapped_column(
         String(32), nullable=False
-    )  # host / broll_pexels / broll_local / hf_chart / hf_title / mixed_host_broll
+    )  # host / broll_pexels / broll_local / hf_chart / hf_title / mixed_host_broll / hf_opening / hf_quote / evidence_image
     workflow: Mapped[str] = mapped_column(String(32), nullable=False)
     params_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     camera_angle: Mapped[int] = mapped_column(Integer, default=1)  # 1-4 机位

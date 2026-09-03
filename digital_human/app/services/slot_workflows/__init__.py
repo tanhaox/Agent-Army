@@ -22,6 +22,7 @@ from __future__ import annotations
 from app.services.slot_workflows.broll import execute_broll_local_slot
 from app.services.slot_workflows.broll_pexels import execute_broll_pexels_slot
 from app.services.slot_workflows.common import HF_TEMPLATE_ID, HF_TEMPLATE_ID_LS
+from app.services.slot_workflows.evidence_image import execute_evidence_image_slot
 from app.services.slot_workflows.fallback import execute_black_placeholder_slot
 from app.services.slot_workflows.hf import execute_hf_visual_slot
 from app.services.slot_workflows.host import execute_host_slot
@@ -37,6 +38,7 @@ WORKFLOW_HANDLERS = {
     "hf_quote": execute_hf_visual_slot,
     "mixed_host_broll": execute_mixed_host_broll_slot,
     "black_placeholder": execute_black_placeholder_slot,
+    "evidence_image": execute_evidence_image_slot,
 }
 
 __all__ = [
@@ -49,4 +51,5 @@ __all__ = [
     "execute_hf_visual_slot",
     "execute_mixed_host_broll_slot",
     "execute_black_placeholder_slot",
+    "execute_evidence_image_slot",
 ]

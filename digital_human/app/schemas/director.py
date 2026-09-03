@@ -30,6 +30,7 @@ class DirectorSlotPlan(BaseModel):
     segment_id: str | None = None
     # hf_opening/hf_quote 执行层 (slot_executor + hf.py) 已支持, 2026-08-25 补进 Literal —
     # 此前缺位导致 quote 类 slot 在 pydantic 校验即被拒/被解析层洗成 broll/hf_chart。
+    # evidence_image (2026-09-04 证据图管线③): 素材包真实证据图 (榜单/跑分/价格截图)。
     visual_type: Literal[
         "host",
         "broll_pexels",
@@ -39,6 +40,7 @@ class DirectorSlotPlan(BaseModel):
         "mixed_host_broll",
         "hf_opening",
         "hf_quote",
+        "evidence_image",
     ]
     workflow: Literal[
         "host",
@@ -49,6 +51,7 @@ class DirectorSlotPlan(BaseModel):
         "mixed_host_broll",
         "hf_opening",
         "hf_quote",
+        "evidence_image",
     ]
     params: dict[str, Any] = Field(default_factory=dict)
     camera_angle: int = Field(default=1, ge=1, le=4)

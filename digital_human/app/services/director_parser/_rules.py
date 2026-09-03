@@ -36,6 +36,9 @@ def _chain_for(prefer: str) -> tuple[tuple[str, str | None], ...]:
         return ((prefer, "h"), ("host", "c"), ("broll_pexels", "p"), ("broll_local", None))
     if prefer == "broll_pexels":
         return ((prefer, "p"), ("host", "c"), ("hf_chart", "h"), ("broll_local", None))
+    if prefer == "evidence_image":
+        # 证据图 → 同性质 B-roll 降级链 (2026-09-04 管线③)
+        return ((prefer, "p"), ("broll_pexels", "p"), ("broll_local", None))
     # broll_local / black_placeholder — always available
     return ((prefer, None),)
 

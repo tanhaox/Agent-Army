@@ -53,6 +53,10 @@ def replace_failed_slot(
                     # hf_chart 会渲染空卡 (render_config 无 chart 输入)。
                     h_wf = "hf_quote" if (slot.params_json or {}).get("render_config", {}).get("quote") else "hf_chart"
                     family_priorities = [("p", "broll_pexels"), ("c", "host"), ("h", h_wf)]
+                elif slot.workflow == "evidence_image":
+                    # 证据图失败 (池空/无匹配/图坏) → 同性质降级 broll_pexels,
+                    # 不再回头 host/hf (证据段本质是 B-roll 段, 2026-09-04 管线③)。
+                    family_priorities = [("p", "broll_pexels")]
                 else:
                     family_priorities = []
                 # 只保留启用管线内的工作流 (head 过滤), slot.workflow 置首避免跳过最佳替代

@@ -22,9 +22,10 @@ __all__ = [
 # hf_opening/hf_quote 执行层已支持 (slot_executor 路由齐全), 此前漏在解析白名单外:
 # LLM 输出 hf_quote 会被 map_visual_type_to_workflow 洗成 hf_chart/broll_pexels,
 # 而 render_config 里的 quote 数据只有 _execute_hf_quote 认识 → 渲染空卡 (2026-08-25).
+# evidence_image (2026-09-04): 证据图管线③新 workflow, 白名单缺位同样会被洗掉。
 _VALID_WORKFLOWS = {
     "host", "broll_pexels", "broll_local", "hf_chart", "hf_title",
-    "mixed_host_broll", "hf_opening", "hf_quote",
+    "mixed_host_broll", "hf_opening", "hf_quote", "evidence_image",
 }
 
 
@@ -42,6 +43,8 @@ def map_visual_type_to_workflow(visual_type: str, material_source: dict[str, Any
         return "host"
     if visual_type == "混合":
         return "mixed_host_broll"
+    if visual_type in ("evidence", "证据图", "证据"):
+        return "evidence_image"
     mtype = (material_source or {}).get("type")
     category = (material_source or {}).get("category") or ""
     if mtype == "dynamic":

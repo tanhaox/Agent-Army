@@ -97,6 +97,7 @@ _WF_TIER = {
     "host": 0, "mixed_host_broll": 0,
     "broll_pexels": 1, "broll_local": 1,
     "hf_chart": 1, "hf_title": 1,
+    "evidence_image": 1,  # 证据图与 broll 同档 (2026-09-04); 缺位=未知 5, 会输给任何已知 workflow
     "black_placeholder": 9,
 }
 

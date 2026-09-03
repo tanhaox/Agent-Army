@@ -66,6 +66,40 @@ def _detail(pkg: MaterialPackage, article: Article | None = None) -> MaterialPac
     )
 
 
+def _scan_with_events(db2, pkg: MaterialPackage, job_id: str) -> None:
+    """证据图扫图 + SSE 事件 (证据图管线①/②, 2026-09-04).
+
+    best-effort: 任何失败只发 material_scan_error, 不动包状态。
+    """
+    from ..services import evidence_service
+
+    def _cb(stage: str, payload: dict) -> None:
+        if stage == "download_start":
+            _publish(job_id, {"type": "material_scan_start",
+                              "package_id": pkg.id, "total": payload.get("total", 0)})
+        elif stage == "tag":
+            _publish(job_id, {"type": "material_scan_progress",
+                              "package_id": pkg.id,
+                              "done": payload.get("done", 0), "total": payload.get("total", 0)})
+
+    try:
+        stats = evidence_service.scan_package_images(db2, pkg, progress_cb=_cb)
+        _publish(job_id, {"type": "material_scan_done", "package_id": pkg.id, **stats})
+    except Exception as exc:  # noqa: BLE001 — 扫图失败不拖垮素材包主流程
+        logger.warning("[material] scan-images failed for %s: %s", pkg.id, exc, exc_info=True)
+        _publish(job_id, {"type": "material_scan_error", "package_id": pkg.id, "error": str(exc)[:200]})
+
+
+def _run_scan_job(package_id: str, job_id: str) -> None:
+    """手动补扫后台线程 (不受总闸限制, 老包回填用)."""
+    with db_session() as db2:
+        pkg = db2.query(MaterialPackage).filter(MaterialPackage.id == package_id).first()
+        if not pkg:
+            _publish(job_id, {"type": "material_error", "package_id": package_id, "error": "素材包不存在"})
+            return
+        _scan_with_events(db2, pkg, job_id)
+
+
 def _run_package_job(
     package_id: str,
     job_id: str,
@@ -73,7 +107,7 @@ def _run_package_job(
     urls: list[str] | None = None,
     supplement_queries: list[str] | None = None,
 ) -> None:
-    """素材包后台线程: 抓取(可选) → 补搜(可选) → 审计 → 落库 + SSE."""
+    """素材包后台线程: 抓取(可选) → 补搜(可选) → 审计 → 扫图(可选) → 落库 + SSE."""
     with db_session() as db2:
         try:
             pkg = db2.query(MaterialPackage).filter(MaterialPackage.id == package_id).first()
@@ -144,6 +178,12 @@ def _run_package_job(
             covered = sum(1 for l in audit["layers"].values() if l["covered"])
             pkg.status = "audited"
             db2.commit()
+
+            # 4) 证据图扫图 (证据图管线①, 2026-09-04): 总闸 = 抓取时开了「搜图」
+            # (article.images_json 非空)。失败 best-effort, 不置包 failed。
+            if article.images_json:
+                _scan_with_events(db2, pkg, job_id)
+
             _publish(job_id, {
                 "type": "material_done",
                 "package_id": pkg.id, "covered": covered, "total": 7,
@@ -218,7 +258,8 @@ def add_item(package_id: str, payload: MaterialItemAddRequest, db: Session = Dep
     if not pkg:
         raise HTTPException(404, "Material package not found")
     if payload.url:
-        res = fetch_url(payload.url)
+        # 证据图管线①: 手动加 url 条目也顺手提图 (进包后由手动补扫下载/打标)
+        res = fetch_url(payload.url, with_images=True)
         item = MaterialItem(
             package_id=pkg.id,
             source_type="url",
@@ -227,6 +268,7 @@ def add_item(package_id: str, payload: MaterialItemAddRequest, db: Session = Dep
             raw_text=res.get("raw_text") or "",
             fetch_ok=bool(res.get("ok")),
             char_count=len(res.get("raw_text") or ""),
+            images_json=(res.get("images") or None),
         )
     elif payload.text:
         item = MaterialItem(
@@ -284,6 +326,18 @@ def supplement_search(package_id: str, payload: SupplementSearchRequest, db: Ses
         raise HTTPException(400, "无可补搜的查询词（先跑审计或勾选搜索词）")
     job_id = _spawn(pkg.id, supplement_queries=queries)
     return {"job_id": job_id, "queries": queries}
+
+
+@router.post("/packages/{package_id}/scan-images")
+def scan_images(package_id: str, db: Session = Depends(get_db)):
+    """手动补扫证据图 (证据图管线①, 2026-09-04): 不受「搜图」总闸限制, 老包回填用."""
+    pkg = db.query(MaterialPackage).filter(MaterialPackage.id == package_id).first()
+    if not pkg:
+        raise HTTPException(404, "Material package not found")
+    job_id = uuid.uuid4().hex[:12]
+    threading.Thread(target=_run_scan_job, kwargs={
+        "package_id": pkg.id, "job_id": job_id}, daemon=True).start()
+    return {"job_id": job_id}
 
 
 @router.delete("/packages/{package_id}")

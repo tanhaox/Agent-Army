@@ -17,6 +17,7 @@ _WORKFLOW_PIPELINE: dict[str, str | None] = {
     "host": "c",
     "mixed_host_broll": "c",
     "broll_pexels": "p",
+    "evidence_image": "p",  # 证据图管线③ (2026-09-04): 与 broll_pexels 同 P 线
     "hf_chart": "h",
     "hf_title": "h",
     "broll_local": None,

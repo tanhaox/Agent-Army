@@ -127,7 +127,8 @@ def execute_slot(db: Session, slot: DirectorSlot) -> DirectorSlot:
 
 _EXECUTION_PHASES: list[dict[str, Any]] = [
     {"workflows": {"host", "mixed_host_broll"}, "gpu": "comfyui", "pipeline": "c"},
-    {"workflows": {"broll_pexels"}, "gpu": None, "pipeline": "p"},
+    # evidence_image 与 broll_pexels 同 phase: pipeline "p"、无 GPU (证据图管线③)
+    {"workflows": {"broll_pexels", "evidence_image"}, "gpu": None, "pipeline": "p"},
     {"workflows": {"hf_chart", "hf_title", "hf_opening", "hf_quote"}, "gpu": None, "pipeline": "h"},
     {"workflows": {"broll_local", "black_placeholder"}, "gpu": None, "pipeline": None},
 ]
