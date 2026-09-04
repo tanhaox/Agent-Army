@@ -91,12 +91,12 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     if workflow == "hf_opening":
         return _execute_hf_opening(db, slot)
 
-    # 引用卡 (hf_quote): 一句话观点 + 出处/人物, 黑金质感
+    # 引用卡 (hf_quote): 一句话观点 + 出处/人物, 编辑纸墨风
     if workflow == "hf_quote":
         return _execute_hf_quote(db, slot)
 
-    # 片尾来源声明卡 (references 风格) → 专用 hf-source-v1 模板:
-    # hf-title-v2 的 subtitle→kicker 受 schema maxLength 32 校验, 来源列表必炸,
+    # 片尾来源声明卡 (references 风格) → 专用 hf-source 模板:
+    # hf-title 的 subtitle→kicker 受 schema maxLength 32 校验, 来源列表必炸,
     # 降级 hf_chart 后渲染近黑屏 (2026-08-18 产线实测)
     if workflow == "hf_title" and (slot.params_json.get("render_config") or {}).get("style") == "references":
         return _execute_hf_source(db, slot)
@@ -104,14 +104,10 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     # 按 video_format 选模板: 横屏→news-magazine-v1-ls, 竖屏/方屏→news-magazine-v1
     template_id = _pick_hf_template(slot.director_job)
 
-    # 财经质感模板 (2026-08-11): hf_title/hf_chart 优先用 v2 财经版 (深炭+暖金, 同 v3 片头体系)
+    # 编辑纸墨系 v3 (2026-09-04): hf_title/hf_chart 用编辑风模板 (纸感米白+锈红,
+    # 版式源 .tmp/style_gallery_h.html); 横竖同用 1920x1080 基础版 (合成 scale_pad 归一)
     if workflow in ("hf_title", "hf_chart"):
-        spec = get_video_format_spec(slot.director_job.video_format)
-        if spec["width"] > spec["height"]:
-            # 横屏 v2 模板当前未做 -ls, 用基础 v2 (1920x1080 已横屏)
-            template_id = "hf-title-v2" if workflow == "hf_title" else "hf-chart-v2"
-        else:
-            template_id = "hf-title-v2" if workflow == "hf_title" else "hf-chart-v2"
+        template_id = "hf-title-v3" if workflow == "hf_title" else "hf-chart-v3"
 
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
@@ -264,14 +260,15 @@ def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
 
 
 def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
-    """引用卡 (hf_quote): 一句话观点 + 出处/人物 + 可选人像, 黑金质感.
+    """引用卡 (hf_quote): 一句话观点 + 出处/人物 + 可选人像, 编辑纸墨风.
 
-    - 模板: hf-quote-v1 (横屏 1920x1080)
-    - 内容: quote_text(引用语) + hot_word(金词) + attrib_name(人物) + attrib_role(身份) + portrait_b64(人像)
+    - 模板: hf-quote-v2 (横屏 1920x1080, 版式源 gallery 05 金句卡)
+    - 内容: quote_text(引用语, 兼容旧键) + quote_body(保留标点原串, 模板按标点断行)
+            + hot_word(金词→锈红) + attrib_name(人物) + attrib_role(身份) + portrait_b64(人像)
     """
     from app.services.visual_render_service import execute_visual_render_job
 
-    template_id = "hf-quote-v1"
+    template_id = "hf-quote-v2"
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
 
@@ -286,6 +283,8 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
     # 无 quote 时从口播取
     if not input_data["quote_text"]:
         input_data["quote_text"] = (slot.text_context or "").replace("||", "")[:80]
+    # quote_body: 保留标点原串 (金句断行/节奏靠标点; quote_text 走净标点仅作 schema 必填)
+    input_data["quote_body"] = input_data["quote_text"]
     # 无 hot 词时从引用语检测冲击词
     if not input_data["hot_word"]:
         try:
@@ -309,15 +308,15 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
 
 
 def _execute_hf_source(db: Session, slot: DirectorSlot) -> str:
-    """片尾来源声明卡 (hf-source-v1): 结构化来源列表 + 免责尾注, 财经体系.
+    """片尾来源声明卡 (hf-source-v2): 结构化来源列表 + 免责尾注, 编辑纸墨风.
 
-    - 模板: hf-source-v1 (横屏 1920x1080, 深炭+暖金, 同 title_v2/chart_v2 体系)
-    - 内容: title(卡题) + sources([{media, title}]≤5, 来自 render_config) +
+    - 模板: hf-source-v2 (横屏 1920x1080, 版式源 gallery 08 来源卡)
+    - 内容: title(卡题) + sources([{media, title}]≤8, 来自 render_config) +
             disclaimer(免责尾注) + 品牌角标
     """
     from app.services.visual_render_service import execute_visual_render_job
 
-    template_id = "hf-source-v1"
+    template_id = "hf-source-v2"
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
 
@@ -326,7 +325,7 @@ def _execute_hf_source(db: Session, slot: DirectorSlot) -> str:
         "title": str(render_config.get("title") or "内容来源声明"),
         "sources": [
             {"media": str(s.get("media") or "")[:40], "title": str(s.get("title") or "")[:60]}
-            for s in sources[:5] if isinstance(s, dict)
+            for s in sources[:8] if isinstance(s, dict)
         ],
         "disclaimer": str(render_config.get("disclaimer")
                           or "内容综合自公开报道 仅供参考 不构成投资建议"),

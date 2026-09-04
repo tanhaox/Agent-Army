@@ -4,8 +4,6 @@
 """
 from __future__ import annotations
 
-import re
-
 __all__ = [
     "_normalize_chart_input",
     "_coerce_items",
@@ -50,7 +48,7 @@ def _chart_fallback(render_config: dict, chart: dict) -> list[dict]:
 
 
 def _apply_chart_metadata(chart: dict, render_config: dict) -> dict:
-    """补全 unit/growth/color_scheme/label; pie 单扇区时补"其他"扇区."""
+    """补全 unit/growth/color_scheme/label; 图卡数据规则路由 (2026-09-04)."""
     for k in ("unit", "growth", "color_scheme"):
         if render_config.get(k):
             chart[k] = str(render_config[k])
@@ -61,12 +59,12 @@ def _apply_chart_metadata(chart: dict, render_config: dict) -> dict:
     elif not chart.get("label"):
         chart["label"] = ""
 
-    # pie 至少保留 2 扇区: 若只有 1 项, 补 growth 对应的"其他"扇区
-    if chart["type"] == "pie" and len(chart["items"]) == 1:
-        growth = chart.get("growth") or ""
-        m = re.search(r"(-?\d+(?:\.\d+)?)", growth)
-        other = float(m.group(1)) if m else 100.0
-        chart["items"].append({"label": "其他", "value": other})
+    # 图卡数据规则闸门 (用户裁决 2026-09-04, 模板 JS 双保险):
+    #   pie 分段 <3 → 转 bar (恰 2 点走对比卡布局, 1 点走巨数卡);
+    #   pie 分段 >5 → 转 bar (>5 分段不可读)。
+    # 取代旧"pie 单扇区补其他"逻辑 (补出来的双段环形正是最丑的形态)。
+    if chart["type"] == "pie" and not (3 <= len(chart["items"]) <= 5):
+        chart["type"] = "bar"
     return chart
 
 
@@ -94,6 +92,12 @@ def _normalize_chart_input(render_config: dict, extracted: dict) -> dict:
     # data 缺失/无效时依次兜底: render_config.chart.items → 口播提取 items
     if not items:
         items = _chart_fallback(render_config, chart)
+    # 图卡数据规则闸门 (2026-09-04 用户裁决, 判定在 [:5] 截断前 — 6 段占比结构
+    # 截 5 段会破坏合计≈100%, 整体转 bar 更诚实):
+    #   pie 分段 <3 → bar (恰 2 点走对比卡布局, 1 点走巨数卡, 由模板 JS 分派)
+    #   pie 分段 >5 → bar (>5 分段不可读)
+    if chart["type"] == "pie" and not (3 <= len(items) <= 5):
+        chart["type"] = "bar"
     chart["items"] = items[:5]
 
     return _apply_chart_metadata(chart, render_config)

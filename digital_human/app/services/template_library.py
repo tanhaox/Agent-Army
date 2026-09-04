@@ -380,6 +380,109 @@ TEMPLATES: dict[str, dict] = {
             "additionalProperties": True,
         },
     },
+    # ── v3 编辑纸墨系 (2026-09-04): 替代黑金 v2 系, 版式源 .tmp/style_gallery_h.html ──
+    "hf-title-v3": {
+        "version": "1.0.0",
+        "composition_id": "hf_title_v3",
+        "source_dir": "hf_title_v3",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [3, 10],
+        "required_input": ["title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "kicker": {"type": "string", "maxLength": 32},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "brand_tag": {"type": "string", "maxLength": 64},
+                "issue_date": {"type": "string", "maxLength": 7,
+                               "description": "刊号日期 YYYY.MM, 缺省填充端取本机当月 (渲染沙箱 Date 冻结为 epoch)"},
+                "duration_sec": {"type": "integer", "minimum": 3, "maximum": 10},
+            },
+            "required": ["title"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-chart-v3": {
+        # 四布局合一: pie→环形 / items=1→巨数 / =2→对比 / 3~5→柱群 (榜单并入)
+        "version": "1.0.0",
+        "composition_id": "hf_chart_v3",
+        "source_dir": "hf_chart_v3",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 12],
+        "required_input": ["chart"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "chart": {"type": "object"},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "brand_tag": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 12},
+            },
+            "required": ["chart"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-quote-v2": {
+        # quote_body = 保留标点原串 (金句按标点断行); quote_text 兼容保留
+        "version": "2.0.0",
+        "composition_id": "hf_quote_v2",
+        "source_dir": "hf_quote_v2",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 10],
+        "required_input": ["quote_text"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "quote_text": {"type": "string", "minLength": 1, "maxLength": 200},
+                "quote_body": {"type": "string", "maxLength": 200},
+                "hot_word": {"type": "string", "maxLength": 20},
+                "attrib_name": {"type": "string", "maxLength": 40},
+                "attrib_role": {"type": "string", "maxLength": 80},
+                "portrait_b64": {"type": "string"},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 10},
+            },
+            "required": ["quote_text"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-source-v2": {
+        # 容量 5 → 8 (v1 maxItems 5)
+        "version": "2.0.0",
+        "composition_id": "hf_source_v2",
+        "source_dir": "hf_source_v2",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 10],
+        "required_input": ["title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "sources": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "media": {"type": "string", "maxLength": 40},
+                            "title": {"type": "string", "maxLength": 60},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "disclaimer": {"type": "string", "maxLength": 80},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 10},
+            },
+            "required": ["title"],
+            "additionalProperties": True,
+        },
+    },
 }
 
 

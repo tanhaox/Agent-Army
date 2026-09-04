@@ -174,12 +174,17 @@
 - `location`/`people` 为可选硬维度（ID-034），传给在线搜索定向：讲中国产业链时 `location=domestic` 锁定国内画面，绝不出现外国工人。
 - **必须同时输出 9 维度**（`scenes`/`shot_types`/`tone`/`motion_level`/`content_density`/`time_of_day`，词从词表包对应分组取，格式同 broll_local 规则4.1）——仅供本地素材优先碰撞使用，不参与 Pexels 下载搜索；缺 9 维度则本地碰撞直接跳过（P 线全部走下载）。
 
-**hf_chart**: `{"render_config": {"chart_type": "pie_chart|bar_chart", "label": "...", "unit": "...", "growth": "15%", "color_scheme": "黑金", "data": [{"label": "...", "value": 12.3}, ...]}, "intensity": "...", "emotion": "..."}`
+**hf_chart**: `{"render_config": {"chart_type": "pie_chart|bar_chart", "label": "...", "unit": "...", "growth": "15%", "color_scheme": "纸墨", "data": [{"label": "...", "value": 12.3}, ...]}, "intensity": "...", "emotion": "..."}`
 
-- `data` 数组**每项必须含 `label` + `value`**（value 为数值）。饼图 `pie_chart` 至少 2 个扇区，且必须包含与 `growth` 对应的主扇区；柱状图 `bar_chart` 1~5 项。
-- `growth` 为本句最核心的百分比数字（如 "15%"、"22.1%"），用于大数字动画与饼图主扇区标识；无核心百分比时可为空字符串。
-- `label` 为图表标题（如 "进口额(万亿元)"），`unit` 为数据单位（如 "万亿"），`color_scheme` 为主色调（如 "黑金"）。
-- 兼容说明：若无法给出完整扇区结构，可退化为 `"data": [10.74]`（纯数字数组），下游归一化器会按序号自动补全 label。
+- `data` 数组**每项必须含 `label` + `value`**（value 为数值）。
+- **图型选择规则**（数据性质决定，系统会再校验兜底）：
+  - **占比结构**（各部分合计≈100%，如市场份额/构成比）→ `pie_chart`，分段 3~5 个；
+  - **数量对比**（谁大谁小/贵贱/快慢）→ `bar_chart`，1~5 项；
+  - 恰 1 个数据点（只讲一个数字）或恰 2 个对比项时**无需纠结图型**——给 `bar_chart` 即可，系统自动渲染成巨数卡/对比卡。
+- `growth` 为本句最核心的数字（如 "15%"、"1.98×"、"$10"），用于锈红主角项标识；与 `data` 中主角项的 value 一致时该柱/段会高亮；无核心数字时可为空字符串。
+- `label` 为图表标题（如 "进口额(万亿元)"），`unit` 为数据单位（如 "万亿"、"$"、"%"), `color_scheme` 固定填 "纸墨"。
+- 柱状图建议：数据离散度（最大/最小）≥1.8× 视觉才有落差；各项接近时考虑只报最大项或换叙述。
+- 兼容说明：若无法给出完整结构，可退化为 `"data": [10.74]`（纯数字数组），下游归一化器会按序号自动补全 label。
 
 **hf_title**: `{"render_config": {"title": "...", "subtitle": "..."}, "intensity": "...", "emotion": "..."}`
 
@@ -199,7 +204,7 @@
 
 **hf_quote**: `{"render_config": {"quote": "引用语", "hot": "金词", "name": "人物", "role": "身份", "portrait": "人像base64(可选)"}, "intensity": "medium", "emotion": "falling"}`
 - 用于**花边/金句/名人言**：稿子里出现"马斯克说X""圈内有个梗""有句话这么说"时，把这句话做成引用卡。
-- `quote` 是完整引用语，`name` 是说话人（马斯克），`role` 是身份（OpenAI联合创始人）。
+- `quote` 是完整引用语（**保留原文标点**，模板按 ，。、 断行定节奏），`name` 是说话人（马斯克），`role` 是身份（OpenAI联合创始人）。
 - `portrait` 可选——有人像素材就带，无人像只显示文字+占位。
 - 时长 4-10 秒，**禁止连用**（与 broll/hf_title 交替）。
 
@@ -468,7 +473,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
           "label": "进口额(万亿元)",
           "unit": "万亿",
           "growth": "22.1%",
-          "color_scheme": "黑金"
+          "color_scheme": "纸墨"
         },
         "intensity": "high",
         "emotion": "rising"
@@ -558,7 +563,7 @@ C 线(host 出镜)关闭时，开场不依赖 host，必须遵守：
 3. **mixed_host_broll 要克制**:全篇不超过 3 处,只在最核心的位置使用。
 4. **保持节奏感**:`host` 和 `broll_*` 交替进行,就像对话中的"你说我听,我看你说"。
 5. **时间严格对齐**：start_sec / end_sec 必须与输入3的真实时间一致，这是下游执行 Agent 截取音频片段的基准。
-6. **参考来源段不配音**：口播脚本末尾的“本文参考了以下公开报道与官方文件”及编号URL列表不会被 TTS 配音，下游会自动追加一张 `hf_title` 参考来源卡（15s、轻音乐带过），您无需为其规划 slot。
+6. **参考来源段不配音**：口播脚本末尾的“本文参考了以下公开报道与官方文件”及编号URL列表不会被 TTS 配音，下游会自动追加一张 `hf_title` 参考来源卡（5s 静卡带过），您无需为其规划 slot。
 
 
 # 待处理输入

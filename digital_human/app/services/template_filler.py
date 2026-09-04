@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from app.config import get_config
@@ -55,6 +56,7 @@ _SAFE_KEYS = frozenset(
         "scatter_words",
         # 引用卡 (hf_quote, 2026-08-11): 一句话观点 + 出处/人物 + 人像
         "quote_text",
+        "quote_body",
         "attrib_name",
         "attrib_role",
         "portrait_b64",
@@ -64,6 +66,8 @@ _SAFE_KEYS = frozenset(
         "sources_json",
         "disclaimer",
         "duration_sec",
+        # 片头卡刊号日期 (hf-title-v3): 渲染沙箱 Date 冻结为 epoch, 由填充端注入
+        "issue_date",
         # 品牌字段 (共享模板逐人设注入): 账号名/印章/标语 (2026-08-08)
         "brand_name",
         "stamp_name",
@@ -135,17 +139,21 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs["scatter_words"] = str(input_data.get("scatter_words", "[]"))
     # 引用卡参数
     subs["quote_text"] = str(input_data.get("quote_text", ""))
+    subs["quote_body"] = str(input_data.get("quote_body", ""))
     subs["attrib_name"] = str(input_data.get("attrib_name", ""))
     subs["attrib_role"] = str(input_data.get("attrib_role", ""))
     subs["portrait_b64"] = str(input_data.get("portrait_b64", ""))
     subs["chart_head"] = str(chart.get("label") or chart.get("type") or "")
     subs["source"] = str(input_data.get("source", ""))
-    # 来源声明卡: 结构化来源列表 → JSON 内联属性 (≤5 条)
+    # 来源声明卡: 结构化来源列表 → JSON 内联属性 (hf-source-v2 容量 8)
     subs["sources_json"] = json.dumps(
-        (input_data.get("sources") or [])[:5], ensure_ascii=False, separators=(",", ":")
+        (input_data.get("sources") or [])[:8], ensure_ascii=False, separators=(",", ":")
     )
     subs["disclaimer"] = str(input_data.get("disclaimer", ""))
     subs["duration_sec"] = str(input_data.get("duration_sec", "12"))
+    # 刊号日期 (hf-title-v3): HF 渲染沙箱 Date 冻结为 epoch (实测 1970.01),
+    # 帧内取不到真实时钟 — 由填充端注入, 缺省取本机当月 (YYYY.MM)
+    subs["issue_date"] = str(input_data.get("issue_date") or datetime.now().strftime("%Y.%m"))
     # 品牌字段: 共享模板不硬编码账号名, 由 input_data 注入 (2026-08-08)
     subs["brand_name"] = str(input_data.get("brand_name", ""))
     subs["stamp_name"] = str(input_data.get("stamp_name", ""))
@@ -156,7 +164,11 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
         v = subs[k]
         if k == "duration_sec" or k == "portrait_b64":
             continue
-        if k in _JSON_SUBS:
+        if k == "quote_body":
+            # 金句原串保留标点 (2026-09-04 编辑风: 断行/节奏靠 ，。、),
+            # 仅 HTML 转义防注入 — 与 v2 回退互不影响 (v1 模板不读此键)
+            subs[k] = _html_escape(v)
+        elif k in _JSON_SUBS:
             try:
                 obj = json.loads(v)
             except Exception:

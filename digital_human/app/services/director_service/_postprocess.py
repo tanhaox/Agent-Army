@@ -205,7 +205,7 @@ def _collect_news_sources(db: Session, script: Any) -> list[dict[str, str]]:
 
     来源数据在 material_items (洗稿时喂 LLM 参考), 产出稿不保留来源列表 →
     尾卡从这里取 (2026-08-17 修复: 原机制依赖脚本 references 段, 全库从未出现).
-    URL 去重, 上限 5 条.
+    URL 去重, 上限 8 条 (hf-source-v2 容量).
     """
     from app.models import MaterialPackage
 
@@ -222,10 +222,10 @@ def _collect_news_sources(db: Session, script: Any) -> list[dict[str, str]]:
                 seen.add(url)
                 media = _domain_of(url)  # media 字段历史上有日期脏值, 域名更可靠
                 srcs.append({"media": media or "网络", "title": _clean_source_title(it.title)})
-                if len(srcs) >= 5:
+                if len(srcs) >= 8:  # hf-source-v2 容量 8 (2026-09-04, 原 5)
                     break
 
-    if len(srcs) < 5 and script.article and script.article.source_url:
+    if len(srcs) < 8 and script.article and script.article.source_url:
         url = (script.article.source_url or "").strip()
         if url.lower().startswith("http") and url not in seen:
             seen.add(url)
