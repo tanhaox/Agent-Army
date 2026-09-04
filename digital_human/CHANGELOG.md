@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-09-05｜HF 身份句/收尾互动卡入产线 + 引用逐字闸门 + 模板接线八处定稿
+
+**触发**: 杂志风纸墨系补齐 06/07 两卡; 途中两次产线事故把「新模板接线」定型为**八处清单**。完整记录: `docs/improvements/已完成-20260905-HF身份互动卡入产线与逐字闸门.md`。
+
+- **两卡**: `hf_identity_v1` (开场自介, 全篇 ≤1, 4~6s) + `hf_follow_v1` (固定收尾, 口号+FOLLOW+印章, 3~5s); 均财经线专用 (`_require_tech_track`, geo→降级)
+- **逐字闸门** `_gate_quote_text`: quote ⊆ text_context 放行 / 改写→difflib 最相似原句覆盖 / >35 字截句边界 / 单句无边界→RuntimeError 降级; 档位=模板 JS 按字数自动分档 (导演零参与); 旧 `[:80]` 硬截撤销; 净标点豁免键=quote_body/identity_body/slogan
+- **20s 间隔降级豁免 hf_follow** (收尾 quote→下期见→follow 天然 <20s, 豁免名单 hf_opening+hf_follow)
+- **提示词**: 收尾金句分工 (口号→follow / 点题→quote) + 金句禁选互动引导句 ("评论区聊聊"被当选金句实锤)
+- **八处接线清单定型**: ①模板 ②template_library ③hf.py ④slot_workflows/slot_executor ⑤parser 白名单 ⑥schema Literal ⑦枚举+提示词+sync E盘 ⑧**template_filler._SAFE_KEYS** — 漏⑧=成片渲染原始 `{{占位符}}` (job bdb6674b 实锤, brand_name 老键在白名单印章正常而新键漏填); 漏⑤⑥=job 整体 ValidationError 0 slot (job 2375b001 实锤, txt 热载广告新工作流而旧进程 schema 冷载拒收 → **规矩: 八处全落→重启→才跑 job**)
+- **「杂志风预览页面」命名约定**: = `.tmp/style_gallery_h.html`; 三约定 16:9 锁 / 动效 ≤2s 定格不循环 / 新模板先过风格门
+- 验证: playwright 模板填充烟测 (timeline/断行/印章/slogan 两行) + 闸门离线单测 9+ 分支 + filler 修复烟测全过
+
+---
+
 ## 2026-09-04｜Pexels 慢滴流挂死 + LLM 漏 keywords 双修（job 33b2b922 实证）
 
 **触发**: Pexels 网络劣化日, slot 02 下载慢滴流挂死 15min+（requests `(10,300)` 只卡字节间隔永不触发）+ LLM 规划 8/23 pexels 槽漏 `keywords`（下游拿整段口播原文当 query 必然 no usable material）。
