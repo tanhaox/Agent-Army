@@ -82,8 +82,18 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
             dur = float(seg.get("duration") or 0)
             wav = Path(audio_file.file_path).parent / seg["file"]
             if dur > 0 and wav.exists():
+                # manifest duration 与实际 wav 有毫秒级漂移 (实测长 25ms), 直用会触发
+                # pyJianYingDraft source_timerange 超长校验 → 导出 400。以素材实测
+                # 时长 clamp (校验同源, 永不越界); 时间轴仍按 manifest 推进, 毫秒级
+                # 缺口为无声间隙不可感知。
+                mat_us = int(draft_mod.AudioMaterial(str(wav)).duration)
+                take_us = min(int(round(dur * _US)), mat_us)
                 script.add_segment(
-                    draft_mod.AudioSegment(str(wav), _trange_sec(cum, dur), volume=1.0),
+                    draft_mod.AudioSegment(
+                        str(wav),
+                        trange(int(round(cum * _US)), take_us),
+                        volume=1.0,
+                    ),
                     "voice",
                 )
                 n_audio += 1
