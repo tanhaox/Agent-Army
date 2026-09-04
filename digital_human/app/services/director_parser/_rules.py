@@ -19,7 +19,9 @@ __all__ = [
 ]
 
 _HOST_FAMILY = {"host", "mixed_host_broll"}
-_HF_WORKFLOWS = {"hf_chart", "hf_title", "hf_opening", "hf_quote"}
+# hf_identity/hf_follow (2026-09-05) 并入 HF 家族: 同走 h 管线降级链
+_HF_WORKFLOWS = {"hf_chart", "hf_title", "hf_opening", "hf_quote",
+                 "hf_identity", "hf_follow"}
 
 
 def _chain_for(prefer: str) -> tuple[tuple[str, str | None], ...]:

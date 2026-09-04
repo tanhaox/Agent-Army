@@ -72,6 +72,12 @@ _SAFE_KEYS = frozenset(
         "brand_name",
         "stamp_name",
         "brand_tag",
+        # 身份卡 (hf-identity-v1, 2026-09-05): 自介句上屏 + 热词
+        "identity_text",
+        "identity_body",
+        # 收尾互动卡 (hf-follow-v1, 2026-09-05): 口号两句 + FOLLOW
+        "slogan",
+        "follow_word",
     }
 )
 
@@ -158,14 +164,20 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs["brand_name"] = str(input_data.get("brand_name", ""))
     subs["stamp_name"] = str(input_data.get("stamp_name", ""))
     subs["brand_tag"] = str(input_data.get("brand_tag", ""))
+    # 身份卡/收尾互动卡 (2026-09-05): 漏挂白名单 → 成片渲染出原始 {{identity_body}}
+    # / {{slogan}} / {{FOLLOW_WORD}} 占位符 (job bdb6674b 剪映草稿实锤)
+    subs["identity_text"] = str(input_data.get("identity_text", ""))
+    subs["identity_body"] = str(input_data.get("identity_body", ""))
+    subs["slogan"] = str(input_data.get("slogan", ""))
+    subs["follow_word"] = str(input_data.get("follow_word", ""))
 
     # 净标点 + 转义收口
     for k in list(subs):
         v = subs[k]
         if k == "duration_sec" or k == "portrait_b64":
             continue
-        if k == "quote_body":
-            # 金句原串保留标点 (2026-09-04 编辑风: 断行/节奏靠 ，。、),
+        if k in ("quote_body", "identity_body", "slogan"):
+            # 金句/自介/口号原串保留标点 (2026-09-04 编辑风: 断行/节奏靠 ，。、),
             # 仅 HTML 转义防注入 — 与 v2 回退互不影响 (v1 模板不读此键)
             subs[k] = _html_escape(v)
         elif k in _JSON_SUBS:

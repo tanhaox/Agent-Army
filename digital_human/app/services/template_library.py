@@ -483,6 +483,49 @@ TEMPLATES: dict[str, dict] = {
             "additionalProperties": True,
         },
     },
+    # ── 身份卡/互动卡 (2026-09-05): 版式源杂志风预览页面 06/07, 财经线(tech)专用 ──
+    "hf-identity-v1": {
+        "version": "1.0.0",
+        "composition_id": "hf_identity_v1",
+        "source_dir": "hf_identity_v1",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 10],
+        "required_input": ["identity_text"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "identity_text": {"type": "string", "minLength": 1, "maxLength": 200},
+                "identity_body": {"type": "string", "maxLength": 200},
+                "hot_word": {"type": "string", "maxLength": 20},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 10},
+            },
+            "required": ["identity_text"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-follow-v1": {
+        # 全品牌层固定件, slogan 缺省由执行层注入账号口号 → required_input 空
+        "version": "1.0.0",
+        "composition_id": "hf_follow_v1",
+        "source_dir": "hf_follow_v1",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [3, 10],
+        "required_input": [],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "slogan": {"type": "string", "minLength": 1, "maxLength": 40},
+                "follow_word": {"type": "string", "maxLength": 24},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "duration_sec": {"type": "integer", "minimum": 3, "maximum": 10},
+            },
+            "required": [],
+            "additionalProperties": True,
+        },
+    },
 }
 
 

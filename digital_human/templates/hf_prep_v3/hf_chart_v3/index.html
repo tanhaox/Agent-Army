@@ -33,6 +33,9 @@
   .caps{font-family:Manrope,sans-serif;font-weight:700;letter-spacing:.34em;text-transform:uppercase}
 
   .frame{position:absolute;inset:0;padding:100px 110px;display:flex;flex-direction:column}
+  /* stage 须吃满头部/基线之间的剩余高度 — 否则 .bigstat/.duel/.bars/.donut-row
+     的 flex:1 失效(父非 flex), 巨数卡只占上 44%, 下半屏全空白 (2026-09-05 产线实锤) */
+  #stage{flex:1;min-height:0;display:flex;flex-direction:column}
   .headrow{display:flex;justify-content:space-between;align-items:baseline}
   .headrow .caps{font-size:28px}
   .headrow .tag{font-size:22px;color:var(--taupe)}

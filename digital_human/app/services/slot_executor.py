@@ -100,7 +100,8 @@ def execute_slot(db: Session, slot: DirectorSlot) -> DirectorSlot:
             return slot
 
         try:
-            if slot.workflow in ("hf_chart", "hf_title", "hf_opening", "hf_quote"):
+            if slot.workflow in ("hf_chart", "hf_title", "hf_opening", "hf_quote",
+                                 "hf_identity", "hf_follow"):
                 output_path = handler(db, slot, slot.workflow)
             else:
                 output_path = handler(db, slot)
@@ -129,7 +130,8 @@ _EXECUTION_PHASES: list[dict[str, Any]] = [
     {"workflows": {"host", "mixed_host_broll"}, "gpu": "comfyui", "pipeline": "c"},
     # evidence_image 与 broll_pexels 同 phase: pipeline "p"、无 GPU (证据图管线③)
     {"workflows": {"broll_pexels", "evidence_image"}, "gpu": None, "pipeline": "p"},
-    {"workflows": {"hf_chart", "hf_title", "hf_opening", "hf_quote"}, "gpu": None, "pipeline": "h"},
+    {"workflows": {"hf_chart", "hf_title", "hf_opening", "hf_quote",
+                   "hf_identity", "hf_follow"}, "gpu": None, "pipeline": "h"},
     {"workflows": {"broll_local", "black_placeholder"}, "gpu": None, "pipeline": None},
 ]
 

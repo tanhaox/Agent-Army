@@ -32,7 +32,8 @@ _JY_PPT_ENTRANCE = draft_mod.IntroType.渐显
 _JY_PPT_TRANSITION = draft_mod.TransitionType.上移
 
 # R9 v3 (2026-08-18): HF 卡文字族 (job_draft 边界音效用)
-_HF_TEXT_FAMILIES = {"hf_title", "hf_chart", "hf_opening", "hf_quote"}
+_HF_TEXT_FAMILIES = {"hf_title", "hf_chart", "hf_opening", "hf_quote",
+                     "hf_identity", "hf_follow"}
 
 
 def _load_jy_config(name: str) -> dict:

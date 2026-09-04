@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
+import difflib
 import json
 import logging
+import re
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -56,11 +58,9 @@ def _merge_brand(input_data: dict, slot: DirectorSlot, db: Session) -> None:
 
     两套发布账号 (老谭科技观/老谭世界观) 的差异仅品牌文字 — 模板本身已参数化
     ({{brand_name}}/{{stamp_name}}/{{brand_tag}}), 无需复制两套模板文件.
-    赛道取 ``script.article.track`` (缺省 tech); render_config 显式 brand_tag 仍可覆盖标语.
+    赛道取 ``_slot_track`` (script.article.track, 缺省 tech); render_config 显式 brand_tag 仍可覆盖标语.
     """
-    script = slot.director_job.script if slot.director_job else None
-    track = (script.article.track if script and script.article else None) or "tech"
-    tb = _TRACK_BRAND.get(track, _TRACK_BRAND["tech"])
+    tb = _TRACK_BRAND.get(_slot_track(slot), _TRACK_BRAND["tech"])
     input_data["brand_name"] = tb["brand"]
     input_data["stamp_name"] = tb["stamp"]
     # 标语: 显式 brand_tag 优先, 缺省用赛道标语
@@ -94,6 +94,14 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     # 引用卡 (hf_quote): 一句话观点 + 出处/人物, 编辑纸墨风
     if workflow == "hf_quote":
         return _execute_hf_quote(db, slot)
+
+    # 身份卡 (hf_identity): 自报家门一句话 + About + 品牌印章 (杂志风 06)
+    if workflow == "hf_identity":
+        return _execute_hf_identity(db, slot)
+
+    # 收尾互动卡 (hf_follow): 口号大字 + 印章 + Follow 栏 (杂志风 07)
+    if workflow == "hf_follow":
+        return _execute_hf_follow(db, slot)
 
     # 片尾来源声明卡 (references 风格) → 专用 hf-source 模板:
     # hf-title 的 subtitle→kicker 受 schema maxLength 32 校验, 来源列表必炸,
@@ -259,12 +267,89 @@ def _execute_hf_opening(db: Session, slot: DirectorSlot) -> str:
     return out_path
 
 
+_QUOTE_MAX_CHARS = 35  # 风格页 05-C 档位上限 (2026-09-05 用户裁决: 引用卡单句 ≤35字)
+_QUOTE_NORM_STRIP = re.compile(r"[\s，。、；：,.;:!?！？·…—\-\"'“”‘’()（）\[\]【】|]")
+_QUOTE_SENT_END = re.compile(r"[。！？!?；;]")
+
+
+def _norm_quote(s: str) -> str:
+    """逐字比对口径: 去空白 + 全部标点 (LLM 半角/全角标点差异不判错)."""
+    return _QUOTE_NORM_STRIP.sub("", s or "")
+
+
+def _visible_len(s: str) -> int:
+    """模板字数口径: 去空白、标点计入 (hf_quote_v2 JS 同款 count)."""
+    return len(re.sub(r"\s", "", s or ""))
+
+
+def _cap_to_35(text: str, tag: str) -> str:
+    """>35字 → 截到 ≤35 的最长句边界; 单句即超 → RuntimeError (调用方降级).
+    字数口径与模板 JS 一致 (去空白、标点计入)。"""
+    if _visible_len(text) <= _QUOTE_MAX_CHARS:
+        return text
+    cut = ""
+    for m in _QUOTE_SENT_END.finditer(text):
+        cand = text[: m.end()]
+        if _visible_len(cand) <= _QUOTE_MAX_CHARS:
+            cut = cand
+    if not cut:
+        raise RuntimeError(
+            f"{tag}: 原句 {_visible_len(text)}字 >{_QUOTE_MAX_CHARS} 且无句边界可截, 降级"
+        )
+    logger.info("[hf] %s %d字 超上限, 截到句边界: %s", tag, _visible_len(text), cut[:40])
+    return cut
+
+
+def _gate_quote_text(quote: str, text_context: str) -> str:
+    """引用语逐字闸门 (2026-09-05): quote 必须逐字抄自口播原文且 ≤35字.
+
+    ① 逐字校验: 去标点空白后是 slot 引用句的子串 → 放行;
+    ② 强制校正: LLM 改写/截字 → 用原文中最相似句覆盖 (不信 LLM 抄写);
+    ③ 上限: >35字 截到 ≤35 的最长句边界; 单句即超 → RuntimeError 降级
+       (fallback 链), 不出 4 行溢行卡。
+    """
+    raw = text_context or ""
+    norm_q, norm_t = _norm_quote(quote), _norm_quote(raw)
+
+    if norm_q and norm_q in norm_t:
+        final = quote.strip()
+    else:
+        sents = [s.strip() for s in re.split(r"(?<=[。！？!?；;])", raw) if s.strip()]
+        best, best_r = None, -1.0
+        for s in sents:
+            r = difflib.SequenceMatcher(None, norm_q, _norm_quote(s)).ratio()
+            if r > best_r:
+                best, best_r = s, r
+        if best is None:
+            raise RuntimeError("hf_quote 引用闸门: slot 无口播句可引用, 降级")
+        logger.info("[hf_quote] quote 逐字校验不过 (相似度 %.2f), 原句覆盖: %s",
+                    best_r, best[:40])
+        final = best
+
+    return _cap_to_35(final, "hf_quote 引用闸门")
+
+
+def _slot_track(slot: DirectorSlot) -> str:
+    """slot → 发布赛道 (script.article.track, 缺省 tech)。"""
+    script = slot.director_job.script if slot.director_job else None
+    return (script.article.track if script and script.article else None) or "tech"
+
+
+def _require_tech_track(slot: DirectorSlot, workflow: str) -> None:
+    """身份/互动卡为财经线 (tech) 专用 — 地缘线 (geo) 另做一套 (2026-09-05 用户裁决).
+    geo 误规划 → RuntimeError → slot_executor 走 fallback 链降级。"""
+    track = _slot_track(slot)
+    if track != "tech":
+        raise RuntimeError(f"{workflow} 仅财经线可用 (当前 track={track}), 降级")
+
+
 def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
     """引用卡 (hf_quote): 一句话观点 + 出处/人物 + 可选人像, 编辑纸墨风.
 
     - 模板: hf-quote-v2 (横屏 1920x1080, 版式源 gallery 05 金句卡)
     - 内容: quote_text(引用语, 兼容旧键) + quote_body(保留标点原串, 模板按标点断行)
             + hot_word(金词→锈红) + attrib_name(人物) + attrib_role(身份) + portrait_b64(人像)
+    - 闸门: _gate_quote_text 逐字校验 + 35字上限 (2026-09-05, 05-A/B/C 档位守门)
     """
     from app.services.visual_render_service import execute_visual_render_job
 
@@ -272,6 +357,7 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
     duration = round(slot.end_sec - slot.start_sec, 3)
     render_config = slot.params_json.get("render_config") or {}
 
+    raw_ctx = (slot.text_context or "").replace("||", "")
     input_data = {
         "quote_text": str(render_config.get("quote") or render_config.get("quote_text") or ""),
         "hot_word": str(render_config.get("hot") or render_config.get("hot_word") or ""),
@@ -280,13 +366,16 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
         "portrait_b64": str(render_config.get("portrait") or render_config.get("portrait_b64") or ""),
         "duration_sec": max(4, min(10, round(duration))),
     }
-    # 无 quote 时从口播取
+    # 无 quote 时从口播取 (原 [:80] 硬截撤除, 统一走闸门)
     if not input_data["quote_text"]:
-        input_data["quote_text"] = (slot.text_context or "").replace("||", "")[:80]
+        input_data["quote_text"] = raw_ctx
+    # 逐字闸门: 抄写必须逐字等于口播原文 + ≤35字 (校正/截句/降级三态)
+    input_data["quote_text"] = _gate_quote_text(input_data["quote_text"], raw_ctx)
     # quote_body: 保留标点原串 (金句断行/节奏靠标点; quote_text 走净标点仅作 schema 必填)
     input_data["quote_body"] = input_data["quote_text"]
-    # 无 hot 词时从引用语检测冲击词
-    if not input_data["hot_word"]:
+    # 无 hot 词、或校正后 hot 词已不在引用语内 → 从最终引用语重捡冲击词
+    if not input_data["hot_word"] or input_data["hot_word"] not in input_data["quote_text"]:
+        input_data["hot_word"] = ""
         try:
             from app.services.slot_workflows.hf_extract import _pick_red_words
             words = _pick_red_words(input_data["quote_text"])
@@ -294,6 +383,102 @@ def _execute_hf_quote(db: Session, slot: DirectorSlot) -> str:
                 input_data["hot_word"] = words[0]
         except Exception:
             pass
+    _merge_brand(input_data, slot, db)
+
+    job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+    db.add(job); db.commit(); db.refresh(job)
+    result = execute_visual_render_job(db, job.id, template_id, input_data)
+    if result.get("status") != "completed":
+        raise RuntimeError(result.get("error_message") or "HF render failed")
+    out_path = result.get("output_path")
+    if not out_path or not Path(out_path).exists():
+        raise RuntimeError("HF render output missing")
+    return out_path
+
+
+# 身份卡品牌默认句 (财经线老谭科技观; 口播无自介句时的兜底)
+_DEFAULT_TECH_IDENTITY = "我是老谭，专盯 AI 圈的一举一动，从硅谷到海淀。"
+
+
+def _execute_hf_identity(db: Session, slot: DirectorSlot) -> str:
+    """身份卡 (hf_identity): 自报家门一句话 + About 栏 + 品牌印章.
+
+    - 模板: hf-identity-v1 (横屏 1920x1080, 版式源杂志风预览页面 06 身份句)
+    - 内容: identity_text(自介句 — 有口播上下文时逐字闸门同 hf_quote;
+            无则品牌默认句) + hot_word + 品牌印章(brand_name 五字)
+    - 财经线 (tech) 专用 (2026-09-05 用户裁决: 地缘线另做一套)
+    """
+    from app.services.visual_render_service import execute_visual_render_job
+
+    _require_tech_track(slot, "hf_identity")
+
+    template_id = "hf-identity-v1"
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    render_config = slot.params_json.get("render_config") or {}
+
+    raw_ctx = (slot.text_context or "").replace("||", "")
+    identity = str(render_config.get("identity")
+                   or render_config.get("identity_text") or "").strip()
+    if identity and raw_ctx:
+        # 逐字闸门同 hf_quote: 自介句必须逐字抄口播 (改写→原句覆盖, 超长→截句/降级)
+        identity = _gate_quote_text(identity, raw_ctx)
+    else:
+        identity = _cap_to_35(identity or raw_ctx or _DEFAULT_TECH_IDENTITY,
+                              "hf_identity 身份闸门")
+
+    input_data = {
+        "identity_text": identity,
+        "hot_word": str(render_config.get("hot") or render_config.get("hot_word") or ""),
+        "duration_sec": max(4, min(10, round(duration))),
+    }
+    input_data["identity_body"] = identity  # 保留标点原串, 模板按标点断行
+    if not input_data["hot_word"] or input_data["hot_word"] not in identity:
+        input_data["hot_word"] = ""
+        try:
+            from app.services.slot_workflows.hf_extract import _pick_red_words
+            words = _pick_red_words(identity)
+            if words:
+                input_data["hot_word"] = words[0]
+        except Exception:
+            pass
+    _merge_brand(input_data, slot, db)
+
+    job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
+    db.add(job); db.commit(); db.refresh(job)
+    result = execute_visual_render_job(db, job.id, template_id, input_data)
+    if result.get("status") != "completed":
+        raise RuntimeError(result.get("error_message") or "HF render failed")
+    out_path = result.get("output_path")
+    if not out_path or not Path(out_path).exists():
+        raise RuntimeError("HF render output missing")
+    return out_path
+
+
+def _execute_hf_follow(db: Session, slot: DirectorSlot) -> str:
+    """收尾互动卡 (hf_follow): 口号大字两行(末子句锈红) + 品牌印章 + Follow 栏.
+
+    - 模板: hf-follow-v1 (横屏 1920x1080, 版式源杂志风预览页面 07 收尾互动卡)
+    - 内容: slogan(缺省账号口号「听懂逻辑，少走弯路。」) + follow_word(Follow) +
+            品牌印章/刊名底栏 (_merge_brand) — 全品牌层固定件
+    - 财经线 (tech) 专用; 收尾口号句由它承载 (与 hf_quote 收尾金句分工:
+      口号句→follow 卡, 非口号点题句→quote 卡)
+    """
+    from app.services.visual_render_service import execute_visual_render_job
+
+    _require_tech_track(slot, "hf_follow")
+
+    template_id = "hf-follow-v1"
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    render_config = slot.params_json.get("render_config") or {}
+
+    slogan = str(render_config.get("slogan") or "").strip() or "听懂逻辑，少走弯路。"
+    input_data = {
+        # schema maxLength 40 → 硬防护截断 (口号层常态远短于此)
+        "slogan": slogan[:40],
+        "follow_word": str(render_config.get("follow")
+                           or render_config.get("follow_word") or "").strip() or "Follow",
+        "duration_sec": max(3, min(10, round(duration))),
+    }
     _merge_brand(input_data, slot, db)
 
     job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")

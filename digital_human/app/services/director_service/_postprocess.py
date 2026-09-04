@@ -29,6 +29,8 @@ _MIN_DUR = {
     "hf_chart": 3.0,
     "hf_quote": 3.0,
     "evidence_image": 3.0,  # 证据图要给观众读数字的时间 (2026-09-04 管线③)
+    "hf_identity": 4.0,     # 身份卡 (2026-09-05): 自介句要读完+印章落定
+    "hf_follow": 3.0,       # 收尾互动卡 (2026-09-05)
 }
 _HF_TITLE_CAP = 5  # 含尾部参考卡(clamp 后追加, 不占此额度)
 _PROTECTED = {"host", "mixed_host_broll", "hf_opening"}
@@ -101,7 +103,10 @@ def _clamp_slot_durations(plan: Any, total_duration: float) -> None:
                 continue
         # HF 最小间隔 (2026-09-02): 距上一张 HF 卡 < 20s 的非片头 HF 卡
         # 降级 broll_pexels (真实画面优先; params 的 9 维/keywords 对 broll 兼容)
-        if slot.workflow.startswith("hf") and slot.workflow != "hf_opening":
+        # 豁免 hf_follow (2026-09-05): 固定收尾卡全篇 ≤1 且位置在尾, 与收尾
+        # 金句 quote 的间隔天然 <20s (中间只隔"下期见"句), 不豁免必被误杀。
+        if (slot.workflow.startswith("hf")
+                and slot.workflow not in ("hf_opening", "hf_follow")):
             if slot.start_sec - last_hf_end < _HF_MIN_GAP_SEC:
                 logger.info("[director] hf gap demote %s@%.1fs (距上张 HF %.1fs < %.0fs)",
                             slot.workflow, slot.start_sec,

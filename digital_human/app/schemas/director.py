@@ -28,9 +28,12 @@ class DirectorSlotPlan(BaseModel):
     duration_sec: float | None = None
     text_context: str | None = None
     segment_id: str | None = None
-    # hf_opening/hf_quote 执行层 (slot_executor + hf.py) 已支持, 2026-08-25 补进 Literal —
+    # hf_opening/hf_quote 执行层 (slot_executor + hf.py) 已支持, 2025-08-25 补进 Literal —
     # 此前缺位导致 quote 类 slot 在 pydantic 校验即被拒/被解析层洗成 broll/hf_chart。
     # evidence_image (2026-09-04 证据图管线③): 素材包真实证据图 (榜单/跑分/价格截图)。
+    # hf_identity/hf_follow (2026-09-05): 身份卡/收尾互动卡 (杂志风 06/07, 财经线专用) —
+    # 缺位实锤: 提示词(txt 热载)先广告了新工作流, 旧进程 schema 拒收 → job 整体
+    # ValidationError 0 slot failed (job 2375b001, 两次)。
     visual_type: Literal[
         "host",
         "broll_pexels",
@@ -41,6 +44,8 @@ class DirectorSlotPlan(BaseModel):
         "hf_opening",
         "hf_quote",
         "evidence_image",
+        "hf_identity",
+        "hf_follow",
     ]
     workflow: Literal[
         "host",
@@ -52,6 +57,8 @@ class DirectorSlotPlan(BaseModel):
         "hf_opening",
         "hf_quote",
         "evidence_image",
+        "hf_identity",
+        "hf_follow",
     ]
     params: dict[str, Any] = Field(default_factory=dict)
     camera_angle: int = Field(default=1, ge=1, le=4)

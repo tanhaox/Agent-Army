@@ -36,6 +36,8 @@ WORKFLOW_HANDLERS = {
     "hf_title": execute_hf_visual_slot,
     "hf_opening": execute_hf_visual_slot,
     "hf_quote": execute_hf_visual_slot,
+    "hf_identity": execute_hf_visual_slot,
+    "hf_follow": execute_hf_visual_slot,
     "mixed_host_broll": execute_mixed_host_broll_slot,
     "black_placeholder": execute_black_placeholder_slot,
     "evidence_image": execute_evidence_image_slot,
