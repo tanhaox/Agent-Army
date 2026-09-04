@@ -37,6 +37,30 @@ _PROTECTED = {"host", "mixed_host_broll", "hf_opening"}
 # 上限仅防 LLM 病态滥用; 超限者降级 broll_pexels。
 _EVIDENCE_CAP = 10
 
+# ── broll_pexels 缺词兜底 (2026-09-04) ──
+# LLM 规划偶发漏 keywords (job 33b2b922: 8/23 槽缺词, 兜底拿整段口播当 query
+# 必然 no usable material)。此处按"主体继承 + 概念映射"确定性补词:
+#   - 主体 = 同 plan 其他 pexels 槽 keywords[0] 的多数 (保持全片主题一致)
+#   - 场景词 = 口播/shot_contract 命中下表概念 → 具象英文词
+# 词典蒸馏自 visual_director_v2.txt 具象化铁律/视觉符号映射表 — 只用表内
+# 验证过的词, 禁自造隐喻 (提示词铁律同款约束)。
+_PEXELS_CONCEPT_MAP: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("数学", "考卷", "卷子", "满分", "分数", "成绩", "考试", "测试", "榜单", "排名"), "math exam paper"),
+    (("编程", "代码", "终端", "程序"), "programming terminal"),
+    (("电路", "铜线", "电路板", "PCB", "元器件", "走线", "打样"), "circuit board macro"),
+    (("价格", "标价", "美元", "成本", "单价", "工资", "账"), "stock trading floor"),
+    (("老板", "公司", "工位", "员工", "办公室", "上班"), "office workers desk"),
+    (("漏洞", "黑客", "攻击", "网络安", "破解"), "hacker dark room"),
+    (("服务器", "数据中心", "算力", "GPU", "训练"), "server racks corridor"),
+    (("电脑", "软件", "键盘", "屏幕", "操作"), "person using computer"),
+    (("发布会", "官方", "声明", "发布"), "tech product launch stage"),
+    (("普通人", "饭碗", "生计", "失业", "流水线"), "crowded bus stop"),
+    (("点赞", "关注", "评论区", "观众"), "smartphone notification screen"),
+    (("报道", "媒体", "新闻", "记者"), "newspaper printing press"),
+)
+_PEXELS_FALLBACK_SUBJECT = "city skyline timelapse"  # 全 plan 无词时的中性主体
+_PEXELS_GENERIC_DETAIL = "person using computer"      # 概念全未命中时的保底场景词
+
 # HF 线最小时间间隔 (2026-09-02 用户令): 连续/近距离 HF 文字卡观感疲劳且
 # 挤占实拍画面 — 两张 HF 卡(除片头 hf_opening)间隔不足此值的, 后者降级
 # broll_pexels 走实拍/下载, 画面不断档。
@@ -334,6 +358,57 @@ def _enforce_evidence_gates(db: Session, job: DirectorJob, plan: Any) -> None:
                      f"证据图闸门: 保留 {kept} / 降级 {len(demoted)}\n" + "\n".join(demoted[:8]))
 
 
+def _backfill_pexels_keywords(db: Session, job: DirectorJob, plan: Any) -> None:
+    """broll_pexels 缺 keywords 兜底 (2026-09-04, 双层防线第二层).
+
+    提示词是第一层; LLM 偶发漏词时无词槽会拿整段口播原文当搜索 query,
+    必然 no usable material (job 33b2b922 实证)。此处确定性补词:
+    主体继承同 plan 多数 keywords[0] + 概念词典映射场景词, 只用
+    visual_director_v2.txt 表内已验证的词。补词记 params.fallback_keywords
+    供观测; 命中主体继承时降维搜索主词永不被丢 (主体优先铁律同款语义)。
+    """
+    from collections import Counter
+
+    pexels_slots = [s for s in plan.slots if s.workflow == "broll_pexels"]
+    if not pexels_slots:
+        return
+
+    subj_counts: Counter[str] = Counter()
+    for s in pexels_slots:
+        kws = (s.params or {}).get("keywords")
+        if isinstance(kws, list) and kws and kws[0]:
+            subj_counts[str(kws[0])] += 1
+    subject = subj_counts.most_common(1)[0][0] if subj_counts else _PEXELS_FALLBACK_SUBJECT
+
+    filled: list[str] = []
+    for s in pexels_slots:
+        params = dict(s.params or {})
+        kws = params.get("keywords")
+        if isinstance(kws, list) and kws:
+            continue
+        sc = params.get("shot_contract")
+        goal = sc.get("visual_goal", "") if isinstance(sc, dict) else ""
+        text = f"{s.text_context or ''} {goal}"
+        details: list[str] = []
+        for keys, phrase in _PEXELS_CONCEPT_MAP:
+            if any(k in text for k in keys) and phrase != subject and phrase not in details:
+                details.append(phrase)
+            if len(details) >= 3:
+                break
+        if not details:
+            details = [_PEXELS_GENERIC_DETAIL]
+        params["keywords"] = [subject, *details]
+        params["fallback_keywords"] = True
+        s.params = params
+        filled.append(f"#{s.slot_index}→{'/'.join(params['keywords'][:2])}")
+
+    if filled:
+        logger.info("[director] pexels keywords backfill: %d slot(s), subject=%s",
+                    len(filled), subject)
+        append_trace(db, job, "pexels_keywords_backfill", "done",
+                     f"缺词兜底 {len(filled)} 槽, 主体={subject}\n" + "\n".join(filled[:10]))
+
+
 def _persist_plan(
     db: Session,
     job: DirectorJob,
@@ -343,6 +418,8 @@ def _persist_plan(
     """plan 落库 (保留既有 trace) + slots 持久化."""
     # 证据图闸门 (2026-09-04 管线④): 落库前降级不合格 evidence slot
     _enforce_evidence_gates(db, job, plan)
+    # pexels 缺词兜底 (2026-09-04): 在闸门后跑 — evidence 降级来的 broll 槽一并覆盖
+    _backfill_pexels_keywords(db, job, plan)
     # 保留既有 trace (alignment/plan_llm 已写入), 再覆盖 plan 主体, 避免 trace 被 model_dump 清空
     prev_trace = list((job.plan_json or {}).get("trace", []) or [])
     job.plan_json = plan.model_dump()
