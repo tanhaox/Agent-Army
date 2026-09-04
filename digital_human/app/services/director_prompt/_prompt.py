@@ -129,6 +129,43 @@ def _build_pipeline_constraint_block(enabled_pipelines: set[str] | None) -> str:
     return "\n".join(lines)
 
 
+def _format_evidence_pool_block(pool: list[dict[str, Any]] | None) -> str:
+    """证据图池注入 (2026-09-05): 不注入则 LLM 永远当"素材包无截图"处理 —
+    全库仅 1 个 evidence slot 实锤。池内容 + 硬规则 (claim 抄图内数字) 一起给,
+    情绪稿口播不念数字也能靠 claim 对齐 gate/匹配器 (两者都数字优先)。"""
+    if not pool:
+        return (
+            "\n\n## 补充输入6：证据图池\n"
+            "本片素材包无合格证据图 → **evidence_image 一律禁用**，"
+            "数据段用 hf_chart / broll_pexels。"
+        )
+    lines = [
+        "\n\n## 补充输入6：证据图池（本片素材包的真实截图 — evidence_image 专用）",
+        f"本片素材包有 {len(pool)} 张合格证据图（VLM 已核：图表/榜单/跑分，无重水印）：",
+    ]
+    for i, p in enumerate(pool, start=1):
+        nums = " ".join(str(n) for n in (p.get("numbers") or [])[:6])
+        src = (p.get("source_media") or "").strip()
+        lines.append(
+            f"- E{i} [{p.get('kind')}|q{p.get('quality')}] {p.get('desc_zh', '')[:50]}"
+            f"{' | 图上数字: ' + nums if nums else ''}{' | 源: ' + src if src else ''}"
+        )
+    lines += [
+        "",
+        "使用规则（硬性）：",
+        "- 口播段讲到**跑分/基准/榜单/价格对比**时——**即使口播没念具体数字**——"
+        "只要上表有图能佐证该段，优先选 `evidence_image`（真实截图说服力 > hf_chart > broll）。",
+        "- 该 slot 的 `claim` 必须写「主题词 + 数字」：文字图从上表抄一个图内核心数字"
+        "（如 \"GPT-6 Astra 在ARC-AGI-3基准跑分99.9%接近满分\"）；实物图（kind=photo）"
+        "从口播抄数字。`keywords` 含上表主题词——系统按 claim 数字+关键词从池内自动选图，"
+        "数字不对齐会降级 broll。",
+        "- 实物图（kind=photo，如芯片/汽车/产品照）可佐证产品/硬件相关数据段；"
+        "与文字图都匹配时优先文字图（数字重合力更强）。",
+        "- 段落与所有图内容都不沾边时禁止硬凑，用 broll_pexels。",
+    ]
+    return "\n".join(lines)
+
+
 def _format_vocabulary_constraint_block() -> str:
     """词表包模式下追加的选词硬约束（broll_local 全维度词表选词; broll_pexels keywords 自由）。
 
@@ -162,6 +199,7 @@ def build_director_prompt(
     enabled_pipelines: set[str] | None = None,
     visual_intent: list[dict[str, Any]] | None = None,
     visual_theme: str | None = None,
+    evidence_pool: list[dict[str, Any]] | None = None,
 ) -> str:
     """Assemble user prompt for the director LLM.
 
@@ -171,6 +209,8 @@ def build_director_prompt(
             从爆品改造稿的结构标记提取, 让导演按"观众实际听到的新稿 + 结构意图"配画面, 而非盲配.
         visual_theme: 可选, 人物级视觉主题 (persona.visual_theme, 如科技/地缘场景词).
             导演按此选全局主体关键词, 替代默认地域词.
+        evidence_pool: 可选, 素材包合格证据图池 (collect_evidence_pool 产物).
+            注入为补充输入6 — P 线禁用时不注入 (约束块已禁 evidence_image).
     """
     prompt = load_director_prompt()
     # 无出镜模式: C 线禁用 (用户只开 P/H 或全关) 时, 直接在系统提示词层移除 host 规则
@@ -219,6 +259,11 @@ def build_director_prompt(
     # 词表包模式下补充选词约束（全维度 + 每维度 ≥1-2 词）
     if catalog_mode == "vocabulary":
         dynamic_parts.append(_format_vocabulary_constraint_block())
+
+    # 证据图池注入 (2026-09-05): P 线启用才注 (禁用时约束块已封 evidence_image,
+    # 注入反而诱导 LLM 规划被闸门降级的 slot)
+    if enabled_pipelines is None or "p" in enabled_pipelines:
+        dynamic_parts.append(_format_evidence_pool_block(evidence_pool))
 
     # ── 输入3 段视图 (2026-08-26 分段先行): 代码把句预聚成候选段(12~25s 时长窗),
     # LLM 面对的是 ~20 个段的组合决策而非 83 句逐句规划 — v4-pro 对逐句×44禁令

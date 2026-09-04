@@ -5,9 +5,11 @@
 选图/池逻辑在 evidence_service (管线②); 本模块只管成片:
 
   池内段级匹配选图 → 缓存图校验/重下 → 单次 ffmpeg:
-  等比缩放+黑边 (榜单截图不变形) → zoompan Ken Burns (1.0→1.08) →
-  淡入淡出 → drawtext 图源角标 (右下, 半透明, 避开底部字幕区) →
+  等比缩放+黑边 (榜单截图不变形) → zoompan Ken Burns (按 kind 分派动效:
+  有字图=B拉远 / 实物图=A推近·C平移交替) → 淡入淡出 →
   render_scale_pad 归一化 (补静音轨+30fps, 与 broll 族一致)。
+  (动效矩阵 2026-09-05 风格页定稿; 图源角标同日撤除 — 尾部参考来源卡承载出处;
+   D 聚焦圈注二期, 需打标协议加数字 bbox)
 
 失败语义: 池空/无匹配/图损坏 → RuntimeError → slot_executor 走
 fallback 链降级 broll_pexels (导演闸门之外的执行期兜底)。
@@ -33,35 +35,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["execute_evidence_image_slot"]
 
-# 图源角标字体: 微软雅黑优先 (Win11 必带), 黑体兜底
-_FONT_CANDIDATES = (
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
-    "C:/Windows/Fonts/arial.ttf",
-)
-
-
-def _pick_font() -> str | None:
-    for f in _FONT_CANDIDATES:
-        if Path(f).exists():
-            return f
-    return None
-
-
-def _drawtext_escape(text: str) -> str:
-    """drawtext text= 转义 (过滤器层: 冒号/引号/反斜杠/百分号)."""
-    return (
-        text.replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace("%", "\\%")
-    )
-
-
-def _filter_fontfile(path: str) -> str:
-    """Windows 盘符路径 → drawtext fontfile 过滤器参数 (C: 的冒号须转义)."""
-    return path.replace("\\", "/").replace(":", "\\:")
-
 
 def _collect_used_evidence_urls(db: Session, slot: DirectorSlot) -> set[str]:
     """同 job 已用证据图 URL (写回 params_json.image_url, 仿 _collect_used_pexels_ids).
@@ -85,39 +58,69 @@ def _collect_used_evidence_urls(db: Session, slot: DirectorSlot) -> set[str]:
     return used
 
 
+def _count_prior_photo_slots(db: Session, slot: DirectorSlot) -> int:
+    """同 job 已完成的实物图 (kind=photo) 证据 slot 数 — 决定本张 A推/C平移 交替轮次。"""
+    rows = (
+        db.query(DirectorSlot)
+        .filter(
+            DirectorSlot.director_job_id == slot.director_job_id,
+            DirectorSlot.workflow == "evidence_image",
+            DirectorSlot.status == "completed",
+        )
+        .all()
+    )
+    return sum(
+        1 for r in rows
+        if r.id != slot.id and (r.params_json or {}).get("image_kind") == "photo"
+    )
+
+
+def _pick_motion(kind: str, photo_turn: int) -> tuple[str, bool]:
+    """动效分派 (2026-09-05 风格页定稿, 用户裁决):
+    有字图 (benchmark/leaderboard/price/comparison/screenshot) → B 拉远;
+    实物图 (photo) → A 推近 / C 平移 按 job 内序交替, 平移方向隔轮镜像。
+    D 聚焦圈注 = 二期 (需打标协议加数字 bbox)。返回 (motion, pan_ltr)。"""
+    if kind == "photo":
+        if photo_turn % 2 == 0:
+            return "push", True
+        return "pan", (photo_turn // 2) % 2 == 0
+    return "pull", True
+
+
 def _build_vf(width: int, height: int, duration: float,
-              source_media: str | None) -> str:
-    """等比缩放+pad → Ken Burns → fade → 图源角标 (单 pass, 无中间文件)."""
+              motion: str = "pull", pan_ltr: bool = True) -> str:
+    """等比缩放+pad → Ken Burns(按 motion) → fade (单 pass, 无中间文件).
+
+    step = 0.08/(frames-1) 归一 — 任何时长都恰好走满 1.0↔1.08
+    (旧式 zoom+0.0004 累加, 短片走不满: 4s 只到 1.04)。
+    图源角标已撤 (2026-09-05 用户裁决) — 尾部 hf_title 参考来源卡已承载出处。"""
     dur = max(1.5, duration)
     fps = 25
     frames = int(dur * fps)
-    vf = (
+    step = 0.08 / max(frames - 1, 1)
+    cx, cy = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+    if motion == "push":            # EV-A 推近: 实物图
+        zoom = f"min(1+on*{step:.6f},1.08)"
+        x, y = cx, cy
+    elif motion == "pan":           # EV-C 平移: 实物图, 定倍横扫
+        zoom = "1.08"
+        span = "(iw-iw/zoom)"
+        x = f"{span}*on/{frames}" if pan_ltr else f"{span}*(1-on/{frames})"
+        y = cy
+    else:                           # EV-B 拉远: 表格/文字类默认 (先局部后全貌)
+        zoom = f"max(1.08-on*{step:.6f},1.0)"
+        x, y = cx, cy
+    return (
         # 先等比缩进画框再补黑边 — 榜单/跑分截图绝不能拉伸变形 (数字会糊)
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,"
-        f"zoompan=z='min(zoom+0.0004,1.08)':d={frames}:"
-        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={width}x{height}:fps={fps},"
+        f"zoompan=z='{zoom}':d={frames}:x='{x}':y='{y}':s={width}x{height}:fps={fps},"
         f"fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, dur - 0.4):.2f}:d=0.4"
     )
-    # 图源角标 (证据图管线⑤): 右下角半透明, 底部预留 ~8% 避开字幕区
-    font = _pick_font()
-    label = (source_media or "").strip()
-    if font and label:
-        fontsize = max(18, int(height * 0.030))
-        vf += (
-            f",drawtext=fontfile='{_filter_fontfile(font)}'"
-            f":text='{_drawtext_escape(f'图源：{label[:24]}')}'"
-            f":fontcolor=white@0.75:fontsize={fontsize}"
-            f":box=1:boxcolor=black@0.35:boxborderw=8"
-            f":x=w-tw-{int(width * 0.03)}:y=h-th-{int(height * 0.08)}"
-        )
-    else:
-        logger.debug("[evidence] 图源角标跳过 (无字体 %s 或来源名 %r)", font, label)
-    return vf
 
 
 def execute_evidence_image_slot(db: Session, slot: DirectorSlot) -> str:
-    """池内选图 → Ken Burns+角标成片, 返回 mp4 路径.
+    """池内选图 → Ken Burns(按 kind 分派动效) 成片, 返回 mp4 路径.
 
     选图文本 = slot.text_context + params.claim (导演给的核心事实句,
     数字最全); keywords 参与次级加分。无合格图 raise RuntimeError
@@ -131,7 +134,7 @@ def execute_evidence_image_slot(db: Session, slot: DirectorSlot) -> str:
     script = db.get(Script, job.script_id)
     pool = collect_evidence_pool(db, script) if script else []
     if not pool:
-        raise RuntimeError("证据图池为空: 素材包无合格证据图 (VLM 未标出 is_chart)")
+        raise RuntimeError("证据图池为空: 素材包无合格证据图 (VLM 未标出 is_chart/photo)")
 
     params = slot.params_json or {}
     search_text = " ".join(x for x in (slot.text_context, params.get("claim")) if x)
@@ -150,11 +153,16 @@ def execute_evidence_image_slot(db: Session, slot: DirectorSlot) -> str:
             raise RuntimeError(f"证据图缓存丢失且重下失败: {img.name}")
         img = Path(redl[0])
 
+    # 动效分派 (2026-09-05 定稿): 有字图→B拉远; 实物图→A推/C平移交替
+    kind = str(cand.get("kind") or "other")
+    photo_turn = _count_prior_photo_slots(db, slot) if kind == "photo" else 0
+    motion, pan_ltr = _pick_motion(kind, photo_turn)
+
     tmp = root / f"evidence_{slot.slot_index:03d}_raw.mp4"
     run_ffmpeg([
         "ffmpeg", "-y", "-loglevel", "error",
         "-loop", "1", "-i", str(img),
-        "-vf", _build_vf(spec["width"], spec["height"], duration, cand.get("source_media")),
+        "-vf", _build_vf(spec["width"], spec["height"], duration, motion, pan_ltr),
         "-t", f"{max(1.5, duration):.2f}",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25",
         str(tmp),
@@ -170,12 +178,15 @@ def execute_evidence_image_slot(db: Session, slot: DirectorSlot) -> str:
     # 写回选图依据 (可观测 + 同 job 去重), params_json 须整体赋值才触发落库
     new_params = dict(slot.params_json or {})
     new_params["image_url"] = cand["url"]
+    new_params["image_kind"] = kind
+    new_params["motion"] = motion
     new_params["source_media"] = cand.get("source_media") or ""
     new_params["image_desc"] = cand.get("desc_zh") or ""
     slot.params_json = new_params
     db.commit()
     logger.info(
-        "[evidence] slot %d -> %s (%s | %s)",
-        slot.slot_index, out_path.name, cand.get("source_media"), cand.get("desc_zh"),
+        "[evidence] slot %d -> %s [%s/%s] (%s | %s)",
+        slot.slot_index, out_path.name, kind, motion,
+        cand.get("source_media"), cand.get("desc_zh"),
     )
     return str(out_path)

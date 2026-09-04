@@ -398,7 +398,11 @@ def collect_evidence_pool(db: Session, script: Any) -> list[dict[str, Any]]:
     for item in package.items:
         for e in item.images_json or []:
             vlm = e.get("vlm") if isinstance(e, dict) else None
-            if not isinstance(vlm, dict) or not vlm.get("is_chart"):
+            if not isinstance(vlm, dict):
+                continue
+            # 入池 (2026-09-05 风格页定稿放宽): 表格/榜单类 (is_chart) 或实物图
+            # (kind=photo) — 推文截图等杂图仍不入池
+            if not vlm.get("is_chart") and vlm.get("kind") != "photo":
                 continue
             if not isinstance(vlm.get("quality"), (int, float)) or vlm["quality"] < _MIN_QUALITY:
                 continue

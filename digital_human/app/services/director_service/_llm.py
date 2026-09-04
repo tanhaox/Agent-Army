@@ -66,6 +66,20 @@ def _llm_plan_phase(
                 logger.info("[director] visual_theme: %s", visual_theme)
     except Exception as exc:
         logger.warning("[director] visual_theme resolve failed: %s", exc)
+    # 证据图池 (2026-09-05): 注入 prompt 让 LLM 知道素材包有真实截图可规划 —
+    # 不注入则规则"无则用 broll_pexels"恒生效, evidence_image 永不被选 (全库仅 1 slot 实锤)
+    evidence_pool: list[Any] = []
+    try:
+        from app.services.evidence_service import collect_evidence_pool
+
+        evidence_pool = collect_evidence_pool(db, script)
+        if evidence_pool:
+            logger.info(
+                "[director] evidence pool: %d 张入 prompt (规划可选 evidence_image)",
+                len(evidence_pool),
+            )
+    except Exception as exc:
+        logger.warning("[director] evidence pool collect for prompt failed: %s", exc)
     prompt = build_director_prompt(
         script_text=director_script,
         segment_timings=alignment["segment_timings"],
@@ -75,6 +89,7 @@ def _llm_plan_phase(
         enabled_pipelines=enabled_pipelines,
         visual_intent=visual_intent,
         visual_theme=visual_theme,
+        evidence_pool=evidence_pool,
     )
 
     try:
