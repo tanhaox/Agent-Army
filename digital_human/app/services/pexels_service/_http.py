@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -50,8 +51,26 @@ def _remove_partial(dest: Path) -> None:
         dest.unlink()
 
 
+def _download_total_timeout_sec() -> int:
+    """单条下载总时长上限 (config.defaults.pexels_download_total_timeout_sec).
+
+    requests 的 (10, 300) 只卡"字节间隔" — 慢滴流 (每几秒到 1 个 chunk) 永不
+    触发 read timeout, 实测可拖数小时 (2026-09-04 job 33b2b922 slot 02 挂死)。
+    """
+    from app.config import get_config
+
+    try:
+        return int(getattr(get_config().defaults, "pexels_download_total_timeout_sec", 180))
+    except RuntimeError:  # 脚本/测试环境 lifespan 未跑
+        return 180
+
+
 def download(svc: Any, url: str, pexels_id: int, materials_dir: str) -> str | None:
-    """流式下载视频到 materials 目录, ffprobe 校验后返回绝对路径."""
+    """流式下载视频到 materials 目录, ffprobe 校验后返回绝对路径.
+
+    双层超时: requests (10, 300) 卡连接/字节间隔 + 本函数 wall-clock 总上限
+    (默认 180s, config 可调) — 超限抛 PexelsResolveError, 半成品清理, 走 fallback 链。
+    """
     root = Path(materials_dir)
     root.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(url)
@@ -60,6 +79,8 @@ def download(svc: Any, url: str, pexels_id: int, materials_dir: str) -> str | No
         ext = ".mp4"
     dest = root / f"pexels_{pexels_id}{ext}"
 
+    cap = _download_total_timeout_sec()
+    started = time.monotonic()
     try:
         with http_session(svc).get(url, stream=True, timeout=(10, 300)) as resp:
             resp.raise_for_status()
@@ -67,12 +88,20 @@ def download(svc: Any, url: str, pexels_id: int, materials_dir: str) -> str | No
                 for chunk in resp.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
+                    if time.monotonic() - started > cap:
+                        raise PexelsResolveError(
+                            f"download wall-clock {time.monotonic() - started:.0f}s > "
+                            f"{cap}s cap (pexels_id={pexels_id}, 慢滴流截断)"
+                        )
     except requests.exceptions.RequestException as exc:
         _remove_partial(dest)
         raise PexelsResolveError(f"download network error: {exc}") from exc
     except OSError as exc:
         _remove_partial(dest)
         raise PexelsResolveError(f"disk write error: {exc}") from exc
+    except PexelsResolveError:
+        _remove_partial(dest)
+        raise
 
     if not validate_video(dest):
         dest.unlink()

@@ -110,6 +110,9 @@ class DefaultsConfig:
     pexels_default_max_results: int
     pexels_min_duration_sec: int
     pexels_preferred_resolution: str
+    # 单条 Pexels 下载总时长上限 (秒): requests (10,300) 只卡字节间隔, 慢滴流
+    # 可拖数小时 (2026-09-04 slot 02 挂死实证); 超限抛错走 fallback 链。
+    pexels_download_total_timeout_sec: int
     max_host_slots: int
     job_auto_cleanup_days: int
     # 素材保留策略 (2026-08-07): completed job 的 slot 素材保留天数。
@@ -294,6 +297,9 @@ def load_config(path: Path | str | None = None) -> Config:
         pexels_min_duration_sec=int(defaults_raw.get("pexels_min_duration_sec", 5)),
         pexels_preferred_resolution=defaults_raw.get(
             "pexels_preferred_resolution", "FHD"
+        ),
+        pexels_download_total_timeout_sec=int(
+            defaults_raw.get("pexels_download_total_timeout_sec", 180)
         ),
         max_host_slots=int(defaults_raw.get("max_host_slots", 4)),
         job_auto_cleanup_days=int(defaults_raw.get("job_auto_cleanup_days", 7)),

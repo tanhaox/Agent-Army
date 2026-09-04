@@ -191,8 +191,10 @@ def force_stop_job(job_id: str, db: Session = Depends(get_db)):
       6. SSE "force_stopped" 终止事件
     后台线程返回时查 is_force_stopped → 跳过状态覆盖 (双保险).
 
-    已知局限: 纯 Python 阻塞 (LLM/Pexels/TTS) 无子进程可杀, job 恢复可操作但
-    后台线程迟滞占用直到自身超时 (看门狗归二版).
+    已知局限: 纯 Python 阻塞 (LLM/TTS) 无子进程可杀, job 恢复可操作但
+    后台线程迟滞占用直到自身超时 (看门狗归二版). Pexels 下载已自带 wall-clock
+    总上限 (config pexels_download_total_timeout_sec, 2026-09-04 慢滴流挂死修复),
+    最坏 180s 自行超时走 fallback 链, 不再无限占用.
     """
     job = _job_or_404(db, job_id)
 

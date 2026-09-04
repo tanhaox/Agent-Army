@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-09-04｜Pexels 慢滴流挂死 + LLM 漏 keywords 双修（job 33b2b922 实证）
+
+**触发**: Pexels 网络劣化日, slot 02 下载慢滴流挂死 15min+（requests `(10,300)` 只卡字节间隔永不触发）+ LLM 规划 8/23 pexels 槽漏 `keywords`（下游拿整段口播原文当 query 必然 no usable material）。
+
+- **下载 wall-clock 总上限**: `_http.py` chunk 循环内 `time.monotonic()` 对总时长硬卡（默认 180s, `config.defaults.pexels_download_total_timeout_sec` 可调, lifespan 未跑回退 180）— 超限抛 `PexelsResolveError` 清半成品走 fallback 链; force-stop docstring 同步（最坏 180s 自行超时, 不再无限占用）
+- **keywords 兜底（双层防线第二层）**: 提示词第一层（visual_director_v2.txt ⛔ 漏词禁令）+ `_postprocess.py` `_backfill_pexels_keywords` 确定性补词 — 主体 = 同 plan 多数 `keywords[0]` 继承（全片主题一致, 降维搜索主词永不被丢）, 场景词 = 口播/`shot_contract.visual_goal` 命中概念词典（12 组, 蒸馏自具象化铁律视觉符号映射表, 禁自造隐喻）, 全未命中保底 `person using computer`; 在 evidence 闸门**后**跑（降级来的 broll 槽一并覆盖）; 补词记 `params.fallback_keywords` + trace `pexels_keywords_backfill` 可观测
+- 验证: 9 单测（假时钟慢滴流截断/半成品清理/脚本环境回退默认/主体继承/概念命中/空数组/visual_goal/cap3+去重/非 pexels 不动）+ 全量 138 过（排除 real_api 真网）
+
+---
+
 ## 2026-09-04｜HF 卡黑金 v2 → 编辑纸墨风 v3 入产线（title/chart/quote/source 四模板）
 
 **触发**: 黑金风与科技/时局双赛道调性不符; 设计源 = `.tmp/style_gallery_h.html` (H 系编辑纸墨: 纸色 #F2EEE6 底 + 墨 #1C1613 + 锈红 #9E4A2F, Noto Serif SC + Playfair Display)。**图卡数据规则用户裁决**: 单点→巨数卡 / 恰 2 点→对比卡 / 占比结构(合计≈100%)3~5 段→饼 / 其余数量对比→柱状优先于饼(人眼判长度远准于角度); 饼 >5 段不可读转柱; 柱离散度≥1.8×。
