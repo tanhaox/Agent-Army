@@ -41,7 +41,7 @@ _RULE2_TABLE = (
     "| 每段开头第 1 个 slot 用 `broll_*` 或 `hf_*` | 建立段落感 |\n"
     "| 整段最后一个 slot 用 `hf_title` 或 `broll_*` | 收束感,给观众消化时间 |\n"
     "| 全场高潮点(最核心数据/最强金句)必须用 `hf_chart` | 信息密度拉到最大 |\n"
-    "| 开场前 3 个 slot：`broll_* → hf_title → broll_*` | 建立连接→制造好奇→抛出悬念 |"
+    "| 开场首 slot：`broll_pexels` 冲击画面（**禁 hf 字幕卡/空镜开场**, 2026-09-04）→ `hf_title` → `broll_*` | 建立连接→制造好奇→抛出悬念 |"
 )
 _RULE3_TABLE = (
     "| 信息层级 | 视觉类型 |\n"

@@ -79,10 +79,13 @@ def _pipeline_substitution_lines(
     """替代方案指引 — 按被禁工作流 + 仍启用管线组合出可替代视觉."""
     lines: list[str] = []
     if "host" in forbidden_workflows and "mixed_host_broll" in forbidden_workflows:
-        if "h" in enabled_pipelines:
-            lines.append("- 开场/收尾用 hf_title 替代 host 出镜")
-        elif "p" in enabled_pipelines:
-            lines.append("- 开场/收尾用 broll_pexels 替代 host 出镜")
+        if "p" in enabled_pipelines:
+            # 首帧禁静态卡 (2026-09-04 用户裁决): 开场让位实拍冲击画面
+            lines.append("- 开场首 slot 用 broll_pexels 冲击画面 (禁 hf 字幕卡开场); 收尾用 broll_pexels 情感画面或 hf_title 来源卡")
+            if "h" in enabled_pipelines:
+                lines.append("- hf_chart/hf_title 用于正文数据段与尾部来源卡, 不做第 1 个 slot")
+        elif "h" in enabled_pipelines:
+            lines.append("- 开场/收尾用 hf_chart 替代 host 出镜 (P 线也禁用时的兜底)")
         else:
             lines.append("- 开场/收尾用 broll_local 替代 (本地素材兜底)")
     if "broll_pexels" in forbidden_workflows:

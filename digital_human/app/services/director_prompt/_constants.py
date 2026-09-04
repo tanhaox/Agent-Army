@@ -99,15 +99,6 @@ _NO_HOST_DEMO = """```json
       "start_sec": 0.00,
       "end_sec": 4.20,
       "segment_refs": ["S001"],
-      "visual_type": "hf_title",
-      "workflow": "hf_title",
-      "params": {"render_config": {"title": "上半年进口 10.74 万亿", "subtitle": "增长 22.1%"}, "intensity": "low", "emotion": "opening"}
-    },
-    {
-      "slot_index": 1,
-      "start_sec": 4.20,
-      "end_sec": 7.50,
-      "segment_refs": ["S002"],
       "visual_type": "broll_pexels",
       "workflow": "broll_pexels",
       "params": {
@@ -118,13 +109,27 @@ _NO_HOST_DEMO = """```json
       }
     },
     {
+      "slot_index": 1,
+      "start_sec": 4.20,
+      "end_sec": 7.50,
+      "segment_refs": ["S002"],
+      "visual_type": "hf_title",
+      "workflow": "hf_title",
+      "params": {"render_config": {"title": "上半年进口 10.74 万亿", "subtitle": "增长 22.1%"}, "intensity": "low", "emotion": "opening"}
+    },
+    {
       "slot_index": 2,
       "start_sec": 7.50,
       "end_sec": 11.00,
       "segment_refs": ["S003"],
-      "visual_type": "hf_title",
-      "workflow": "hf_title",
-      "params": {"render_config": {"title": "说三个数字", "subtitle": "钱该往哪儿投"}, "intensity": "medium", "emotion": "rising"}
+      "visual_type": "broll_pexels",
+      "workflow": "broll_pexels",
+      "params": {
+        "keywords": ["supermarket", "shelf", "imported", "goods"],
+        "category": "超市货架",
+        "intensity": "medium",
+        "emotion": "rising"
+      }
     },
     {
       "slot_index": 3,
