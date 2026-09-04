@@ -128,9 +128,13 @@ def execute_job(
             raise HTTPException(status_code=409, detail="job 正在执行中, 请勿重复触发")
         _executing_jobs.add(job_id)
 
-    # force 标记无天然清理点: 每个新执行入口显式清除, 防脏标记阻断本次执行
-    from app.services.slot_executor import clear_force_stopped
+    # force 标记无天然清理点: 每个新执行入口显式清除, 防脏标记阻断本次执行。
+    # cancel 标志同理 (2026-09-04 实证): force-stop 会同时 set cancel, 若不在此
+    # 清除, 重启后首次「执行」会被执行循环的 _is_cancelled 检查秒退 —
+    # start→done 同秒且 0 slot 执行, 前端看似"点了没反应"。
+    from app.services.slot_executor import clear_cancel, clear_force_stopped
     clear_force_stopped(job_id)
+    clear_cancel(job_id)
 
     job.status = "executing"
     db.commit()
