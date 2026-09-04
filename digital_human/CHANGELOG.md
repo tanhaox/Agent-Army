@@ -4,7 +4,19 @@
 
 ---
 
-## 2026-09-04｜证据图管线 evidence_image 全链（真实榜单/跑分/价格截图上片）
+## 2026-09-04｜HF 卡黑金 v2 → 编辑纸墨风 v3 入产线（title/chart/quote/source 四模板）
+
+**触发**: 黑金风与科技/时局双赛道调性不符; 设计源 = `.tmp/style_gallery_h.html` (H 系编辑纸墨: 纸色 #F2EEE6 底 + 墨 #1C1613 + 锈红 #9E4A2F, Noto Serif SC + Playfair Display)。**图卡数据规则用户裁决**: 单点→巨数卡 / 恰 2 点→对比卡 / 占比结构(合计≈100%)3~5 段→饼 / 其余数量对比→柱状优先于饼(人眼判长度远准于角度); 饼 >5 段不可读转柱; 柱离散度≥1.8×。
+
+- **模板源**: `templates/hf_prep_v3/` 四模板 (F 仓唯一事实源) + `scripts/sync_hf_templates.py` 增量部署 E盘; 旧黑金模板原样保留, **回滚 = git revert**。chart 四布局合一 (pie→环形/1→巨数/2→对比/3~5→柱群), JS 从数据形状分派 — LLM 契约零新增参数
+- **接线**: hf.py 路由 v3 系; hf_chart.py 数据规则闸门 (pie <3 或 >5 → bar, 判定在 [:5] 截断前防 6 段截 5 破坏合计≈100%); 删旧 pie 单扇区自动补"其他"; source 容量 5→8 (条目收集+模板+schema 三处)
+- **净标点政策唯一豁免**: `quote_body` 键保留原文 ，。、 (引用卡断行依赖) 仅 HTML 转义; 旧键 `quote_text` 仍净标点 → v1 模板不读新键, 回退安全
+- **烟测真机三修** (npx hyperframes 6 例渲染 + RapidOCR 逐帧验证): ① title 日期 `new Date()` 在渲染沙箱冻结为 epoch 出 **1970.01** → 改 `{{issue_date}}` 填充端注入; ② source 8 行 ×26px padding 总高 1036px 溢出 900px 内容区, disclaimer 被挤出画幅 → 行距按行数自适应 (7+ 行降 13px); ③ 对比卡单价场景贵 10 倍被标"领先 10×" → label/unit 命中 单价/价格/成本/price/cost 时低价更好 (chip/verdict 出 更低/便宜 X×), 柱群 hero 同步受益
+- **quote v1 协议 bug 修复**: v1 漏 `__timelines` 注册, v2 修复
+- 06 身份卡 / 07 收尾互动卡 → 二期 (需新 workflow)
+- 验证: 20 单测 (路由闸门/填充豁免/注册接线守卫/来源容量) + 全量回归 (排除 real_api 真网用例 — Pexels API 本机当日不可达挂死, 环境问题非回归)
+
+---
 
 **触发**: Gemini 3.8 稿测试/对比段全是 Pexels 空镜，说服力低。**用户硬条件: 只有测试/比较段才配图**；总闸 = index.html「🌐 抓取 URL」同行「📷 搜图」开关。
 
