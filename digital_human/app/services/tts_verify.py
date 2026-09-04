@@ -405,6 +405,73 @@ def verify_pronunciation(
         finally:
             bak.unlink(missing_ok=True)
 
+    # ── bleed 邻行修复 (2026-09-05): 批合成 IndexTTS 在 "||"→"，" 边界偶发把
+    # 下句开头念进上段尾部; 静音切分后上段(行N-1)尾带下句句首。行N 因缺开头
+    # 被 ASR 判错音重合成修好, 但 N-1 的 bleed 残留 → 成片"这句话说了两遍"。
+    # 行N 被修复 ⟺ 切分事故两侧同时存在 → 对每个 fixed 行检查其上一行,
+    # 听到下句句首(非本行内容)即重合成 N-1 (单行合成天然无 bleed)。
+    _by_index = {int(s.get("index", -1)): s for s in segments}
+
+    def _han_only(s: str) -> str:
+        return "".join(c for c in (s or "") if _is_han(c))
+
+    for fix in list(report["fixed"]):
+        idx = int(fix["index"])
+        prev = _by_index.get(idx - 1)
+        nxt = _by_index.get(idx)
+        if not prev or not nxt or attempts >= max_fixes:
+            continue
+        prev_text = str(prev.get("text") or "")
+        if sum(1 for c in prev_text if _is_han(c)) < _MIN_HAN_CHARS:
+            continue
+        prev_wav = output_dir / str(prev.get("file") or "")
+        if not prev_wav.exists():
+            continue
+        # 下句句首取 3~5 汉字窗口 (太短误报, 太长 ASR 转写漂移匹配不上)
+        nxt_head = _han_only(nxt.get("text") or "")[:5]
+        if len(nxt_head) < 3:
+            continue
+        try:
+            heard_prev = _asr(prev_wav)
+        except Exception:
+            continue  # 转录故障不挡主流程
+        if not heard_prev:
+            continue
+        hp = _han_only(heard_prev)
+        # bleed 判据: 上行听到了下句句首, 且该片段不在上行自己文本里
+        if nxt_head[:3] not in hp or nxt_head[:3] in _han_only(prev_text)[-8:]:
+            continue
+        _emit(f"行{idx - 1} 尾部串入下句开头「{nxt_head[:3]}…」(批切分 bleed) — 重合成去重", "warn")
+        attempts += 1
+        bak = prev_wav.with_suffix(".wav.bak")
+        try:
+            shutil.copy2(prev_wav, bak)
+            resynth_line(idx - 1, prev_text, prev_text)
+            heard2 = _asr(prev_wav)
+            if heard2 and nxt_head[:3] not in _han_only(heard2) and not _diff_readings(prev_text, heard2):
+                import soundfile as sf
+                try:
+                    dur = round(sf.info(str(prev_wav)).duration, 3)
+                except Exception:
+                    dur = None
+                report["fixed"].append({
+                    "index": idx - 1, "file": prev_wav.name, "text": prev_text[:40],
+                    "diffs": [{"char": nxt_head[0], "expect": "", "heard": "串句bleed"}],
+                    "duration": dur,
+                })
+                _emit(f"行{idx - 1} bleed 已修复", "ok")
+            else:
+                raise RuntimeError("bleed 重合成后仍异常")
+        except Exception as exc:
+            logger.warning("[tts_verify] 行%s bleed 修复失败回滚: %s", idx - 1, exc)
+            try:
+                if bak.exists():
+                    shutil.copy2(bak, prev_wav)
+            except Exception:
+                logger.error("[tts_verify] 行%s 回滚失败, 原音频在 %s", idx - 1, bak)
+        finally:
+            bak.unlink(missing_ok=True)
+
     n_fix, n_bad = len(report["fixed"]), len(report["unresolved"])
     if n_fix or n_bad:
         _emit(f"ASR 回听完成: {report['checked']} 段, 修复 {n_fix}, 待人工 {n_bad}",

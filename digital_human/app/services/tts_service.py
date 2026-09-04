@@ -210,11 +210,22 @@ class TTSService:
                     resynth_line=_resynth_line,
                     on_event=(lambda m, lv: status_callback(m, lv)) if status_callback else None,
                 )
-                # 修复行时长已变 → 同步 AudioFile 行 (调用方稍后 commit)
+                # 修复行时长已变 → 同步 AudioFile 行与 manifest 段, 并重写 manifest.json
+                # (2026-09-05: 只更新 DB 不回写 manifest, 导出按旧时长截段 → 吞尾字;
+                #  下游 jy 轨/字幕 cum 均以 manifest 为时间轴真理源)
+                _touched = False
                 for fix in verify_report.get("fixed", []):
                     for af in audio_files:
                         if af.filename == fix.get("file") and fix.get("duration"):
                             af.duration = fix["duration"]
+                    if fix.get("duration"):
+                        for seg in manifest.get("segments", []):
+                            if seg.get("file") == fix.get("file"):
+                                seg["duration"] = fix["duration"]
+                                _touched = True
+                if _touched:
+                    (output_dir / "manifest.json").write_text(
+                        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
             except Exception as exc:
                 logger.warning("[tts %s] ASR 回听校验跳过: %s", job.id[:8], exc)
                 if status_callback:
