@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>拆书线 · 书籍卡 + 金句卡 · 纸墨系</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,600&family=Noto+Serif+SC:wght@600;700;900&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ── 纸墨系 token: 与杂志风预览页面 (style_gallery_h.html) 完全一致, 零改动 ── */
+  :root{
+    --paper:#F2EEE6;      /* 米白纸感 */
+    --paper-2:#EAE4D8;    /* 深一度的纸 */
+    --ink:#1C1613;        /* 浓缩咖啡墨 */
+    --ink-soft:#3B2424;
+    --taupe:#A1836E;      /* 大地驼 */
+    --rust:#9E4A2F;       /* 锈红点缀 */
+    --hair:rgba(28,22,19,.28);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#171310;color:#EDE7DC;font-family:Manrope,system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;
+       justify-content:center;padding:40px 24px;gap:22px}
+
+  header{text-align:center}
+  header h1{font-family:"Playfair Display",serif;font-weight:700;font-size:26px;letter-spacing:.01em}
+  header h1 em{font-style:italic;color:var(--taupe)}
+  header p{margin-top:8px;color:#B9AE9C;font-size:13px;line-height:1.7}
+
+  /* ── 16:9 舞台: 视口自适应缩放 (JS 设 --k), 卡片恒 1920×1080 ── */
+  .stage{width:min(94vw,94vh*16/9);aspect-ratio:16/9;overflow:hidden;position:relative;
+         border-radius:6px;box-shadow:0 24px 60px rgba(0,0,0,.55);cursor:pointer}
+  .card{width:1920px;height:1080px;transform:scale(var(--k,.5));transform-origin:top left;
+        position:absolute;inset:0;background:var(--paper);color:var(--ink);
+        font-family:"Noto Serif SC",serif;overflow:hidden}
+  .grain{position:absolute;inset:0;opacity:.5;pointer-events:none;
+    background-image:radial-gradient(rgba(28,22,19,.06) 1px,transparent 1px);background-size:5px 5px}
+
+  .rule{height:3px;background:var(--ink);transform-origin:left}
+  .rule.thin{height:1px;background:var(--hair)}
+  .caps{font-family:Manrope,sans-serif;font-weight:700;letter-spacing:.34em;text-transform:uppercase}
+
+  /* ── 动效: 载入播一遍 ≤2s 定格; 悬停舞台重播 (同预览页约定) ── */
+  @keyframes rise{from{opacity:0;transform:translateY(64px)}to{opacity:1;transform:none}}
+  @keyframes riseH{from{opacity:0;transform:translateY(64px)}to{opacity:1;transform:none}}
+  @keyframes slideR{from{opacity:0;transform:translateX(-90px)}to{opacity:1;transform:none}}
+  @keyframes slideRH{from{opacity:0;transform:translateX(-90px)}to{opacity:1;transform:none}}
+  .a{opacity:0;animation:rise .9s cubic-bezier(.2,.7,.2,1) both}
+  .r{opacity:0;animation:slideR 1s cubic-bezier(.2,.7,.2,1) both}
+  .stage:hover .a{animation-name:riseH}
+  .stage:hover .r{animation-name:slideRH}
+  .d1{animation-delay:.15s}.d2{animation-delay:.32s}.d3{animation-delay:.5s}.d4{animation-delay:.68s}.d5{animation-delay:.86s}
+
+  /* ── 08 来源卡衍生 · 纯留白编排: 标签制内容块 (作者/阅读指南/简介/金句) ── */
+  .h8{padding:96px 110px 88px;display:flex;flex-direction:column}
+  .h8 .head{display:flex;justify-content:space-between;align-items:baseline}
+  .h8 .head .caps{font-size:28px}
+  .h8 h2{font-family:"Noto Serif SC",serif;font-weight:900;font-size:88px;letter-spacing:.04em}
+  .h8 .tag{font-family:Manrope,sans-serif;font-weight:700;font-size:21px;
+           letter-spacing:.34em;color:var(--taupe);text-transform:uppercase;flex:none}
+  .h8 .block{margin-top:46px;display:flex;align-items:baseline;gap:44px}
+  .h8 .author .who{font-size:42px;font-weight:700;color:var(--ink);letter-spacing:.02em}
+  .h8 .guide .txt{font-size:34px;font-weight:700;line-height:1.7;color:var(--ink)}
+  .h8 .guide .txt b{color:var(--rust)}
+  .h8 .bio .txt{display:flex;flex-direction:column;gap:20px;font-size:32px;font-weight:600;
+                line-height:1.75;color:var(--ink-soft);flex:1}
+  .h8 .bio .txt b{color:var(--ink);font-weight:700}
+  .h8 .quote .txt{display:flex;flex-direction:column;gap:18px;flex:1}
+  .h8 .quote .txt p{font-size:36px;font-weight:900;line-height:1.6;color:var(--ink)}
+  .h8 .quote .txt p em{font-style:normal;color:var(--rust)}
+  .h8 .tail{margin-top:auto;font-size:26px;color:var(--ink-soft);display:flex;justify-content:space-between;align-items:center}
+  .h8 .tail img{height:120px;width:auto;display:block}
+
+  /* ── 金句卡: 三句书摘 = 内容层, 书名 = 动态, 品牌字 = logo ── */
+  .q{padding:100px 130px 88px;display:flex;flex-direction:column}
+  .q2{background:var(--paper-2)}  /* 金句卡底纸深一度 (同杂志风 05 卡层次) */
+  .q .top{display:flex;justify-content:space-between;align-items:baseline}
+  .q .top .mast{font-family:"Noto Serif SC",serif;font-weight:900;font-size:40px;
+                letter-spacing:.3em;color:var(--ink)}
+  .q .top .from{font-family:"Noto Serif SC",serif;font-weight:700;font-size:28px;
+                letter-spacing:.14em;color:var(--taupe)}
+  .q .wrap{flex:1;display:flex;flex-direction:column;justify-content:center;gap:64px;max-width:1560px}
+  .q blockquote{display:flex;gap:36px;align-items:flex-start}
+  .q blockquote .qm{font-family:Manrope,sans-serif;font-weight:700;font-size:32px;
+                    letter-spacing:.2em;color:var(--taupe);flex:none;transform:translateY(14px)}
+  .q blockquote p{font-size:48px;font-weight:900;line-height:1.62;color:var(--ink)}
+  .q blockquote p em{font-style:normal;color:var(--rust)}
+  .q .tail{font-size:26px;color:var(--ink-soft);display:flex;justify-content:space-between;align-items:center}
+  /* logo: 真素材 PNG (assets/watermark/jingbook_logo.png, 透明底圆章) */
+  .q .logo{height:120px;width:auto;display:block}
+
+  .cap{font-size:12.5px;letter-spacing:.14em;color:#A79B87;text-transform:uppercase;text-align:center}
+  .cap b{color:#E8E0D0;font-weight:700}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>拆书线 · 书籍卡 + 金句卡 <em>Book Line Cards</em></h1>
+  <p>08 来源卡衍生 · 颜色/字体零改动 · 16:9 · 动效 ≤2s 定格 · 悬停重播</p>
+</header>
+
+<div class="stage" id="stage1"><div class="card h8"><div class="grain"></div>
+  <div class="head"><h2 class="r d1">《蛤蟆先生去看心理医生》</h2><span class="caps a">About the Book</span></div>
+  <div class="block author a d2"><span class="tag">作者</span><span class="who">（英）罗伯特·戴博德 著 · 陈赢 译</span></div>
+  <div class="block guide a d3"><span class="tag">指南</span>
+    <div class="txt">通过一个寓言故事，将深奥的<b>「交互分析（TA）」</b>心理学转化为一套可操作的自我觉察与人格重建指南。</div>
+  </div>
+  <div class="block bio a d4"><span class="tag">简介</span>
+    <div class="txt">
+      <p>毕业于<b>剑桥大学赛尔文学院</b>，曾任教于英国亨利商学院；资深心理学研究者和临床实践者。</p>
+      <p>另著有<b>《咨询技巧》《组织的心理分析》</b>两本英国畅销心理学教科书，本书是其最著名的大众心理学著作。</p>
+    </div>
+  </div>
+  <div class="tail a d5"><span>静读书 · 读透一本好书</span>
+    <img src="../assets/watermark/jingbook_logo.png" alt="静读书 logo">
+  </div>
+</div></div>
+<div class="cap"><b>B-08 书籍信息卡</b> · 一书一档 · 书名/品牌/logo = 固定件 · 作者/指南/简介 = 内容层</div>
+
+<div class="stage" id="stage2"><div class="card q q2"><div class="grain"></div>
+  <div class="top"><span class="mast a">静读书 · 书摘</span><span class="from r d1">《蛤蟆先生去看心理医生》</span></div>
+  <div class="wrap">
+    <blockquote class="a d2"><span class="qm">01</span>
+      <p>心理咨询向来是<em>一个自发的过程</em>，咨询师和来访者双方都得出于自愿。</p>
+    </blockquote>
+    <blockquote class="a d3"><span class="qm">02</span>
+      <p>必须完成的事情，<em>唯有靠他自己</em>才能完成。</p>
+    </blockquote>
+    <blockquote class="a d4"><span class="qm">03</span>
+      <p>不是<em>发自内心</em>的东西，就不能带来真正的改变。</p>
+    </blockquote>
+  </div>
+  <div class="tail a d5"><span>静读书 · 读透一本好书</span>
+    <img class="logo" src="../assets/watermark/jingbook_logo.png" alt="静读书 logo">
+  </div>
+</div></div>
+<div class="cap"><b>B-Q1 书摘金句卡</b> · 三句书摘+书名 = 内容层 (L0 原句池 95 句均为书内原文)</div>
+<div class="cap" style="max-width:900px;line-height:2">
+  <b>B-Q1 规则</b>：每集 3 句 · 全书 6 集共 18 句<b>不重复</b> · 句长 <b>≥12 字</b>（L0 池 92 句合格, 最短句 9 字）<br>
+  <b>摆位</b>：PPT 全页（含"下期见"原尾页，原视觉+结尾口播照旧）→ B-Q1 倒数第二 · 4-5 秒 · 静音 → B-08 书籍卡垫最后 · 静音<br>
+  <b>音效</b>：两卡入场各挂 title_in 族 whoosh（效仿财经线末卡同帧 sfx，出鞘刀/waooe/旌旗飘一下/唰 轮换）<br>
+  <b>分工</b>：选句 = 创作层 episode_gen（按集主题从 L0 原句池选, 存 Episode.quotes_json）· 摆位/渲染 = 剪映线 ppt_pipeline（无导演 LLM 参与拆书线）
+</div>
+
+<script>
+  // 每个舞台各自适配: --k = 舞台宽 / 1920
+  const fit = () => document.querySelectorAll(".stage").forEach(st =>
+    st.querySelector(".card").style.setProperty("--k", st.clientWidth / 1920));
+  addEventListener("resize", fit); fit();
+</script>
+</body>
+</html>

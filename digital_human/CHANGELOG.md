@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-09-05｜拆书线尾卡双卡入产线 (B-08/B-Q1) + 金句选句 + 品牌改静读书
+
+**触发**: 尾页升级拍板 (版式源 `.tmp/style_gallery` 系 style_book_card.html)。完整记录: `docs/improvements/已完成-20260905-拆书线尾卡双卡入产线.md`。
+
+- **双卡**: `hf-bookinfo-v1` (书名/作者/指南/简介) + `hf-bookquote-v1` (三句书摘 01/02/03 + 锈红关键短语) — 老书籍卡 hf-source-v1 退役; 摆位 = PPT 全页照旧 → B-Q1 (4.5s 静音, title_in whoosh) → B-08 (5s 静音, whoosh) 垫底
+- **金句规则**: 每集 3 句 × 6 集 18 句不重复 / ≥12 字 / 逐字出自 L0「可引用原句」池 (95 句调查在册); 选句 = 确定性二元组重合打分 (`book_service/quotes.py`, 集口播引用过的句子天然高分), Episode.quotes_json 新列已回填 6 集
+- **logo**: 原图 base64 2.5M 字符超 schema maxLength 实锤 → `_logo_data_uri` 降采样 240px (180K) 注入
+- **品牌**: 静姐读书 → **静读书** (角标/卡片/尾注); template_filler 新键 11 个 (logo_b64 跳净标点 — data URI 含 `;`)
+- 验证: fill/playwright 烟测 + 真机渲染两卡 completed + RapidOCR 末帧全内容上屏
+
+---
+
 ## 2026-09-05｜HF 身份句/收尾互动卡入产线 + 引用逐字闸门 + 模板接线八处定稿
 
 **触发**: 杂志风纸墨系补齐 06/07 两卡; 途中两次产线事故把「新模板接线」定型为**八处清单**。完整记录: `docs/improvements/已完成-20260905-HF身份互动卡入产线与逐字闸门.md`。
