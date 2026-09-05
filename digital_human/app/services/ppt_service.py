@@ -291,6 +291,10 @@ def parse_pptx(path: str | Path) -> list[Slide]:
         texts: list[str] = []
         for sid, shape in enumerate(slide.shapes):
             try:
+                # 千问 AIGC 水印 (2026-09-05): 千问导出 pptx 统一形状名 WatermarkAigc
+                # (右下角小图), 跳过不渲染 — sid 照常计数保 z-order
+                if "watermark" in (shape.name or "").lower():
+                    continue
                 if shape.has_text_frame and shape.text_frame.text.strip():
                     txt = shape.text_frame.text.strip()
                     texts.append(txt)
@@ -357,6 +361,18 @@ def parse_pptx(path: str | Path) -> list[Slide]:
             image_blocks=image_blocks, shape_blocks=shape_blocks,
             background_b64=bg, bg_above_shape_id=bg_above_shape_id, notes=notes,
         ))
+
+    # 相邻页尾句去重 (2026-09-05): 千问生成 pptx 偶发把结尾句同时写进倒数两页
+    # 备注 (ep1 实锤: 第7页备注末尾带"我是静，下期见", 第8页整页又是它 →
+    # 倒数第二页音频尾+末页音频各说一遍)。本页备注以下一页备注整句收尾 → 截掉。
+    for a, b in zip(slides, slides[1:]):
+        if not a.notes or not b.notes:
+            continue
+        na, nb = a.notes.rstrip(), b.notes.rstrip()
+        if len(nb) >= 8 and na.endswith(nb):
+            a.notes = na[: -len(nb)].rstrip()
+            logger.info("[ppt] 页%d 备注尾句与页%d 重复, 已截去 %d 字",
+                        a.index, b.index, len(nb))
     return slides
 
 
