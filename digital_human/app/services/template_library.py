@@ -526,6 +526,60 @@ TEMPLATES: dict[str, dict] = {
             "additionalProperties": True,
         },
     },
+    # ── 拆书线尾卡双卡 (2026-09-05, 版式源 .tmp/style_book_card.html 拍板) ──
+    "hf-bookinfo-v1": {
+        # B-08 书籍信息卡: 一书一档, author/guide/bio 由 ppt_pipeline 从
+        # book_projects (author/author_bio) + input_json 全书核心主张 注入
+        "version": "1.0.0",
+        "composition_id": "hf_bookinfo_v1",
+        "source_dir": "hf_bookinfo_v1",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 10],
+        "required_input": ["title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "author": {"type": "string", "maxLength": 128},
+                "guide": {"type": "string", "maxLength": 200},
+                "bio": {"type": "string", "maxLength": 600},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "logo_b64": {"type": "string", "maxLength": 2000000},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 10},
+            },
+            "required": ["title"],
+            "additionalProperties": True,
+        },
+    },
+    "hf-bookquote-v1": {
+        # B-Q1 书摘金句卡: 每集 3 句 (Episode.quotes_json, 全书 6 集不重复,
+        # 句长 ≥12 字), kN = 句内锈红关键短语 (须为 qN 子串)
+        "version": "1.0.0",
+        "composition_id": "hf_bookquote_v1",
+        "source_dir": "hf_bookquote_v1",
+        "index_html": "index.html",
+        "avatar_asset": None,
+        "duration_sec_range": [4, 8],
+        "required_input": ["book_title"],
+        "json_schema": {
+            "type": "object",
+            "properties": {
+                "book_title": {"type": "string", "minLength": 1, "maxLength": 96},
+                "q1": {"type": "string", "maxLength": 120},
+                "q2": {"type": "string", "maxLength": 120},
+                "q3": {"type": "string", "maxLength": 120},
+                "k1": {"type": "string", "maxLength": 60},
+                "k2": {"type": "string", "maxLength": 60},
+                "k3": {"type": "string", "maxLength": 60},
+                "brand_name": {"type": "string", "maxLength": 64},
+                "logo_b64": {"type": "string", "maxLength": 2000000},
+                "duration_sec": {"type": "integer", "minimum": 4, "maximum": 8},
+            },
+            "required": ["book_title"],
+            "additionalProperties": True,
+        },
+    },
 }
 
 

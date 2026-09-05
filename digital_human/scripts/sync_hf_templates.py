@@ -21,7 +21,7 @@ logger = logging.getLogger("sync_hf_templates")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "templates" / "hf_prep_v3"
 TEMPLATE_DIRS = ["hf_title_v3", "hf_chart_v3", "hf_quote_v2", "hf_source_v2",
-                 "hf_identity_v1", "hf_follow_v1"]
+                 "hf_identity_v1", "hf_follow_v1", "hf_bookinfo_v1", "hf_bookquote_v1"]
 
 
 def _target_root() -> Path:

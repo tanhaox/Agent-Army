@@ -256,7 +256,7 @@ def _add_disclaimer(script: Any, pages: list[dict], disclaimer_text: str) -> int
 
 
 def _add_series_badge(script: Any, pages: list[dict], badge_text: str, page_indices: list[int]) -> int:
-    """系列角标 (2026-08-21): 左上角, '静姐读书:《书名》第X集，更多请主页观看'.
+    """系列角标 (2026-08-21): 左上角, '静读书:《书名》第X集，更多请主页观看'.
 
     在指定页(第2页/末页)全程亮起, 字号=字幕(_SUBTITLE_SIZE=5), 呼吸闪烁(闪烁 循环动画).
     """
@@ -335,6 +335,16 @@ def export_element_draft(
         if dur > 0:
             script.add_segment(draft_mod.AudioSegment(str(audio_path), _trange_sec(0, dur)), "voice")
 
+    # 尾卡入场音效 (2026-09-05 拆书线): sfx=title_in 的页 (B-Q1/B-08 尾卡)
+    # 挂 title_in 族 whoosh 同帧 — 效仿财经线末卡 (job_draft _TITLE_IN_SOUNDS)
+    _card_sfx_i = 0
+    try:
+        from app.services.jy_draft_service.common import _TITLE_IN_SOUNDS
+        from app.services.jy_draft_service.sfx import attach_sound, sound_path
+        _title_in_avail = [s for s in _TITLE_IN_SOUNDS if sound_path(s)]
+    except Exception:
+        _title_in_avail = []
+
     mat_cache: dict[str, draft_mod.VideoMaterial] = {}
     n_base = n_elem = 0
     n_audio = 0
@@ -350,6 +360,15 @@ def export_element_draft(
         start_us = int(round(float(pg["start_sec"]) * _US))
         dur_us = int(round(float(pg["duration_sec"]) * _US))
         layers = pg.get("layers", [])
+
+        # 尾卡入场 whoosh (2026-09-05): 同帧挂 sfx 轨
+        if _title_in_avail and pg.get("sfx") == "title_in":
+            try:
+                attach_sound(script, "sfx", _title_in_avail[_card_sfx_i % len(_title_in_avail)],
+                             start_us / _US)
+                _card_sfx_i += 1
+            except Exception as exc:
+                logger.warning("[jy_export] 尾卡音效失败: %s", exc)
 
         # 逐页音频段 (如有) → voice 轨
         pg_audio = pg.get("audio_file")
@@ -418,7 +437,7 @@ def export_element_draft(
     # 系列角标 (左上角, 第2页+末页, 呼吸闪烁)
     n_badge = 0
     if book_title:
-        badge_text = f"静姐读书：《{book_title}》第{ep_index or '?'}集，更多请主页观看。"
+        badge_text = f"静读书：《{book_title}》第{ep_index or '?'}集，更多请主页观看。"
         if len(pages) > 2:
             n_badge = _add_series_badge(script, pages, badge_text, [1, len(pages) - 1])
         elif pages:

@@ -27,6 +27,8 @@ class BookProject(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
     book_title: Mapped[str] = mapped_column(String(256), nullable=False)
     author: Mapped[str | None] = mapped_column(String(256), default=None)
+    # 作者简介 (2026-09-05 用户令: 尾页卡不要出版社/ISBN, 要简介; 豆瓣元数据补)
+    author_bio: Mapped[str | None] = mapped_column(String(1024), default=None)
     publisher: Mapped[str | None] = mapped_column(String(256), default=None)
     isbn: Mapped[str | None] = mapped_column(String(64), default=None)
     # 小黄车: 商品链接/封面(外部AI设计)/卖点一句话 — 发布时生成挂车清单用
@@ -71,6 +73,9 @@ class Episode(Base):
     roadmap_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
     script_text: Mapped[str | None] = mapped_column(Text, default=None)
     coverage_json: Mapped[list[Any] | None] = mapped_column(JSON, default=list)  # 知识点覆盖清单
+    # 书摘金句 3 句 (2026-09-05 B-Q1 卡): [{text, key}×3] — L0 原句池逐字选取,
+    # 全书 6 集不重复, 句长 ≥12 字; 由创作层 episode_gen 选取落库
+    quotes_json: Mapped[list[Any] | None] = mapped_column(JSON, default=list)
     target_duration_sec: Mapped[float] = mapped_column(Float, default=600.0)  # 弹性标签基准
     # 进产线桥接 (2026-08-19): 确认后生成 Script+segments, 复用 TTS/导演/合成/JY 全链
     script_id: Mapped[str | None] = mapped_column(String(36), default=None)

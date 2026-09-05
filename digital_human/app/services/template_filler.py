@@ -78,6 +78,14 @@ _SAFE_KEYS = frozenset(
         # 收尾互动卡 (hf-follow-v1, 2026-09-05): 口号两句 + FOLLOW
         "slogan",
         "follow_word",
+        # 拆书线尾卡双卡 (2026-09-05): 书籍卡 + 书摘金句卡
+        "book_title",
+        "author",
+        "guide",
+        "bio",
+        "q1", "q2", "q3",
+        "k1", "k2", "k3",
+        "logo_b64",
     }
 )
 
@@ -170,15 +178,26 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
     subs["identity_body"] = str(input_data.get("identity_body", ""))
     subs["slogan"] = str(input_data.get("slogan", ""))
     subs["follow_word"] = str(input_data.get("follow_word", ""))
+    # 拆书线尾卡 (2026-09-05): 书籍卡 + 书摘金句卡
+    subs["book_title"] = str(input_data.get("book_title", ""))
+    subs["author"] = str(input_data.get("author", ""))
+    subs["guide"] = str(input_data.get("guide", ""))
+    subs["bio"] = str(input_data.get("bio", ""))
+    for i in (1, 2, 3):
+        subs[f"q{i}"] = str(input_data.get(f"q{i}", ""))
+        subs[f"k{i}"] = str(input_data.get(f"k{i}", ""))
+    subs["logo_b64"] = str(input_data.get("logo_b64", ""))
 
     # 净标点 + 转义收口
     for k in list(subs):
         v = subs[k]
-        if k == "duration_sec" or k == "portrait_b64":
+        if k == "duration_sec" or k == "portrait_b64" or k == "logo_b64":
             continue
-        if k in ("quote_body", "identity_body", "slogan"):
-            # 金句/自介/口号原串保留标点 (2026-09-04 编辑风: 断行/节奏靠 ，。、),
-            # 仅 HTML 转义防注入 — 与 v2 回退互不影响 (v1 模板不读此键)
+        if k in ("quote_body", "identity_body", "slogan",
+                 "author", "guide", "bio", "q1", "q2", "q3",
+                 "k1", "k2", "k3"):
+            # 金句/自介/口号/书卡文本原串保留标点 (2026-09-04~05 编辑风:
+            # 断行/书名号/引号都是版式的一部分), 仅 HTML 转义防注入
             subs[k] = _html_escape(v)
         elif k in _JSON_SUBS:
             try:

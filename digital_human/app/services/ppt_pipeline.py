@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -298,15 +299,35 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 seg_wav_map = {af.segment_id: af.file_path for af in audio_files
                                if af.segment_id and af.file_path and Path(af.file_path).exists()}
             element_pages: list[dict] = []  # jy2: 逐页层+编排数据
-            # 尾页书籍信息卡 (2026-09-03): 绑书且有元数据时预渲染, 替换原尾页
-            # 画面 (口播/时长/字幕不变). 时长仅影响卡内动画停留, 取末页窗口估计.
-            book_card = None
+            # 尾卡双卡 (2026-09-05 拍板): PPT 全页照旧 (原"下期见"尾页承载结尾
+            # 口播) → B-Q1 书摘金句卡 (倒数第二, 4-5s 静音) → B-08 书籍信息卡
+            # (垫底, 静音)。两卡入场挂 title_in whoosh (效仿财经末卡)。
+            tail_cards: list[dict] = []
             if mode == "jy2" and bound.get("book_id"):
-                t_last = max(timings, key=lambda t: float(t.get("end", 0))) if timings else None
-                last_dur = max(1.0, float(t_last["end"]) - float(t_last["start"])) if t_last else 6.0
-                book_card = _render_book_card(db, bound["book_id"], workdir, last_dur)
-                if book_card:
-                    _evt(job_id, "尾页书籍信息卡就绪 (作者/出版社/ISBN)", "ok")
+                from app.models import BookProject, Episode
+                book = db.query(BookProject).filter(
+                    BookProject.id == bound["book_id"]).first()
+                ep_row = None
+                if book:
+                    ep_row = db.query(Episode).filter(
+                        Episode.book_id == book.id,
+                        Episode.ep_index == int(bound.get("ep_index") or 1),
+                    ).first()
+                total_end = max((float(t.get("end", 0)) for t in (timings or [])), default=0.0)
+                if book and ep_row:
+                    qi = _build_bookquote_input(db, book, ep_row, 5)
+                    if qi:
+                        png = _render_card_png(db, "hf-bookquote-v1", qi, workdir, "quote_card.png")
+                        if png:
+                            tail_cards.append({"png": png, "dur": 4.5, "label": "B-Q1 书摘金句卡"})
+                if book:
+                    bi = _build_bookinfo_input(book, 5)
+                    if bi:
+                        png = _render_card_png(db, "hf-bookinfo-v1", bi, workdir, "book_card.png")
+                        if png:
+                            tail_cards.append({"png": png, "dur": 5.0, "label": "B-08 书籍信息卡"})
+                if tail_cards:
+                    _evt(job_id, "尾卡就绪: " + " + ".join(c["label"] for c in tail_cards), "ok")
             for i, s in enumerate(slides):
                 if bound.get("cancel"):
                     raise _Cancelled()
@@ -332,18 +353,6 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     from app.services.jy_draft_service import compute_page_timing
                     pd = workdir / "layers" / f"p{s.index:02d}"
                     pd.mkdir(parents=True, exist_ok=True)
-
-                    # 尾页替换 (2026-09-03): 书籍信息卡整页设计, 只留 base 层,
-                    # 原尾页文字层不叠加; 口播/字幕照旧.
-                    if i == len(slides) - 1 and book_card:
-                        element_pages.append({
-                            "start_sec": round(start, 3), "duration_sec": round(dur, 3),
-                            "audio_file": seg_wav_map.get(seg_id), "narration": s.notes or "",
-                            "layers": [{"kind": "base", "file": str(book_card)}],
-                        })
-                        _evt(job_id, f"元素层 {s.index}/{len(slides)} (尾页=书籍信息卡, {dur:.1f}s)",
-                             "ok", progress=f"{s.index}/{len(slides)}")
-                        continue
 
                     def _cap(name: str, html_txt: str) -> Path:
                         (pd / f"{name}.html").write_text(html_txt, encoding="utf-8")
@@ -382,6 +391,16 @@ def _run_ppt_pipeline(job_id: str) -> None:
                                       "duration_sec": round(dur, 3), "notes": s.notes})
                 _evt(job_id, f"渲染页 {s.index}/{len(slides)} ({dur:.1f}s)", "info",
                      progress=f"{s.index}/{len(slides)}")
+
+            # 尾卡双卡摆位 (2026-09-05): PPT 之后静音追加, B-Q1 → B-08 垫底
+            for c in tail_cards:
+                element_pages.append({
+                    "start_sec": round(total_end, 3), "duration_sec": c["dur"],
+                    "audio_file": None, "narration": "",
+                    "layers": [{"kind": "base", "file": str(c["png"])}],
+                    "sfx": "title_in",
+                })
+                total_end += c["dur"]
 
             # 存元数据: 供剪映草稿导出 / 后续复用
             meta = {"slides": len(slides), "clips": clip_meta, "audio": combined_path,
@@ -473,57 +492,127 @@ def _run_ppt_pipeline(job_id: str) -> None:
             "done" if not j.get("error") else "failed")
 
 
-def _render_book_card(db, book_id: str, workdir: Path, page_dur: float) -> Path | None:
-    """尾页书籍信息卡 (2026-09-03): hf-source-v1 渲《书名》+作者/出版社/ISBN.
+def _logo_data_uri() -> str:
+    """静读书 logo (透明 PNG) → data URI (拆书线尾卡固定件).
 
-    学新闻线片尾来源声明卡 (director _append_source_slot → hf-source-v1):
-    无口播信息页承载元数据, 替换拆书 PPT 原尾页 ("下期见"页信息量低).
-    书库元数据缺 (无作者/出版社/ISBN) 或渲染/抽帧失败 → None,
-    调用方回退原尾页不阻断.
+    原图 1004px/1.8MB → base64 2.5M 字符超 json_schema maxLength;
+    显示位仅 120px 高 → 降采样 240px (2x) 足清, ~几十 KB。
     """
+    import base64
+    import io
+    from app.services.jy_draft_service.watermark import WATERMARK_ASSET
     try:
-        from app.models import BookProject, VisualRenderJob
+        if not WATERMARK_ASSET.exists():
+            return ""
+        from PIL import Image
+        im = Image.open(WATERMARK_ASSET)
+        im.thumbnail((240, 240), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="PNG", optimize=True)
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception as exc:
+        logger.warning("[ppt] logo 读取失败: %s", exc)
+        return ""
+
+
+def _render_card_png(db, template_id: str, input_data: dict, workdir: Path,
+                     out_name: str) -> Path | None:
+    """通用卡渲染: VisualRenderJob → mp4 → 抽稳定末帧 PNG (尾卡静态帧)."""
+    try:
+        from app.models import VisualRenderJob
         from app.services.visual_render_service import execute_visual_render_job
         from app.infrastructure.ffmpeg import run_ffmpeg
 
-        book = db.query(BookProject).filter(BookProject.id == book_id).first()
-        if not book:
-            return None
-        sources = []
-        if book.author:
-            sources.append({"media": "作者", "title": str(book.author)[:60]})
-        if book.publisher:
-            sources.append({"media": "出版社", "title": str(book.publisher)[:60]})
-        if book.isbn:
-            sources.append({"media": "ISBN", "title": str(book.isbn)[:60]})
-        if not sources:
-            return None
-        dur = max(4, min(10, round(page_dur)))
-        input_data = {
-            "title": f"《{book.book_title}》"[:64],
-            "sources": sources[:5],
-            "disclaimer": "静姐读书 · 读透一本好书",
-            "brand_name": "静姐读书",
-            "duration_sec": dur,
-        }
-        job = VisualRenderJob(template_id="hf-source-v1", input_json=input_data, status="queued")
+        job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
         db.add(job); db.commit(); db.refresh(job)
-        result = execute_visual_render_job(db, job.id, "hf-source-v1", input_data)
+        result = execute_visual_render_job(db, job.id, template_id, input_data)
         if result.get("status") != "completed":
-            logger.warning("[ppt] 书籍信息卡渲染失败: %s", result.get("error_message"))
+            logger.warning("[ppt] %s 渲染失败: %s", template_id, result.get("error_message"))
             return None
         mp4 = Path(result.get("output_path") or "")
         if not mp4.exists():
             return None
-        out = workdir / "book_card.png"
-        # 抽稳定末帧 (模板动画 ~2.4s 完成, 末帧为静止完稿画面)
+        dur = float(input_data.get("duration_sec") or 5)
+        out = workdir / out_name
         run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error",
                     "-ss", str(max(0.0, dur - 0.5)), "-i", str(mp4),
                     "-frames:v", "1", str(out)], timeout=60)
         return out if out.exists() else None
     except Exception as exc:
-        logger.warning("[ppt %s] 书籍信息卡渲染失败(回退原尾页): %s", book_id, exc)
+        logger.warning("[ppt] %s 渲染异常: %s", template_id, exc)
         return None
+
+
+def _build_bookinfo_input(book, page_dur: float) -> dict | None:
+    """B-08 书籍信息卡输入 (2026-09-05 拍板版): 书名/作者/指南/简介 + 静读书品牌."""
+    import re as _re
+    ij = book.input_json if isinstance(book.input_json, dict) else {}
+    guide = ""
+    claim = ij.get("全书核心主张")
+    if isinstance(claim, dict):
+        guide = str(claim.get("value") or "")[:200]
+    # 简介行: 按 。； 打包 ≤60 字/行, ||| 分段 (≤3 段, 与模板契约一致)
+    bio_lines: list[str] = []
+    bio = (getattr(book, "author_bio", "") or "").strip()
+    if bio:
+        cur = ""
+        for sent in _re.split(r"(?<=[。；])", bio):
+            if not sent:
+                continue
+            if len(cur) + len(sent) <= 60:
+                cur += sent
+            else:
+                if cur:
+                    bio_lines.append(cur)
+                cur = sent if len(sent) <= 60 else sent[:59] + "…"
+        if cur:
+            bio_lines.append(cur)
+    if not (book.author or guide or bio_lines):
+        return None
+    return {
+        "title": f"《{book.book_title}》"[:64],
+        "author": (book.author or "")[:128],
+        "guide": guide,
+        "bio": "|||".join(bio_lines[:3]),
+        "brand_name": "静读书",
+        "logo_b64": _logo_data_uri(),
+        "duration_sec": max(4, min(10, round(page_dur))),
+    }
+
+
+def _build_bookquote_input(db, book, ep, page_dur: float) -> dict | None:
+    """B-Q1 书摘金句卡输入: 本集 3 句 (quotes_json, 缺则确定性选句回填)."""
+    try:
+        from app.services.book_service.quotes import ensure_episode_quotes
+        quotes = ensure_episode_quotes(db, book, ep)
+    except Exception as exc:
+        logger.warning("[ppt] 选句失败 (B-Q1 跳过): %s", exc)
+        return None
+    if len(quotes) < 3:
+        return None
+    data = {"book_title": f"《{book.book_title}》"[:96],
+            "brand_name": "静读书",
+            "logo_b64": _logo_data_uri(),
+            "duration_sec": max(4, min(8, round(page_dur)))}
+    for i in range(3):
+        data[f"q{i+1}"] = str(quotes[i].get("text") or "")[:120]
+        data[f"k{i+1}"] = str(quotes[i].get("key") or "")[:60]
+    return data
+
+
+def _render_book_card(db, book_id: str, workdir: Path, page_dur: float) -> Path | None:
+    """尾页卡片渲染入口 (2026-09-05 改版): B-08 书籍信息卡 (hf-bookinfo-v1).
+
+    旧 hf-source-v1 (来源行版, 静姐读书) 退役; 版式源 .tmp/style_book_card.html。
+    """
+    from app.models import BookProject
+    book = db.query(BookProject).filter(BookProject.id == book_id).first()
+    if not book:
+        return None
+    input_data = _build_bookinfo_input(book, page_dur)
+    if not input_data:
+        return None
+    return _render_card_png(db, "hf-bookinfo-v1", input_data, workdir, "book_card.png")
 
 
 def _concat_with_audio(clip_paths: list[Path], audio_path: str | None,
