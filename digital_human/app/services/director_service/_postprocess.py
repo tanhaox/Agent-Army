@@ -315,6 +315,37 @@ def _append_source_slot(db: Session, plan: Any, script: Any, total_duration: flo
                 _SOURCE_CARD_DURATION, subtitle[:60])
 
 
+def _enforce_track_gates(db: Session, job: DirectorJob, plan: Any) -> None:
+    """赛道闸门 (2026-09-05): hf_identity/hf_follow 财经线(tech)专用。
+
+    提示词写了"地缘线禁选"但 geo 稿照规划 (job 2d4ebcf8 实锤) — LLM 提示词
+    是软约束; 执行层 _require_tech_track 虽会拒绝, 但 slot 先红一次 (用户
+    手点重试还会再红一次)。这里规划期确定性降级 broll_pexels, evidence 闸门
+    同款 (params.fallback_reason 记因)。track 口径与 hf.py _slot_track 一致
+    (script.article.track, 缺省 tech)。
+    """
+    gated = [s for s in plan.slots if s.workflow in ("hf_identity", "hf_follow")]
+    if not gated:
+        return
+    script = getattr(job, "script", None)
+    track = ((script.article.track if script and script.article else None) or "tech").strip().lower()
+    if track == "tech":
+        return
+    demoted: list[str] = []
+    for s in gated:
+        wf = s.workflow
+        s.workflow = "broll_pexels"
+        s.visual_type = "broll_pexels"
+        s.params = {**(s.params or {}),
+                    "fallback_reason": f"track_gate: {wf} 仅财经线可用 (当前 track={track}), 降级"}
+        demoted.append(f"#{s.slot_index}({wf})")
+    logger.info("[director] track gate: track=%s, demoted %d -> %s",
+                track, len(demoted), "; ".join(demoted))
+    append_trace(db, job, "track_gate", "done",
+                 f"赛道闸门: track={track}, 降级 {len(demoted)} 个 tech 专用卡\n"
+                 + "\n".join(demoted[:8]))
+
+
 def _enforce_evidence_gates(db: Session, job: DirectorJob, plan: Any) -> None:
     """证据图三道闸门 (2026-09-04 管线④, 用户硬条件的代码防线).
 
@@ -421,6 +452,8 @@ def _persist_plan(
     script_title: str | None,
 ) -> None:
     """plan 落库 (保留既有 trace) + slots 持久化."""
+    # 赛道闸门 (2026-09-05): tech 专用卡 (hf_identity/hf_follow) geo 稿规划期降级
+    _enforce_track_gates(db, job, plan)
     # 证据图闸门 (2026-09-04 管线④): 落库前降级不合格 evidence slot
     _enforce_evidence_gates(db, job, plan)
     # pexels 缺词兜底 (2026-09-04): 在闸门后跑 — evidence 降级来的 broll 槽一并覆盖
