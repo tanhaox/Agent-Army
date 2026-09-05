@@ -324,6 +324,7 @@ def verify_pronunciation(
     report: dict[str, Any] = {
         "checked": 0, "suspect_lines": [], "fixed": [], "unresolved": [],
     }
+    _heard_cache: dict[int, str] = {}  # idx → ASR 文本 (bleed 全量扫描复用)
     segments = manifest.get("segments") or []
     if not segments:
         return report
@@ -350,6 +351,7 @@ def verify_pronunciation(
             break
         if not heard or not _pinyin_pairs(heard):
             continue
+        _heard_cache[idx] = heard  # bleed 扫描复用 (不再重复转录)
         diffs = _diff_readings(text, heard)
         if not diffs:
             continue
@@ -405,41 +407,36 @@ def verify_pronunciation(
         finally:
             bak.unlink(missing_ok=True)
 
-    # ── bleed 邻行修复 (2026-09-05): 批合成 IndexTTS 在 "||"→"，" 边界偶发把
-    # 下句开头念进上段尾部; 静音切分后上段(行N-1)尾带下句句首。行N 因缺开头
-    # 被 ASR 判错音重合成修好, 但 N-1 的 bleed 残留 → 成片"这句话说了两遍"。
-    # 行N 被修复 ⟺ 切分事故两侧同时存在 → 对每个 fixed 行检查其上一行,
-    # 听到下句句首(非本行内容)即重合成 N-1 (单行合成天然无 bleed)。
+    # ── bleed 邻行独立全量扫描 (2026-09-05 二次实锤改版): 批合成 IndexTTS 在
+    # "||"→"，" 边界偶发把下句开头念进上段尾部; 静音切分后上段(行N-1)尾带下句
+    # 句首 → 成片"这句话说了两遍"。原实现只在行 N 被错音修复后才查 N-1 —
+    # 018 行 ASR 恰把"就业越强"听成"就越强"通过错音校验, 017 的 bleed 漏检
+    # (job 55b5b15c "就业越强说两次" 实锤)。改版: 主循环 ASR 全量留存, 对
+    # 全部相邻行对独立判 bleed, 不依赖错音触发。
     _by_index = {int(s.get("index", -1)): s for s in segments}
 
     def _han_only(s: str) -> str:
         return "".join(c for c in (s or "") if _is_han(c))
 
-    for fix in list(report["fixed"]):
-        idx = int(fix["index"])
+    for seg in segments:
+        idx = int(seg.get("index", -1))
         prev = _by_index.get(idx - 1)
-        nxt = _by_index.get(idx)
-        if not prev or not nxt or attempts >= max_fixes:
+        if not prev or idx - 1 not in _heard_cache or attempts >= max_fixes:
             continue
         prev_text = str(prev.get("text") or "")
         if sum(1 for c in prev_text if _is_han(c)) < _MIN_HAN_CHARS:
             continue
-        prev_wav = output_dir / str(prev.get("file") or "")
-        if not prev_wav.exists():
-            continue
         # 下句句首取 3~5 汉字窗口 (太短误报, 太长 ASR 转写漂移匹配不上)
-        nxt_head = _han_only(nxt.get("text") or "")[:5]
+        nxt_head = _han_only(seg.get("text") or "")[:5]
         if len(nxt_head) < 3:
             continue
-        try:
-            heard_prev = _asr(prev_wav)
-        except Exception:
-            continue  # 转录故障不挡主流程
-        if not heard_prev:
-            continue
-        hp = _han_only(heard_prev)
+        hp = _han_only(_heard_cache[idx - 1])
         # bleed 判据: 上行听到了下句句首, 且该片段不在上行自己文本里
-        if nxt_head[:3] not in hp or nxt_head[:3] in _han_only(prev_text)[-8:]:
+        # (全文任意位置查 — 口癖/排比重复不算 bleed, 宁可漏检不误重合成)
+        if nxt_head[:3] not in hp or nxt_head[:3] in _han_only(prev_text):
+            continue
+        prev_wav = output_dir / str(prev.get("file") or "")
+        if not prev_wav.exists():
             continue
         _emit(f"行{idx - 1} 尾部串入下句开头「{nxt_head[:3]}…」(批切分 bleed) — 重合成去重", "warn")
         attempts += 1
