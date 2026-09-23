@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""证据图管线② — 扫图 / 质检 / 选图 (2026-09-04).
+"""证据图管线② — 扫图 / 质检 / 选图 .
 
 链路位置: 管线① (url_fetcher.extract_images, 抓取时顺手提 URL) 之后 —
 素材包条目页候选图 → 下载缓存 → 9B VLM 打标 → 合格图池 → 段级匹配选图。
@@ -62,6 +62,14 @@ _CLAIM_KW = re.compile(
 _CLAIM_CMP = re.compile(
     r"比[^，。；！？、\s]{0,8}?(高|快|强|便宜|贵|低|慢|多|少|好|大|小|领先)"
 )
+# 事实来源信号 (0909 新闻线): 事件/声明/引语段直接构成证据论断 — 本人推文、
+# 公开信、公告、辞职回应等, 无须数字+比较双条件 (旧规则按跑分文设计,
+# "连辞两家"稿全篇 0 命中 → 证据图全降级)。
+_NEWS_KW = re.compile(
+    r"声明|宣布|辞职|离职|裸辞|公开信|推文|推特|发帖|发文|回应|证实|否认|"
+    r"澄清|曝光|爆料|文件|邮件|公告|备忘录|名单|截图|采访|受访|喊话|"
+    r"坦言|放话|说了一句|一句狠话|原话"
+)
 _CLAIM_NUM = re.compile(r"[\d零一二三四五六七八九十百千万亿两]")
 # "一"字词素剥离: 一样/一下/一般…及功能计数词 (一个/一条/一点点/第一张牌)
 # 的"一"不是数据数字, 不然中文几乎句句有"一" (真机 Gemini 稿 21/106 段漏判实证)
@@ -73,13 +81,14 @@ _NUM_MORPHEME = re.compile(
 # ── VLM 打标 ──
 _VLM_SYSTEM = "你是短视频素材编辑，正在验收从新闻页面抓来的截图，判断它能不能当'证据图'放进成片（给口播里的测试成绩/对比数据/价格当画面证据）。只输出一行 JSON，不要其他文字。"
 _VLM_USER = """看这张图，输出:
-{"is_chart": <true|false>, "kind": "<benchmark|leaderboard|price|comparison|screenshot|photo|other>", "desc_zh": "<不超过40字的中文描述，说清图上是什么数据>", "numbers": [<图上能看到的数字，原样字符串，最多8个>], "quality": <1-10 画质分>, "watermark": "<none|corner|heavy>"}
+{"is_chart": <true|false>, "kind": "<benchmark|leaderboard|price|comparison|screenshot|photo|other>", "desc_zh": "<不超过40字的中文描述，说清图上是什么数据>", "numbers": [<图上能看到的数字，原样字符串，最多8个>], "quality": <1-10 画质分>, "watermark": "<none|corner|heavy>", "has_source": <true|false>}
 
 判定:
 - is_chart=true 仅限: 榜单/跑分/基准结果图、参数对比表、价格页截图、性能测试曲线、新闻数据图表
 - is_chart=false: 广告banner、表情包、头像、产品渲染图(无数据)、纯风景/人物照片、页面导航截图
 - watermark=heavy: 大面积水印/马赛克盖住数据 (corner=角落水印可接受)
-- quality 按"截图数字清不清楚"打: 模糊到看不清数字 ≤3"""
+- quality 按"截图数字清不清楚"打: 模糊到看不清数字 ≤3
+- has_source=true 仅限: 图上能看到**发布平台的界面元素或机构标识** — 社交平台账号(头像/用户名/平台UI框架/点赞转发栏)、机构logo/信头、带URL的浏览器页面。⚠ 文档自身的标题页/署名/日期/人数**不算出处** (任何人都可排版伪造, 信服力等于自制卡片) — 裸封面页/裸标题图/纯排版文字一律 = false"""
 
 _vlm_client: Any = None
 _vlm_ready = False
@@ -140,9 +149,13 @@ def _parse_vlm_json(raw: str) -> dict[str, Any] | None:
     watermark = str(data.get("watermark") or "none")
     if watermark not in {"none", "corner", "heavy"}:
         watermark = "corner"
+    has_source = data.get("has_source")
+    if not isinstance(has_source, bool):
+        has_source = False
     return {
         "is_chart": bool(data.get("is_chart")),
         "kind": kind,
+        "has_source": has_source,
         "desc_zh": str(data.get("desc_zh") or "")[:60],
         "numbers": [str(n).strip() for n in numbers if str(n).strip()][:8],
         "quality": max(0, min(10, quality)),
@@ -235,10 +248,12 @@ def _has_scan_product(item: MaterialItem) -> bool:
 
     - add_item 抓取时存的 URL 级 images_json (只有 {url,alt,w,h}) → 未扫, 恰是待扫对象
     - 首扫遇 VLM 预算耗尽/服务挂 (vlm:null) → 未扫完, 手动补扫可重试这些图
+    - 0910 出处闸: 旧标签缺 has_source 字段 → 视为未扫完, 补扫一次即迁移
     """
     entries = item.images_json or []
     return bool(entries) and all(
-        isinstance(e, dict) and e.get("local_path") and isinstance(e.get("vlm"), dict)
+        isinstance(e, dict) and e.get("local_path")
+        and isinstance(e.get("vlm"), dict) and "has_source" in e["vlm"]
         for e in entries
     )
 
@@ -400,9 +415,14 @@ def collect_evidence_pool(db: Session, script: Any) -> list[dict[str, Any]]:
             vlm = e.get("vlm") if isinstance(e, dict) else None
             if not isinstance(vlm, dict):
                 continue
-            # 入池 (2026-09-05 风格页定稿放宽): 表格/榜单类 (is_chart) 或实物图
-            # (kind=photo) — 推文截图等杂图仍不入池
-            if not vlm.get("is_chart") and vlm.get("kind") != "photo":
+            # 入池 (2026-09-05 风格页定稿放宽; 0909 新闻线再放宽; 0910 出处闸):
+            # 表格/榜单、实物图 或 事实截图 (推文/公开信/声明)。截图类必须
+            # has_source (可指认出处: 账号/平台UI/机构抬头/URL) — 裸文字截图
+            # 信服力等于自制 HF 卡, 放了白占画面 (0910 用户实锤: 员工声明
+            # 封面页/文章头图两张)。杂图防线交给 quality≥4 + watermark 闸。
+            if not vlm.get("is_chart") and vlm.get("kind") not in ("photo", "screenshot"):
+                continue
+            if vlm.get("kind") == "screenshot" and not vlm.get("has_source"):
                 continue
             if not isinstance(vlm.get("quality"), (int, float)) or vlm["quality"] < _MIN_QUALITY:
                 continue
@@ -423,10 +443,14 @@ def collect_evidence_pool(db: Session, script: Any) -> list[dict[str, Any]]:
 
 
 def is_evidence_claim(text: str) -> bool:
-    """用户硬条件的代码闸门: 段落含数字 且 命中测试/比较语义.
-    "考了七十三点七" ✓ / "便宜到像白送" ✗ (无数字) / "第六周" ✗ (数字无比较)."""
+    """证据论断闸门: 事实来源段 (声明/推文/公开信…, _NEWS_KW) 直接过;
+    其余走原双条件 — 含数字 且 命中测试/比较语义.
+    "考了七十三点七" ✓ / "便宜到像白送" ✗ (无数字) / "第六周" ✗ (数字无比较) /
+    "他发推宣布离职" ✓ ."""
     if not text:
         return False
+    if _NEWS_KW.search(text):
+        return True
     if not _CLAIM_NUM.search(_NUM_MORPHEME.sub("", text)):
         return False
     return bool(_CLAIM_KW.search(text) or _CLAIM_CMP.search(text))
@@ -473,6 +497,9 @@ _KIND_SIGNALS: list[tuple[str, re.Pattern[str]]] = [
     ("leaderboard", re.compile(r"榜单|排名|排第|榜首|第一|垫底")),
     ("benchmark", re.compile(r"基准|跑分|测试|评测|评分|成绩|满分")),
     ("comparison", re.compile(r"对比|比较|相比|反超|领先|超过|碾压")),
+    # 0909 新闻线: 事件/声明/引语文本 ↔ screenshot 图 (VLM kind 词表对齐,
+    # 否则 kind_bonus 永不触发 — VLM 只产 photo/screenshot/chart/other)
+    ("screenshot", re.compile(r"推文|推特|声明|公开信|公告|辞职|离职|发帖|发文|回应|截图|采访|受访|邮件|文件")),
 ]
 
 

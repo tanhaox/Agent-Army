@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import warnings
 from contextlib import asynccontextmanager
@@ -16,8 +17,8 @@ from .config import Config, load_config, set_config
 from .database import init_db
 from .models import AudioJob, Host, Voice, DirectorJob
 from .routers import (
-    articles, audio, books, comfyui, digital_human_video, hosts, jobs, library, materials, personas, ppt,
-    roles,
+    anim, articles, audio, books, comfyui, digital_human_video, hosts, jobs, library, materials, personas, ppt,
+    reverse, roles,
     scripts, tagging, tts_services, visual_render, voices,
 )
 from .routers.director_routes import router as director_router
@@ -348,6 +349,43 @@ def create_app() -> FastAPI:
             await self.app(scope, receive, send_with_no_cache)
 
     app.add_middleware(NoCacheWebMiddleware)
+
+    # 0919 anim 严格 CSP (已替换上线): anim.html/anim.css/anim/ 三前缀精确圈定。
+    # 其余 /web 页 (books 等) 有内联脚本, 不可扩大范围。
+    # 回滚开关 (env ANIM_RF_CSP): 1=强制(默认) / report=仅上报不拦截 / 0=完全关闭。
+    # 页面被 CSP 打坏时: ANIM_RF_CSP=0 重启即恢复, 无需改代码。
+    _csp_mode = os.environ.get("ANIM_RF_CSP", "1")
+    _anim_csp_paths = ("/web/anim.html", "/web/anim.css", "/web/anim/")
+    _anim_rf_csp = (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; "
+        "connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'none'"
+    )
+
+    class AnimRfCspMiddleware:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if (_csp_mode == "0" or scope["type"] != "http"
+                    or not scope.get("path", "").startswith(_anim_csp_paths)):
+                await self.app(scope, receive, send)
+                return
+
+            _header = (b"content-security-policy-report-only" if _csp_mode == "report"
+                       else b"content-security-policy")
+
+            async def send_with_csp(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers", []))
+                    headers.append((_header, _anim_rf_csp.encode()))
+                    message = {**message, "headers": headers}
+                await send(message)
+
+            await self.app(scope, receive, send_with_csp)
+
+    app.add_middleware(AnimRfCspMiddleware)
     app.include_router(articles.router)
     app.include_router(scripts.router)
     app.include_router(audio.router)
@@ -360,12 +398,14 @@ def create_app() -> FastAPI:
     app.include_router(visual_render.router)
     app.include_router(director_router)
     app.include_router(library.router)
+    app.include_router(reverse.router)
     app.include_router(tagging.router)
     app.include_router(personas.router)
     app.include_router(tts_services.router)
     app.include_router(materials.router)
     app.include_router(books.router)
     app.include_router(ppt.router)
+    app.include_router(anim.router)
 
     # Convenience redirect: /api/templates → /api/visual-render/templates
     @app.get("/api/templates")

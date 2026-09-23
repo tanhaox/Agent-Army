@@ -43,6 +43,40 @@ def sound_path(name: str) -> Path | None:
     return p if p.exists() else None
 
 
+def sound_loudness(name: str) -> float | None:
+    """音效实测响度 (EBU R128 integrated LUFS, 缓存 _loudness.json).
+
+    0916 统一音量令: 库内文件电平差异大 (Victory 实测过热), 挂载侧按响度
+    归一需要每条实测值; 缺文件/测量失败返回 None (调用方回退原始音量).
+    """
+    import json
+    import re as _re
+    import subprocess as _sp
+
+    cache_p = _SOUNDS_DIR / "_loudness.json"
+    try:
+        cache = json.loads(cache_p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        cache = {}
+    if name in cache:
+        return float(cache[name])
+    p = sound_path(name)
+    if not p:
+        return None
+    r = _sp.run(["ffmpeg", "-i", str(p), "-af", "ebur128", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=30)
+    hits = _re.findall(r"I:\s*(-?[\d.]+)\s*LUFS", r.stderr or "")
+    if not hits:
+        return None
+    val = float(hits[-1])  # 末值 = 终版积分 (首值是积分启动前的 -70 占位)
+    cache[name] = val
+    try:
+        cache_p.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+    return val
+
+
 def attach_sound(script: Any, track_name: str, sound_name: str, at_sec: float,
                  volume: float = 1.0, max_sec: float | None = None) -> bool:
     """往草稿音效轨挂一个音效. 缺文件时记日志返回 False (不阻塞导出).

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>艺术圣经 — 书级视觉身份</title>
+<link rel="stylesheet" href="/web/books.css">
+<style>
+  body{background:#14110d;color:#ece5d8}
+  [hidden]{display:none!important}
+  .flow{display:flex;gap:.4rem;align-items:center;font-size:.78rem;color:#6f665a;margin:.4rem 0 1rem}
+  .flow b{color:#d2a85e}
+  .style-card{display:flex;gap:1rem;align-items:center;background:#1a1714;border:1px solid #332d25;
+    border-radius:8px;padding:.7rem .9rem;margin-bottom:.9rem}
+  .style-card img{width:200px;aspect-ratio:16/9;object-fit:cover;border-radius:5px;border:1px solid #332d25;cursor:zoom-in}
+  .style-card .sname{font-size:1rem;color:#e6c078;font-weight:600}
+  .style-card .sdesc{font-size:.76rem;color:#a2988a;line-height:1.5;margin-top:.25rem}
+  .style-card .slora{font-size:.68rem;color:#6f665a;margin-top:.3rem;font-family:Consolas,monospace}
+  label{font-size:.76rem;color:#a2988a;margin:.7rem 0 .25rem;display:block}
+  label small{color:#6f665a;margin-left:.4rem}
+  textarea{width:100%;background:#14110d;color:#ece5d8;border:1px solid #332d25;border-radius:5px;
+    padding:.5rem .6rem;font-size:.85rem;font-family:inherit;box-sizing:border-box}
+  textarea:focus{outline:none;border-color:#d2a85e}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 1.2rem}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr}}
+  .banner{margin:.6rem 0;padding:.55rem .9rem;border-radius:6px;font-size:.85rem}
+  .banner.ok{background:#14532d;color:#bbf7d0;border:1px solid #166534}
+  .banner.warn{background:#3d2a0f;color:#fcd34d;border:1px solid #7c5a12}
+  .busy{color:#e6c078;font-size:.82rem}
+  .samples{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.7rem;margin-top:.7rem}
+  .samples .sc{border:1px solid #332d25;border-radius:6px;overflow:hidden;background:#1a1714}
+  .samples img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;cursor:zoom-in}
+  .samples .cap{font-size:.68rem;color:#a2988a;padding:.3rem .5rem;border-top:1px solid #332d25}
+  #live{font-size:.72rem;color:#a2988a;background:#1a1714;border:1px solid #332d25;border-radius:6px;
+    padding:.5rem .7rem;margin-top:.6rem;line-height:1.8;max-height:150px;overflow:auto;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">Pipeline<span>Studio</span></div>
+  <a href="/web/books.html">拆书</a>
+  <div class="spacer"></div>
+  <a href="/docs" target="_blank">API Docs</a>
+</nav>
+<div class="container">
+  <div class="panel">
+    <h2>📖 艺术圣经 <span class="badge" id="bk">…</span></h2>
+    <div class="flow">大纲跑完 ➜ <b>风格选型</b> ➜ <b>艺术圣经</b> (本书统一视觉配方) ➜ 分镜开工</div>
+    <div class="banner warn" id="gate" hidden></div>
+    <div id="main" hidden>
+      <div id="style-card"></div>
+      <div class="toolbar">
+        <button id="btn-gen" onclick="gen(false)">✨ 生成圣经</button>
+        <button id="btn-reroll" class="secondary" onclick="gen(true)" title="无视缓存重掷一版 (色板/质感方向会变)">🎲 重掷</button>
+        <button id="btn-samples" class="sm" onclick="startSamples()">🎨 圣经试渲</button>
+        <button class="sm warn" onclick="save()">💾 保存手调</button>
+        <span id="busy" class="busy"></span>
+      </div>
+      <div id="live" hidden></div>
+      <label style="margin-top:1rem">样张 — 文字配方到底长什么样
+        <small>试镜镜=选定风格原样张; 试渲=原镜+角色锁定卡+圣经主色 (同镜同种子 A/B)</small></label>
+      <div class="samples" id="samples"></div>
+      <div class="banner warn" id="note" hidden>还没有圣经 — 点【✨ 生成圣经】(读灵魂三问+受众+选定配方)。</div>
+      <div class="grid2" id="fields"></div>
+      <p class="hint" style="margin-top:.8rem">圣经 = 全系列锁定的书级视觉身份; 分镜规划每镜必继承 (含角色锁定卡), 品牌卡吃圣经色板。
+        手调后【💾 保存手调】即生效 (优先于重掷)。试渲约 3-5 分钟, 出图自动过文字守门。</p>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script src="/web/lightbox.js"></script>
+<script>
+/* ── 常量 ── */
+const BOOK = new URLSearchParams(location.search).get('book_id');
+const API  = '/books/' + encodeURIComponent(BOOK) + '/style-bible';
+const FIELDS = [
+  ['style_prefix',   '风格前缀',   'ComfyUI 英文提示词前缀, 每镜必带'],
+  ['color_palette',  '色彩体系',   '主色/辅色/情绪色/禁用色'],
+  ['texture',        '线条与质感', '扁平/厚涂/水彩/3D 选一 + 描述'],
+  ['character_policy','角色出场策略','密度与叙事用法; 人物形态锚'],
+  ['text_graphic',   '大字卡融合', '底色/入场动画风格'],
+  ['mood_keywords',  '氛围关键词', '英文 3-5 个'],
+];
+
+/* ── 工具 ── */
+const $ = id => document.getElementById(id);
+const esc = s => String(s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toast(m){ const t = $('toast'); t.textContent = m; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600); }
+async function api(path, body){
+  const r = await fetch(API + path, body ? {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)} : {method:'POST'});
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(j.detail || r.status);
+  return j;
+}
+
+/* ── 渲染 (纯函数式: 只吃 view, 盘上数据即事实源) ── */
+function render(v){
+  $('bk').textContent = '《' + (v.book_title || '') + '》';
+  if(!v.bound){
+    $('gate').hidden = false;
+    $('gate').innerHTML = '本书尚未选定风格 — 流程: 先 '
+      + `<a href="/web/style_board.html?book_id=${BOOK}" target="_blank">🎨 风格选型</a>`
+      + ', 圣经要吃选定配方的风格家族。';
+    $('main').hidden = true;
+    return;
+  }
+  $('gate').hidden = true;
+  $('main').hidden = false;
+  renderCard(v);
+  renderSamples(v.samples || []);
+  renderFields(v.bible || {});
+  renderBusy(v.job);
+}
+
+function renderCard(v){
+  const r = v.style_recipe || {};
+  const thumb = (v.samples || [])[0];
+  $('style-card').innerHTML = `<div class="style-card">
+    ${thumb ? `<img src="/books/${BOOK}/style-board/img/${encodeURIComponent(thumb)}" onclick="lbOpen(this.src, '试镜镜1')" title="试镜镜1">` : ''}
+    <div><div class="sname">已选风格: ${esc(v.bound)}</div>
+    <div class="sdesc">${esc(r.desc || r.style_prompt_head || '')}</div>
+    <div class="slora">${esc(r.lora || '纯提示词')} @ ${esc(r.lora_strength ?? '')}</div></div></div>`;
+}
+
+function renderSamples(list){
+  const board = list.filter(n => n.startsWith('style'));
+  const bible = list.filter(n => n.startsWith('圣经'));
+  const cell = (n, cap) => `<div class="sc">
+    <img src="/books/${BOOK}/style-board/img/${encodeURIComponent(n)}"
+         onclick="lbOpen(this.src, '${esc(cap)}')" title="${esc(cap)}">
+    <div class="cap">${esc(cap)}</div></div>`;
+  $('samples').innerHTML =
+    board.map((n, i) => cell(n, `试镜镜${i + 1} · 选定风格原样张`)).join('') +
+    bible.map((n, i) => cell(n, `圣经试渲${i + 1} · 原镜+角色卡+主色`)).join('') ||
+    '<span class="hint">无样张 — 先跑风格选型出试镜镜</span>';
+}
+
+function renderFields(b){
+  if(!b.style_prefix){ $('fields').innerHTML = ''; $('note').hidden = false; return; }
+  $('note').hidden = true;
+  $('fields').innerHTML = FIELDS.map(([k, t, h]) =>
+    `<div><label>${t}<small>${h}</small></label>
+     <textarea id="f-${k}" rows="${k === 'style_prefix' ? 3 : 2}">${esc(b[k])}</textarea></div>`).join('');
+}
+
+function renderBusy(j){
+  const el = $('busy');
+  const running = j && j.status === 'running';
+  ['btn-gen', 'btn-reroll', 'btn-samples'].forEach(id => { $(id).disabled = !!running; });
+  if(running){
+    el.textContent = j.kind === 'samples'
+      ? '⏳ 试渲中 (3 张 + 文字守门, 约 3-5 分钟)…'
+      : '⏳ 圣经生成中 (pro 链, 约 0.5-2 分钟)…';
+  } else {
+    el.textContent = '';
+    if(j && j.status === 'error') toast('失败: ' + (j.error || ''));
+  }
+}
+
+/* ── 动作 (弹窗绝迹: 一律 toast + 节流; 网络抖动静默重试) ── */
+let _lastToast = 0;
+function softToast(m){  // 同文案 10s 内只弹一次 (防旧标签页/连点轰炸)
+  const now = Date.now();
+  if(now - _lastToast < 10000) return;
+  _lastToast = now;
+  toast(m);
+}
+async function gen(force){
+  if(force && !confirm('重掷一版圣经? 色板/质感方向会变 (手调未保存将丢)。')) return;
+  try{ const r = await api('/generate', {force}); if(r.id) openSSE(r.id); poll(); }
+  catch(e){ softToast('生成未启动: ' + e.message); }
+}
+async function startSamples(){  // 注: 勿命名 renderSamples — 与渲染函数撞名会被后者覆盖 (今晚实锤)
+  try{ const r = await api('/render-samples'); if(r.id) openSSE(r.id); poll(); }
+  catch(e){
+    if(e.message === 'Failed to fetch'){ softToast('网络波动 (后端重启中?), 稍后自动重试'); timer = setTimeout(poll, 8000); }
+    else softToast('试渲未启动: ' + e.message);
+  }
+}
+async function save(){
+  const b = {};
+  FIELDS.forEach(([k]) => b[k] = $('f-' + k)?.value || '');
+  try{ await api('/save', b); toast('✓ 手调已落盘, 全系列复用'); }
+  catch(e){ softToast('保存失败: ' + e.message); }
+}
+
+/* ── SSE 实时日志: 启动任务或发现 running job 即订阅 /api/jobs/{id}/events ── */
+let es = null;
+function closeSSE(){ if(es){ es.close(); es = null; } }
+function openSSE(id){
+  if(!id || es && es._id === id) return;
+  closeSSE();
+  es = new EventSource('/api/jobs/' + id + '/events');
+  es._id = id;
+  es.onmessage = e => {
+    let d; try{ d = JSON.parse(e.data); }catch{ return; }
+    addLive(d.message || d.type);
+    if(/_(done|error|cancelled)$/.test(d.type || '')){ closeSSE(); poll(); }
+  };
+  es.onerror = () => { closeSSE(); };   // 断流靠轮询兜底
+}
+function addLive(msg){
+  const el = $('live');
+  el.hidden = false;
+  el.textContent += (el.textContent ? '\n' : '') + '· ' + msg;
+  el.scrollTop = el.scrollHeight;
+  while(el.textContent.split('\n').length > 30)
+    el.textContent = el.textContent.split('\n').slice(1).join('\n');
+}
+
+/* ── 轮询: job 只当进度灯, 数据永远从盘读 ── */
+let timer = null;
+async function poll(){
+  clearTimeout(timer);
+  let v;
+  try{ v = await fetch(API).then(r => r.json()); }
+  catch{ timer = setTimeout(poll, 5000); return; }
+  render(v);
+  if(v.job && v.job.status === 'running'){
+    openSSE(v.job.id);
+    timer = setTimeout(poll, v.job.kind === 'samples' ? 4000 : 3000);
+  } else {
+    closeSSE();
+  }
+}
+poll();
+</script>
+</body>
+</html>

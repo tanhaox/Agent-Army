@@ -527,6 +527,101 @@ TEMPLATES: dict[str, dict] = {
         },
     },
     # ── 拆书线尾卡双卡 (2026-09-05, 版式源 .tmp/style_book_card.html 拍板) ──
+    # ── 老谭读书 bs1 族 (2026-09-08, 深空蓝金·13页型; 静读书线不共用) ──
+    "bs1-cover-v1": {
+        "version": "1.0.0", "composition_id": "bs1_cover_v1", "source_dir": "bs1_cover_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 10], "required_input": ["title"],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "ep_tag": {"type": "string"},
+            "book": {"type": "string"}, "brand_tag": {"type": "string"},
+            "logo_b64": {"type": "string"}, "img": {"type": "string"},
+            "duration_sec": {"type": "number"}}},
+    },
+    "bs1-contents-v1": {
+        "version": "1.0.0", "composition_id": "bs1_contents_v1", "source_dir": "bs1_contents_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-chapter-v1": {
+        "version": "1.0.0", "composition_id": "bs1_chapter_v1", "source_dir": "bs1_chapter_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-list-v1": {
+        "version": "1.0.0", "composition_id": "bs1_list_v1", "source_dir": "bs1_list_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-passage-v1": {
+        "version": "1.0.0", "composition_id": "bs1_passage_v1", "source_dir": "bs1_passage_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-compare-v1": {
+        "version": "1.0.0", "composition_id": "bs1_compare_v1", "source_dir": "bs1_compare_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-case-v1": {
+        "version": "1.0.0", "composition_id": "bs1_case_v1", "source_dir": "bs1_case_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-quote-v1": {
+        "version": "1.0.0", "composition_id": "bs1_quote_v1", "source_dir": "bs1_quote_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['quote'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-data-v1": {
+        "version": "1.0.0", "composition_id": "bs1_data_v1", "source_dir": "bs1_data_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-chart-v1": {
+        "version": "1.0.0", "composition_id": "bs1_chart_v1", "source_dir": "bs1_chart_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-outro-v1": {
+        "version": "1.0.0", "composition_id": "bs1_outro_v1", "source_dir": "bs1_outro_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [3, 40], "required_input": ['quote'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-bookquote-v1": {
+        "version": "1.0.0", "composition_id": "bs1_bookquote_v1", "source_dir": "bs1_bookquote_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [4, 8], "required_input": ['book_title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
+    "bs1-bookinfo-v1": {
+        "version": "1.0.0", "composition_id": "bs1_bookinfo_v1", "source_dir": "bs1_bookinfo_v1",
+        "index_html": "index.html", "avatar_asset": None,
+        "duration_sec_range": [4, 10], "required_input": ['title'],
+        "json_schema": {"type": "object", "properties": {
+            "title": {"type": "string"}, "duration_sec": {"type": "number"}}},
+    },
     "hf-bookinfo-v1": {
         # B-08 书籍信息卡: 一书一档, author/guide/bio 由 ppt_pipeline 从
         # book_projects (author/author_bio) + input_json 全书核心主张 注入

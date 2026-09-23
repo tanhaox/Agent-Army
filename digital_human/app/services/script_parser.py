@@ -12,8 +12,12 @@ SegmentType = Literal["opening", "hook", "body", "cta", "ending", "references"]
 
 _SENTENCE_DELIMS = "。！？；"
 
-# 拆书弹性时间标签: 【A-B秒｜段名】, 如 【0-22秒｜钩子】. 生成稿结构标记, 不发音.
-_LABEL_RE = re.compile(r"【\d+-\d+秒｜[^】]+】")
+# 拆书弹性时间标签: 【A-B秒｜段名】/【钩子】/【核心概念拆解（一）｜副题】.
+# 生成稿结构标记, 不发音. 0917 放宽: 时间数字可选 (人工存档【钩子】实锤),
+# 与 book_service.module_map.MODULE_LABEL_RE 同口径 — 任何【】标签行都剥,
+# 含【双评论钩子】等非标准名 (此前带时间版不认 → 会进 TTS 被念出)。
+_LABEL_RE = re.compile(
+    r"【\s*(?:\d+\s*-\s*\d+\s*秒\s*[｜|]\s*)?([^】｜|]+?)\s*(?:[｜|]\s*[^】]+?)?\s*】")
 # 拆书六段名 (与 orchestrator._LABEL_BASE 对齐)
 _BOOK_LABELS = ["钩子", "回顾+引入", "核心概念拆解（一）", "核心概念拆解（二）",
                 "核心概念拆解（三）", "总结+下期预告"]
@@ -202,27 +206,31 @@ def clean_episode_script(script_text: str) -> tuple[str, list[str]]:
     issues: list[str] = []
     lines = script_text.splitlines()
     kept: list[str] = []
-    found: list[str] = []  # 按出现顺序记录标签段名
+    found: list[str] = []  # 按出现顺序记录标签段名 (规范化, 去空白)
     for line in lines:
         m = _LABEL_RE.match(line.strip())
         if m:
-            seg_name = m.group(0).split("｜")[-1].rstrip("】")
-            found.append(seg_name)
+            found.append(re.sub(r"\s+", "", m.group(1) if m.groups() else
+                                m.group(0).split("｜")[-1].rstrip("】")))
             continue  # 标签行不进语音
+        # 打字卡行 (0912 ep1 收益承诺开局): 剪辑层专用文案, 无口播 — 不进 TTS
+        if line.strip().startswith("打字卡：") or line.strip().startswith("打字卡:"):
+            continue
         kept.append(line)
 
-    # 六段校验: 齐全 / 有序 / 无重复
+    # 六段校验: 齐全 / 有序 / 无重复 (0917 段名规范化后比对, 空格变体不再误报)
+    _norm_labels = [re.sub(r"\s+", "", n) for n in _BOOK_LABELS]
     if not found:
         issues.append("缺少六段时间标签 (结构异常, 建议重新生成)")
     else:
         if len(found) != len(set(found)):
             dup = [n for n in found if found.count(n) > 1]
             issues.append(f"时间标签重复: {dict.fromkeys(dup)}")
-        missing = [n for n in _BOOK_LABELS if n not in found]
+        missing = [n for n in _norm_labels if n not in found]
         if missing:
             issues.append(f"缺少时间标签段: {missing}")
-        ordered = [n for n in found if n in _BOOK_LABELS]
-        base_order = [n for n in _BOOK_LABELS if n in found]
+        ordered = [n for n in found if n in _norm_labels]
+        base_order = [n for n in _norm_labels if n in found]
         if ordered != base_order:
             issues.append("时间标签顺序异常 (建议重新生成)")
 

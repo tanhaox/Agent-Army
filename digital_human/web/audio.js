@@ -291,10 +291,28 @@ async function oneStop() {
         const btnOnestop = document.getElementById('btn-onestop');
         if (btnOnestop) btnOnestop.textContent = '🚀 一键成片';
         hideAudioStop();
+        if (data.stale) {
+          // 2026-09-07: 合成期间文稿被改 → 停在音频页警示, 不带着旧音频自动进导演台
+          setStatus('status-audio', data.notice || '⚠ 音频基于旧稿已过期, 请重新点「生成音频」', true);
+          toggle('btn-audio', true);
+          try { localStorage.removeItem('dh_onestop'); } catch (_) {}
+          return;
+        }
         setStatus('status-audio', '音频就绪 — 即将进入导演台自动跑完剩余步骤', false, true);
         if (data.combined_audio) prependCombinedAudio(data.combined_audio);
         loadAudioFiles(job.id);
         try { localStorage.setItem('dh_onestop', '1'); } catch (_) {}
+        if (window._IS_BS1_BOOK) {  // 0908: 老谭线不走导演台 → 回 bs1 工坊生成视频
+          setStatus('status-audio', '音频就绪 — 请试听校验, 然后回「bs1 页单工坊」点生成视频 (TTS 自动复用本页音频)', false, true);
+          try { localStorage.removeItem('dh_onestop'); } catch (_) {}
+          const ctx = _pptBookCtx();
+          const div = document.createElement('div');
+          div.style.cssText = 'margin:0.6rem 0;padding:0.55rem 0.8rem;border-radius:8px;background:rgba(201,162,94,.12);border:1px solid #C9A25E;font-size:0.82rem';
+          div.innerHTML = `📐 音频就绪 (bs1 页单稿) — <a href="/web/bs1_story.html?book_id=${encodeURIComponent(ctx.book_id)}&ep_index=${ctx.ep_index || 1}" style="color:#C9A25E;font-weight:600">回页单工坊 → 生成视频</a>`;
+          const anchor = document.querySelector('.container') || document.body;
+          anchor.prepend(div);
+          return;
+        }
         window.location.href = `/web/director.html?script_id=${encodeURIComponent(currentScript.id)}`
           + (data.combined_audio ? `&audio_id=${encodeURIComponent(data.combined_audio.id)}` : '')
           + '&auto=1';
@@ -329,6 +347,7 @@ async function oneStop() {
 
 // ── ID-019: 公共音频 SSE 处理 ──
 let _audioSSE = null;
+let currentAudioJobId = null;
 function connectAudioSSE(jobId) {
   if (_audioSSE) { _audioSSE.close(); _audioSSE = null; }
   _audioSSE = new EventSource(`${API}/jobs/${jobId}/events`);
@@ -353,15 +372,20 @@ function connectAudioSSE(jobId) {
       loadAudioFiles(jobId);
     } else if (data.type === 'tts_done') {
       _audioSSE.close(); _audioSSE = null;
-      setStatus('status-audio', '音频生成完成', false, true);
       hideAudioStop();
+      toggle('btn-audio', true);
+      if (data.stale) {
+        // 2026-09-07: 合成期间文稿被改, 产物是旧稿 → 红色警示, 不引导进入导演台
+        setStatus('status-audio', data.notice || '⚠ 音频基于旧稿已过期, 请重新点「生成音频」', true);
+      } else {
+        setStatus('status-audio', '音频生成完成', false, true);
+        // 衔接下一步: 带脚本+合并音频跳到视觉导演页自动建任务
+        showDirectorHandoff(currentScript.id, data.combined_audio ? data.combined_audio.id : '');
+      }
       if (data.combined_audio) {
         prependCombinedAudio(data.combined_audio);
       }
       loadAudioFiles(jobId);
-      toggle('btn-audio', true);
-      // 衔接下一步: 带脚本+合并音频跳到视觉导演页自动建任务
-      showDirectorHandoff(currentScript.id, data.combined_audio ? data.combined_audio.id : '');
     } else if (data.type === 'tts_error') {
       _audioSSE.close(); _audioSSE = null;
       setStatus('status-audio', data.error, true);
@@ -417,22 +441,301 @@ async function restoreAudioJobs() {
 
   const completed = jobs.filter(j => j.status === 'completed').slice(0, 3);
   container.innerHTML = '';
-  for (const job of completed) {
-    await loadAudioFiles(job.id);
+  // 0912 修复: 只渲染最新一个 completed — 旧版循环渲染多个, 但 loadAudioFiles 每次
+  // 清空容器, 实际只留最旧那个; 换音色/情绪参考重跑后页面放的是旧音频 (ep1 实锤)
+  if (completed[0]) {
+    await loadAudioFiles(completed[0].id);
   }
 }
 
+// 0912 单行重roll (页面闭环: 人耳发现问题→重生成→自动回听→报告入库)
+const _fileVer = {};  // fileId → 版本戳 (reroll 后换 URL 强制浏览器拉新, 免手动刷新)
 function appendAudioItem(f) {
   const container = document.getElementById('audio-list');
   const div = document.createElement('div');
   div.className = 'audio-item';
-  const label = f.filename + (f.duration ? ` (${f.duration.toFixed(2)}s)` : '');
+  // 0912 降噪 (用户令): 行标签只留行号 (去 .wav/时长), 去下载按钮 — 无效信息清除
+  const label = f.filename.replace(/\.wav$/, '');
+  // 0912 逐字稿接线: 音频行带文本参照; 回听未解决行标红 (人耳复核优先听这些)
+  const flag = f.verify_flag === 'unresolved'
+    ? '<span style="color:#f87171;font-weight:600"> ⚠回听未过</span>'
+    : (f.verify_flag === 'slow'
+      ? '<span style="color:#fb923c;font-weight:600"> ⚠语速&lt;5.3</span>'
+      : (f.verify_flag === 'suspect' ? '<span style="color:#fbbf24"> ⚠嫌疑</span>' : ''));
+  const txt = f.text ? `<div style="flex:1;min-width:220px;font-size:.85rem;color:inherit;opacity:.9">${escapeHtml(f.text)}</div>` : '';
+  // 0912 单行重roll (页面闭环: 人耳发现问题→重生成→自动回听→报告入库)
+  const rerollBtn = f.segment_id
+    ? `<button class="sm" style="padding:2px 10px;font-size:.78rem" onclick="rerollLine('${f.id}', this)">↻重roll</button>` +
+      `<button class="sm secondary" style="padding:2px 8px;font-size:.78rem" onclick="tempoLine('${f.id}', this, 'faster')" title="技术变速 atempo (变速不变调): 每点快~5%, 从原始一次成型零损耗 — TTS2 引擎无语速参数, 这是唯一真生效的加速">⏩加速</button>` +
+      `<button class="sm secondary" style="padding:2px 8px;font-size:.78rem" onclick="tempoLine('${f.id}', this, 'slower')" title="减速一档 (x0.95), 回到1.0x自动还原原始">↩减速</button>` +
+      `<button class="sm secondary" style="padding:2px 8px;font-size:.78rem" onclick="tempoLine('${f.id}', this, 'reset')" title="还原原始 take, 清除累计倍率">⟲还原</button>` +
+      `<button class="sm secondary" style="padding:2px 10px;font-size:.78rem;background:#5b21b6" onclick="openSegmentEditor('${f.id}', this)" title="统一编辑: 改字 + 停顿(气口) + 注音 — 一个文本框全搞定">✎编辑</button>` +
+      `<button class="sm warn" style="padding:2px 10px;font-size:.78rem" onclick="muteLine('${f.id}', this)" title="本单移出播放+大段, 并反勾选文稿段 (重生成不再出镜); 恢复=文稿区重新勾选">🔇屏蔽</button>`
+    : '';
+  const v = _fileVer[f.id] ? `?v=${_fileVer[f.id]}` : '';
   div.innerHTML = `
-    <div>${label}</div>
-    <audio controls src="${API}/audio/files/${f.id}/download"></audio>
-    <a href="${API}/audio/files/${f.id}/download" download>下载</a>
+    <div style="min-width:36px">${label}${flag}</div>
+    ${txt}
+    <audio controls src="${API}/audio/files/${f.id}/download${v}"></audio>
+    ${rerollBtn}
   `;
   container.appendChild(div);
+}
+
+// 0912 完整段落音频重拼: 段级 reroll/修复后从当前段重建 full_paragraph
+async function rebuildCombined(jobId, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/jobs/${jobId}/rebuild-combined`);
+    toast(`重拼 ✓ ${r.segments} 段 / ${r.duration}s`, 'success');
+    // 大段文件已换 → 版本戳换 URL, 重渲染立即可听
+    const combinedFile = (await api('GET', `/audio/jobs/${jobId}/files`)).find(x => !x.segment_id);
+    if (combinedFile) _fileVer[combinedFile.id] = Date.now();
+    await loadAudioFiles(jobId);
+  } catch (e) {
+    toast('重拼失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄重拼'; }
+  }
+}
+
+
+// ── 统一段编辑器 (0914 用户令: 改字+注音+停顿合一个文本框) ──────────
+let _editorCtx = null;  // {fileId, btn, textarea, pinyinInput}
+function openSegmentEditor(fileId, btn) {
+  const row = btn.closest('.audio-item');
+  const curText = row ? (row.querySelector('div:nth-child(2)')?.textContent || '') : '';
+  _editorCtx = { fileId, btn };
+  // 剥已有停顿标记后显示 (改完统一加回去, 看见 -0.5s- 干扰编辑)
+  const showText = curText.replace(/-\d+(?:\.\d+)?s-\s*$/gm, '').trimEnd();
+
+  // 复用或创建 modal
+  let ov = document.getElementById('seg-editor');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'seg-editor';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:center;justify-content:center';
+    document.body.appendChild(ov);
+  }
+  ov.innerHTML = `
+    <div style="background:#1e293b;border:1px solid #475569;border-radius:12px;padding:1.2rem 1.4rem;width:min(560px,92vw);max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
+        <b style="font-size:.95rem;color:#e2e8f0">✎ 段编辑 <span style="color:#64748b;font-size:.78rem">改字 · 注音 · 停顿</span></b>
+        <button class="sm" style="background:#475569" onclick="closeSegEditor()">✕</button>
+      </div>
+      <textarea id="seg-edit-text" rows="5"
+        style="width:100%;box-sizing:border-box;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:8px;padding:.6rem;font-size:.88rem;line-height:1.6;resize:vertical"
+        placeholder="直接改字; 任意位置插 -0.5s- 或 -1s- 垫停顿 (光标处, 停顿垫在标记位置)">${showText}</textarea>
+      <div style="display:flex;gap:.4rem;margin-top:.5rem;flex-wrap:wrap">
+        <span style="color:#64748b;font-size:.78rem;align-self:center">气口快插:</span>
+        <button class="sm secondary" style="font-size:.75rem;padding:2px 8px" onclick="insertAtCursor('-0.5s-')">↩ -0.5s-</button>
+        <button class="sm secondary" style="font-size:.75rem;padding:2px 8px" onclick="insertAtCursor('-1s-')">↩ -1s-</button>
+        <span style="color:#475569;font-size:.72rem;align-self:center">问句自动 1.2s · 大段落末自动 1s · -Xs- 光标处生效 (不用手动)</span>
+      </div>
+      <input id="seg-edit-pinyin" type="text"
+        style="width:100%;box-sizing:border-box;margin-top:.5rem;background:#0f172a;color:#fbbf24;border:1px solid #334155;border-radius:8px;padding:.45rem .6rem;font-size:.82rem"
+        placeholder="注音 (可选): 字=拼音 空格分隔, 如 恰=QIA4 份=FEN4 — 系统性读错时用" />
+      <div style="display:flex;justify-content:space-between;margin-top:.8rem">
+        <span style="color:#64748b;font-size:.75rem">改字→三处同步(段/稿/书) · 停顿→合成后垫静音 · 注音→字级拼音标注</span>
+        <button class="sm" style="background:#5b21b6;padding:4px 18px" id="seg-edit-go" onclick="submitSegEditor(this)">重合成</button>
+      </div>
+    </div>`;
+  ov.style.display = 'flex';
+  const ta = document.getElementById('seg-edit-text');
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+function closeSegEditor() {
+  const ov = document.getElementById('seg-editor');
+  if (ov) ov.style.display = 'none';
+  _editorCtx = null;
+}
+
+function insertAtCursor(marker) {
+  const ta = document.getElementById('seg-edit-text');
+  if (!ta) return;
+  const pos = ta.selectionStart;
+  ta.value = ta.value.slice(0, pos) + marker + ta.value.slice(ta.selectionEnd);
+  ta.focus();
+  ta.setSelectionRange(pos + marker.length, pos + marker.length);
+}
+
+async function submitSegEditor(goBtn) {
+  if (!_editorCtx) return;
+  const { fileId, btn } = _editorCtx;
+  const ta = document.getElementById('seg-edit-text');
+  const py = document.getElementById('seg-edit-pinyin');
+  const newText = (ta?.value || '').trim();
+  const pinyinRaw = (py?.value || '').trim();
+
+  // 注音解析: "恰=QIA4 份=FEN4" → {恰:"QIA4", 份:"FEN4"}
+  const annotate = {};
+  if (pinyinRaw) {
+    for (const m of pinyinRaw.matchAll(/([一-鿿])=([A-Z]+\d)/g)) {
+      annotate[m[1]] = m[2];
+    }
+    if (!Object.keys(annotate).length) {
+      toast('注音格式: 字=拼音 (如 恰=QIA4)', 'error');
+      return;
+    }
+  }
+  if (!newText) { toast('文本不能为空', 'error'); return; }
+
+  goBtn.disabled = true; goBtn.textContent = '⏳';
+  try {
+    const payload = { text: newText };
+    if (Object.keys(annotate).length) payload.annotate = annotate;
+    const r = await api('POST', `/audio/files/${fileId}/reroll`, payload);
+    const v = r.verdict || {};
+    const notes = [];
+    if (r.duration) notes.push(`${r.duration}s`);
+    const diff = [...(v.diff || [])];
+    if (diff.length) notes.push(`疑点:${diff.join('/')}`);
+    if (newText.includes('-')) {
+      const pauses = (newText.match(/-(\d+(?:\.\d+)?)s-/g) || []).length;
+      if (pauses) notes.push(`气口×${pauses}`);
+    }
+    if (Object.keys(annotate).length) notes.push(`注音×${Object.keys(annotate).length}`);
+    toast(`${r.file || '段'} 编辑重合成 ✓ ${notes.join(' | ') || '完成'}`, 'success');
+    closeSegEditor();
+    await bustVersions(fileId);
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('编辑重合成失败: ' + e.message, 'error');
+    goBtn.disabled = false; goBtn.textContent = '重合成';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✎编辑'; }
+  }
+}
+
+// 0912 注音重roll: 系统性读错 (重roll无效) → 字+拼音标注重合成; 词级恒定读法自动沉淀词表
+// 格式宽容: "恰 QIA4 饭 FAN4" / "恰QIA4 饭FAN4" / "恰QIA4饭FAN4" / 逗号顿号均可
+async function rerollAnnotated(fileId, btn) {
+  const input = prompt('注音重roll — 输入 字+拼音 (拼音大写+声调数字, 可连写可空格)\n例: 恰QIA4 饭FAN4', '');
+  if (!input) return;
+  const annotate = {};
+  const re = /([^A-Z\s,，、;；])[\s,，、;；]*([A-Z]+[1-5])/g;
+  let m;
+  while ((m = re.exec(input)) !== null) {
+    annotate[m[1]] = m[2];
+  }
+  if (!Object.keys(annotate).length) { toast('格式: 字+拼音 (如 恰QIA4 饭FAN4)', 'error'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/files/${fileId}/reroll`, { annotate });
+    const v = r.verdict || {};
+    const dictNote = r.dict_added ? ` | 词表已沉淀「${r.dict_added}」` : '';
+    toast(`${r.file} 注音重roll ✓ ${r.duration}s${dictNote} | 剩余疑点: ${[...(v.diff || [])].join('/') || '无'}`, 'success');
+    await bustVersions(fileId);
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('注音重roll失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✎注音'; }
+  }
+}
+
+// 0912 行操作后: 单行 + 大段一起换版本戳 — 后端 reroll/mute 已重拼 full_paragraph,
+// 前端不 bust 大段就会吃缓存 (需手动刷新的 bug 根源)
+async function bustVersions(fileId) {
+  _fileVer[fileId] = Date.now();
+  try {
+    const files = await api('GET', `/audio/jobs/${currentAudioJobId}/files`);
+    const c = files.find(x => !x.segment_id);
+    if (c) _fileVer[c.id] = Date.now();
+  } catch (_) {}
+}
+
+// 0912 行屏蔽: 听到就想删的行 — 本单移出 + 文稿段反勾选 (重生成不再出镜)
+async function muteLine(fileId, btn) {
+  const row = btn.closest('.audio-item');
+  const txt = row ? (row.querySelector('div:nth-child(2)')?.textContent || '') : '';
+  if (!confirm(`屏蔽本行? (不再出镜)\n「${txt.slice(0, 40)}」\n\n本单移出播放+大段; 文稿段同步反勾选, 未来重生成也跳过。恢复=文稿区重新勾选该段。`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/files/${fileId}/mute`);
+    toast(`🔇 ${r.file} 已屏蔽`, 'success');
+    await bustVersions(fileId);  // 大段已重拼 — 一起换版本戳
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('屏蔽失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔇屏蔽'; }
+  }
+}
+
+// 0912 改字重roll: 断句/语义歧义类病 (模型把词组解析错逐字拖读) — 改字消歧
+// 改完 Segment/Script/书稿三处同步, 字幕文稿一致
+async function rerollEditText(fileId, btn) {
+  const row = btn.closest('.audio-item');
+  const curText = row ? (row.querySelector('div:nth-child(2)')?.textContent || '') : '';
+  const input = prompt('改字消歧重roll — 修改本行文字 (微调语序/加消歧字, 别大改内容)\n例: 核辐射死人 → 核辐射害死人', curText);
+  if (!input || input === curText) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/files/${fileId}/reroll`, { text: input.trim() });
+    const v = r.verdict || {};
+    toast(`${r.file} 改字重roll ✓ ${r.duration}s | 疑点: ${[...(v.diff || [])].join('/') || '无'}`, 'success');
+    await bustVersions(fileId);
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('改字重roll失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✏改字'; }
+  }
+}
+
+async function rerollLine(fileId, btn, speedFactor) {  if (!confirm(speedFactor === 'accel'
+    ? '⏩加速重合成本行? (累加档: 在当前语速上再快~10%, 逐次叠加, 下限0.5)'
+    : speedFactor
+    ? `按语速系数 ${speedFactor} 重合成本行?`
+    : '重roll 本行? (采样重生成 → 自动回听复检; 语气词/插字/吞字类大概率消失)')) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/files/${fileId}/reroll`,
+                        speedFactor === 'accel' ? { accel: true }
+                        : speedFactor ? { duration_factor: speedFactor } : undefined);
+    const v = r.verdict || {};
+    const issues = [...(v.filler || []), ...(v.insert || []), ...(v.diff || [])];
+    const dfNote = r.df !== undefined ? ` df=${r.df}` : '';
+    const slowNote = v.slow !== undefined && v.slow !== null ? ` ⚠语速${v.slow}<5.3可再⏩` : '';
+    toast(r.ok && !v.diff?.length
+      ? `${r.file} 重roll ✓ ${r.duration}s${dfNote}${slowNote || ' 回听干净'}`
+      : `${r.file} 重roll完成${dfNote}${slowNote}, 回听仍有疑点: ${issues.join('/') || '见报告'} — 可再roll或人工听`, r.ok ? 'success' : 'info');
+    _fileVer[fileId] = Date.now();  // 换 URL → 重渲染后新音频立即可听 (免手动刷新)
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('重roll失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '↻重roll'; }
+  }
+}
+
+
+async function tempoLine(fileId, btn, op) {
+  // 0921 技术变速 (atempo): 即时+可回退的旋钮 — 无 confirm, 点-听-点收敛
+  // Win 锁坑: 播放器流式占用 wav 时服务端换文件被拒 — 先释放全部 <audio>
+  // 连接 (pause+摘src+load 触发 abort), 重渲染后自然换缓存干净的 src
+  document.querySelectorAll('#audio-list audio').forEach(a => {
+    try { a.pause(); a.removeAttribute('src'); a.load(); } catch (_e) {}
+  });
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+  try {
+    const r = await api('POST', `/audio/files/${fileId}/tempo`, { op });
+    const cps = r.cps ? ` ${r.cps}字/s` : '';
+    const cap = r.capped ? ' — 已到1.5x上限, 建议改稿/换anchor' : '';
+    toast(op === 'reset' || r.factor <= 1.0
+      ? `${r.file} ⟲已还原原始 ${r.duration}s${cps}`
+      : `${r.file} ${r.factor.toFixed(2)}x → ${r.duration}s${cps}${cap}`, 'success');
+    _fileVer[fileId] = Date.now();  // 换 URL → 新音频立即可听
+    await loadAudioFiles(currentAudioJobId || '');
+  } catch (e) {
+    toast('变速失败: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false;
+      btn.textContent = op === 'faster' ? '⏩加速' : op === 'slower' ? '↩减速' : '⟲还原'; }
+  }
 }
 
 function prependCombinedAudio(f) {
@@ -444,15 +747,20 @@ function prependCombinedAudio(f) {
   div.style.borderLeft = '3px solid var(--accent)';
   div.style.background = 'rgba(59,130,246,0.06)';
   const label = '🎙️ 完整段落音频' + (f.duration ? ` (${f.duration.toFixed(2)}s)` : '');
+  const jobBtn = (typeof currentAudioJobId === 'string' && currentAudioJobId)
+    ? `<button class="sm" style="padding:2px 10px;font-size:.78rem" onclick="rebuildCombined('${currentAudioJobId}', this)">🔄重拼</button>` : '';
+  const v = _fileVer[f.id] ? `?v=${_fileVer[f.id]}` : '';
   div.innerHTML = `
     <div style="min-width:160px;font-weight:600;color:var(--accent);">${label}</div>
-    <audio controls src="${API}/audio/files/${f.id}/download"></audio>
-    <a href="${API}/audio/files/${f.id}/download" download>下载</a>
+    <audio controls src="${API}/audio/files/${f.id}/download${v}"></audio>
+    ${jobBtn}
+    <a href="${API}/audio/files/${f.id}/download${v}" download>下载</a>
   `;
   container.insertBefore(div, container.firstChild);
 }
 
 async function loadAudioFiles(jobId) {
+  currentAudioJobId = jobId;  // 0912: 单行重roll 后刷新用
   const files = await api('GET', `/audio/jobs/${jobId}/files`);
   const container = document.getElementById('audio-list');
   container.innerHTML = '';
@@ -469,6 +777,7 @@ let directorHandoffTimer = null;
 function showDirectorHandoff(scriptId, audioId) {
   const container = document.getElementById('audio-list');
   if (!container) return;
+  if (window._IS_BS1_BOOK) return;  // 0908: 老谭线不走导演台 (bs1 工坊出片)
   const prev = document.getElementById('director-handoff');
   if (prev) prev.remove();
 
@@ -541,12 +850,34 @@ document.addEventListener('DOMContentLoaded', async () => {
         const sel = document.getElementById('script-select');
         if (sel && [...sel.options].some(o => o.value === scriptId)) sel.value = scriptId;
       } catch (_) { /* 下拉不同步不阻塞 */ }
+      // 0919 陈稿警示 (实锤: 页面回听旧稿音频, 产线已换新稿重合成 — 3.98s 死静音
+      // 漏进动画线两整天才现形): URL script_id ≠ 该集当前稿 → 顶部红条 + 直达当前稿
+      try {
+        const ctx0 = _pptBookCtx();
+        if (ctx0.book_id && ctx0.ep_index) {
+          const bk = await (await fetch('/books/' + encodeURIComponent(ctx0.book_id))).json();
+          const cur = (bk.episodes || []).find(e => String(e.ep) === String(ctx0.ep_index));
+          if (cur && cur.script_id && cur.script_id !== scriptId) {
+            const bar = document.createElement('div');
+            bar.setAttribute('role', 'alert');
+            bar.style.cssText = 'background:#7f1d1d;color:#fecaca;padding:8px 14px;'
+              + 'font-size:13px;font-weight:600;letter-spacing:.3px';
+            bar.innerHTML = '⚠ 此稿已被新稿取代 — 正在听的是旧稿音频 ('
+              + scriptId.slice(0, 8) + '), 产线用的是当前稿 (' + cur.script_id.slice(0, 8) + ')。'
+              + '<a style="color:#fff;text-decoration:underline;font-weight:700" href="/web/audio.html?script_id='
+              + encodeURIComponent(cur.script_id) + '&book_id=' + encodeURIComponent(ctx0.book_id)
+              + '&ep_index=' + encodeURIComponent(ctx0.ep_index) + '">→ 去听当前稿</a>';
+            document.body.prepend(bar);
+          }
+        }
+      } catch (_) { /* 陈稿检查失败不阻塞 */ }
     } catch (e) {
       setStatus('status-audio', '加载脚本失败: ' + e.message, true);
     }
   }
   // PPT 书集上下文 (2026-08-21)
   _refreshPptBookCtx();
+  _syncGotoAnim();  // 动画工坊直达链接
   // 恢复未完成 PPT 任务 (刷新后继续看进度, 不丢 job)
   // 优先 sessionStorage, 其次 URL 参数 ?ppt_job_id= (跨刷新/跨会话手工续看)
   try {
@@ -574,12 +905,45 @@ function _pptBookCtx() {
   return { book_id: p.get('book_id') || '', ep_index: p.get('ep_index') || '' };
 }
 
+// 0916 用户令: 直达动画工坊 (带本书本集; 规划自动吃最新完成音频 — 音频页重生成是原地更新)
+function _syncGotoAnim() {
+  const ctx = _pptBookCtx();
+  const a = document.getElementById('btn-goto-anim');
+  if (!a) return;
+  if (ctx.book_id && ctx.ep_index) {
+    a.href = `/web/anim.html?book_id=${encodeURIComponent(ctx.book_id)}&ep_index=${ctx.ep_index}`;
+  } else {
+    a.style.display = 'none';
+  }
+}
+
 async function _refreshPptBookCtx() {
   const ctx = _pptBookCtx();
   const el = document.getElementById('ppt-bookctx');
   if (!el) return;
   if (!ctx.book_id) { el.textContent = ''; return; }
   let txt = `📖 书 ${ctx.book_id.slice(0, 8)}…` + (ctx.ep_index ? ` · 第${ctx.ep_index}集` : '');
+  // 0908 双产线闸门: 老谭拆书线走 bs1 页单工坊 (探测=bs1/state 放行), 本页 pptx 上传/导演台隐藏
+  try {
+    const probe = await fetch(API + `/ppt/bs1/state?book_id=${encodeURIComponent(ctx.book_id)}&ep_index=${ctx.ep_index || 1}`);
+    if (probe.ok) {
+      window._IS_BS1_BOOK = true;
+      // from_bs1 入口提示 (工坊桥接而来, 听审完回工坊)
+      if (new URLSearchParams(location.search).get('from_bs1') === '1') {
+        const tip = document.createElement('div');
+        tip.style.cssText = 'margin:0.5rem 0;padding:0.5rem 0.8rem;border-radius:8px;background:rgba(201,162,94,.12);border:1px solid #C9A25E;font-size:0.82rem';
+        tip.innerHTML = `📐 <b>bs1 页单稿</b> (页=段) — 生成音频并试听校验后, <a href="/web/bs1_story.html?book_id=${encodeURIComponent(ctx.book_id)}&ep_index=${ctx.ep_index || 1}" style="color:#C9A25E;font-weight:600">回页单工坊 → 生成视频</a> (音频自动复用)`;
+        const c = document.querySelector('.container') || document.body;
+        c.prepend(tip);
+      }
+      const sec = document.querySelector('.ppt-section');
+      if (sec) sec.innerHTML = `<div style="font-size:0.8rem;color:var(--text-muted);padding:0.2rem 0">
+        📐 本书走 <b>bs1 页单工坊</b> 产线 (页单→确认→音视频→剪映草稿, 不经过本页)
+        <a href="/web/bs1_story.html?book_id=${encodeURIComponent(ctx.book_id)}&ep_index=${ctx.ep_index || 1}"
+           style="color:#4ade80">打开工坊 ↗</a></div>`;
+      return;
+    }
+  } catch (_) {}
   try {
     const r = await (await fetch(API + `/ppt/series-skin/${encodeURIComponent(ctx.book_id)}`)).json();
     if (r.has_master) txt += ` ｜ ✅ 已有母本(第${r.master_ep}集), 渲染自动对齐皮肤`;

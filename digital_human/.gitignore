@@ -15,6 +15,7 @@ data/pipeline.db.pre_voice_cleanup_*.bak
 
 # 原始数据 / 临时调试
 data/raw/
+data/zhipu_engine_state.json   # 智谱搜索引擎轮流状态 (运行时)
 tmp/
 
 # 输出产物
@@ -89,3 +90,5 @@ config/siliconflow.yaml
 config/p*_prompt_backup_*.txt
 *.bak
 *.bak_*
+.tmp/
+.zcode/

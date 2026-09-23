@@ -11,10 +11,26 @@ from sqlalchemy.orm import Session
 
 from app.models import DirectorSlot
 from app.services.director_parser import _HOST_FAMILY
+from app.services.slot_workflows.hf_chart import _chart_has_data, _normalize_chart_input
+from app.services.slot_workflows.hf_extract import _extract_hf_content
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["replace_failed_slot"]
+
+
+def _h_fallback_workflow(slot: DirectorSlot) -> str:
+    """broll_pexels → H 线降级目标按数据形态三分 (2026-09-09):
+
+    quote → hf_quote; 有图表数据 → hf_chart; 全无数据 → hf_title。
+    无数据段进 hf_chart 会渲染 470px 巨 "0" ("页面上只有一个字母 o" 实锤),
+    标题卡复用提取的 title/subtitle, 卡面有真实内容。
+    """
+    rc = (slot.params_json or {}).get("render_config") or {}
+    if rc.get("quote"):
+        return "hf_quote"
+    chart = _normalize_chart_input(rc, _extract_hf_content(slot.text_context or ""))
+    return "hf_chart" if _chart_has_data(chart) else "hf_title"
 
 
 def replace_failed_slot(
@@ -48,10 +64,9 @@ def replace_failed_slot(
                 elif slot.workflow in ("hf_chart", "hf_title"):
                     family_priorities = [("h", "hf_chart"), ("c", "host"), ("p", "broll_pexels")]
                 elif slot.workflow == "broll_pexels":
-                    # H 线降级目标按数据形态选 (2026-08-25): render_config 带 quote
-                    # (引用卡数据) → hf_quote; 否则图表线 hf_chart。拿 quote 数据跑
-                    # hf_chart 会渲染空卡 (render_config 无 chart 输入)。
-                    h_wf = "hf_quote" if (slot.params_json or {}).get("render_config", {}).get("quote") else "hf_chart"
+                    # H 线降级目标按数据形态选 (2026-08-25 两分 → 2026-09-09 三分,
+                    # 见 _h_fallback_workflow): 无数据段不再进 hf_chart 渲染空卡巨 0。
+                    h_wf = _h_fallback_workflow(slot)
                     family_priorities = [("p", "broll_pexels"), ("c", "host"), ("h", h_wf)]
                 elif slot.workflow == "evidence_image":
                     # 证据图失败 (池空/无匹配/图坏) → 同性质降级 broll_pexels,

@@ -7,8 +7,30 @@ const $ = id => document.getElementById(String(id).replace(/^#/, ''));
 
 function esc(s) { return (s == null ? '' : String(s)).replace(/[<>&]/g, c => ({ '<':'&lt;', '>':'&gt;', '&':'&amp;' }[c])); }
 
-async function api(path, opts) {
-  const resp = await fetch(path, opts);
+// 0917 用户令: 展示层剥【】段标注 (【0-28 秒｜钩子】等) — 【】为标注专用符号,
+// 生成侧已禁正文使用 (episode_gen 附加指令), 故剥离永不错伤; 仅用于只读展示,
+// 修稿框仍看原文 (标注是 TTS/动画/换钩子的制作数据, 编辑存盘洗掉会断产线)。
+function stripMarks(t) {
+  return String(t == null ? '' : t)
+    .replace(/^【[^】]*】[ \t]*$/gm, '')   // 整行标注 (段标题行) 整行删
+    .replace(/【[^】]*】/g, '')            // 行内残留块
+    .replace(/\n{3,}/g, '\n\n');          // 收起空行
+}
+
+async function api(path, opts, timeoutMs = 12 * 60 * 1000) {
+  // 0908: AbortController 超时 — 后端重启/连接死时 fetch 永挂, 按钮卡死无解;
+  // 长任务 (pro 生成链 2~10 分钟) 12 分钟兜底, 超时解锁按钮并提示
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let resp;
+  try {
+    resp = await fetch(path, { ...opts, signal: ctrl.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('请求超时 (12分钟) — 后端可能已重启, 刷新页面后重试');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) {
     let detail = '';
     try { detail = (await resp.json()).detail || ''; } catch (_) {}
@@ -74,7 +96,16 @@ async function loadBook(id) {
 async function run(path, btn) {
   if (_busy) { toast('有操作进行中，请等待', 'info'); return; }
   _busy = true;
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ 处理中…'; }
+  const isGen = /generate/.test(path);
+  if (btn) {
+    btn.disabled = true;
+    btn.dataset.origLabel = btn.dataset.origLabel || btn.textContent;
+    const t0 = Date.now();
+    btn._timer = setInterval(() => {
+      const m = Math.floor((Date.now() - t0) / 60000), s = Math.floor(((Date.now() - t0) % 60000) / 1000);
+      btn.textContent = isGen && m >= 1 ? `⏳ 生成中 ${m}分${s}秒 (pro 链 2~10 分钟, 勿关页)` : `⏳ 处理中 ${m}:${String(s).padStart(2, '0')}`;
+    }, 1000);
+  }
   try {
     await api(`/books/${BOOKS.cur.id}/${path}`, { method: 'POST' });
     await loadBook(BOOKS.cur.id);
@@ -83,7 +114,11 @@ async function run(path, btn) {
     toast('失败: ' + e.message, 'error');
   } finally {
     _busy = false;
-    if (btn) btn.textContent = btn.dataset.origLabel || btn.textContent;
+    if (btn) {
+      if (btn._timer) { clearInterval(btn._timer); btn._timer = null; }
+      btn.textContent = btn.dataset.origLabel || btn.textContent;
+      btn.disabled = false;
+    }
   }
 }
 
@@ -423,15 +458,27 @@ async function loadLeaderboard() {
 async function loadAll() { await loadLib(); await loadBooks(); await loadPool(); await loadLeaderboard(); await pollDistill(); }
 
 async function openCreate() {
-  // 2026-08-23: 只列全流程蒸馏完成的书 (蒸馏txt + L0 + 全面向), 防「建书空数据」
+  // 0907: 下拉=蒸馏合格即入列 (L0 建后自动补); 人物下拉=拆书账号 (静读书/老谭拆书)
   const r = (await api('/book-sources/ready')).ready || [];
   const sel = $('#c-title');
   if (!r.length) {
-    sel.innerHTML = '<option value="">— 暂无全流程蒸馏完成的书 —</option>';
+    sel.innerHTML = '<option value="">— 暂无蒸馏完成的书 —</option>';
   } else {
-    sel.innerHTML = '<option value="">— 选择全流程蒸馏完成的书 —</option>' +
-      r.map(s => `<option value="${esc(s.path)}">${esc(s.book_title)}</option>`).join('');
+    sel.innerHTML = '<option value="">— 选择蒸馏完成的书 —</option>' +
+      r.map(s => `<option value="${esc(s.path)}">${esc(s.book_title)}${s.l0_ready ? '' : '（L0建后自动补跑）'}</option>`).join('');
   }
+  // 人物下拉: 拆书线 persona (prompt_template 含 book), 默认静读书 (0907 双人物)
+  // ⚠ personas 挂在 /api 前缀下, 而本页 api() 胶水不带前缀 — 这里直连全路径
+  try {
+    const ps = (await api('/api/personas')).filter(p => (p.prompt_template || '').includes('book'));
+    const psel = $('#c-persona');
+    if (ps.length) {
+      psel.innerHTML = ps.map(p => {
+        const tag = p.brand_tag ? ` — ${p.brand_tag}` : '';
+        return `<option value="${esc(p.id)}" ${p.brand_name === '静读书' ? 'selected' : ''}>${esc(p.name)}${esc(tag)}</option>`;
+      }).join('');
+    }
+  } catch (_) { /* 人物加载失败保底静态选项 */ }
   $('#create-modal').classList.add('active');
 }
 
@@ -440,18 +487,20 @@ function closeModal(id) { $(id).classList.remove('active'); }
 async function createBook() {
   const sel = $('#c-title');
   const srcPath = sel.value;
-  if (!srcPath) return alert('请选择全流程蒸馏完成的书');
+  if (!srcPath) return alert('请选择蒸馏完成的书');
+  const personaId = $('#c-persona') ? $('#c-persona').value : '';
+  if (!personaId) return alert('请选择人物 (人设+音色+品牌)');
   const btn = document.querySelector('#create-modal .modal button[onclick="createBook()"]');
   if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
   // 书名: 从蒸馏文件路径取文件名去 .蒸馏.txt
   const fn = srcPath.split(/[\\/]/).pop() || '';
   const bookTitle = fn.replace(/\.蒸馏(\.txt)?$/, '') || '未命名';
-  // 2026-08-23: 作者/卖点自动从蒸馏带出, 弹窗只留商品链接(挂车)+卖点可选
+  // 2026-08-23: 作者/卖点自动从蒸馏带出, 弹窗只留人物(0907)+卖点可选
   const body = {
     book_title: bookTitle.replace(/[《》]/g, ''),
-    cart_url: $('#c-cart').value || null,
     selling_point: $('#c-sell').value || null,
     source_path: srcPath,
+    persona_id: personaId || null,
   };
   try {
     const r = await api('/books', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });

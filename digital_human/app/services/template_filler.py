@@ -78,6 +78,10 @@ _SAFE_KEYS = frozenset(
         # 收尾互动卡 (hf-follow-v1, 2026-09-05): 口号两句 + FOLLOW
         "slogan",
         "follow_word",
+        # 老谭读书 bs1 模板族 (2026-09-08, 13 页型; 两线不互通—静读书仍纸墨系)
+        "foot", "ep_tag", "book", "items", "no", "subtitle", "left", "right",
+        "body", "story", "moral", "stats", "bars", "question", "next", "note",
+        "img", "img_cap", "quote", "quote_src",
         # 拆书线尾卡双卡 (2026-09-05): 书籍卡 + 书摘金句卡
         "book_title",
         "author",
@@ -187,15 +191,25 @@ def _build_substitutions(input_data: dict) -> dict[str, str]:
         subs[f"q{i}"] = str(input_data.get(f"q{i}", ""))
         subs[f"k{i}"] = str(input_data.get(f"k{i}", ""))
     subs["logo_b64"] = str(input_data.get("logo_b64", ""))
+    # bs1 族 (0908): 全键直取 input_data; img/img_cap 与 logo_b64 同类 (data URI 含 :;/+
+    # 会被净标点剥坏), 文本键归 escape-only 组 (杂志编辑风保留标点/分隔符/换行)
+    for _k in ("foot", "ep_tag", "book", "items", "no", "subtitle", "left", "right",
+               "body", "story", "moral", "stats", "bars", "question", "next", "note",
+               "img", "img_cap", "quote", "quote_src"):
+        subs[_k] = str(input_data.get(_k, ""))
 
     # 净标点 + 转义收口
     for k in list(subs):
         v = subs[k]
-        if k == "duration_sec" or k == "portrait_b64" or k == "logo_b64":
+        if k == "duration_sec" or k == "portrait_b64" or k == "logo_b64" or k == "img":
             continue
         if k in ("quote_body", "identity_body", "slogan",
                  "author", "guide", "bio", "q1", "q2", "q3",
-                 "k1", "k2", "k3"):
+                 "k1", "k2", "k3",
+                 # bs1 族 (0908): 标点/分隔符(| |||)/换行/书名号都是版式语义, 仅防注入
+                 "foot", "ep_tag", "book", "items", "no", "subtitle", "left", "right",
+                 "body", "story", "moral", "stats", "bars", "question", "next", "note",
+                 "img_cap", "quote", "quote_src"):
             # 金句/自介/口号/书卡文本原串保留标点 (2026-09-04~05 编辑风:
             # 断行/书名号/引号都是版式的一部分), 仅 HTML 转义防注入
             subs[k] = _html_escape(v)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""素材聚合服务 (2026-08-15) — 七层洗稿的多源素材包.
+"""素材聚合服务  — 七层洗稿的多源素材包.
 
 链路: 批量抓取 URL → 七层覆盖审计 (LLM JSON) → 智谱定向补搜 →
 洗稿时整包按层注入上下文. 解决 7 层模板单篇原文喂不饱 L3~L6
@@ -176,7 +176,7 @@ def build_audit_input(
 ) -> tuple[str, dict[str, int]]:
     """审计 prompt + 主稿 + 编号素材 → (prompt, item_id→编号映射).
 
-    增量模式 (2026-08-25): prev_audit 带 item_numbers 时 — 已审过的 item 只给单行
+    增量模式 : prev_audit 带 item_numbers 时 — 已审过的 item 只给单行
     (编号|标题|已有层), 只有新 item 给全文 → 补搜轮 prompt 从 ~40K 降到 <8K;
     编号沿用上一轮 (新 item 从 max+1 续), item_tags 编号跨轮稳定。
     返回映射供调用方回填 layer_tags (修复旧版按位置反推在 fetch_ok 翻转时错位)。
@@ -241,7 +241,7 @@ def audit_package(
 ) -> dict[str, Any] | None:
     """七层覆盖审计. LLM JSON 输出 → 规整 dict; 解析失败返回 None.
 
-    track (2026-08-16): tech=科技七层 / geo=地缘七层(L6=横向对照与花边), 建稿勾选驱动。
+    track : tech=科技七层 / geo=地缘七层(L6=横向对照与花边), 建稿勾选驱动。
     prev_audit: 上一轮审计 (补搜/加素材后重审时传入).
     - prompt 注入上一轮 applicable 判定, 要求 LLM 保持一致;
     - 代码层强制锁定 applicable = 上一轮值 (LLM 判定在补搜后偶发翻转
@@ -330,7 +330,7 @@ def collect_gap_queries(audit_json: dict[str, Any] | None,
                         research_hints: list[str] | None = None) -> list[str]:
     """缺口层 search_queries 汇总: 仅 applicable 层; 行话过滤、去重、≤70字、cap 6 条.
 
-    research_hints (2026-08-16): 解构层 research 资料清单并入补搜候选池 —
+    research_hints : 解构层 research 资料清单并入补搜候选池 —
     评论层挖出的"编辑该调研什么"直接变成可勾选补搜词 (此前只躺在展示面板).
     带「调研·」前缀区分来源, 计入总 cap.
     """
@@ -369,7 +369,7 @@ def _item_header(item: MaterialItem) -> str:
 
 
 def build_material_context_block(items: list[MaterialItem], audit_json: dict[str, Any] | None) -> str:
-    """洗稿注入块 — 精选制 (2026-08-15 实验结论: 全量注入稀释主题/人设).
+    """洗稿注入块 — 精选制 .
 
     只注入审计标注到 L3~L6 的素材, 每层最多 3 条 (配料表不是自助餐):
     - search 素材: 必须有审计层标注才入, 未归类 = 噪音, 全部丢弃

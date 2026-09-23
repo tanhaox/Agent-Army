@@ -59,11 +59,29 @@ def _run_ppt_pipeline(job_id: str) -> None:
 
             cfg = get_config()
             workdir = _job_workdir(job_id)
-            slides = parse_pptx(workdir / "source.pptx")
-            _evt(job_id, f"解析完成 {len(slides)} 页, 开始建稿", "ok")
+            # bs1 页单产线 (2026-09-08 老谭读书): slides 不来自 pptx, 来自确认版页单
+            # (episodes.bs1_pages_json / job pages); 每页 narration=segment, 渲染用页 PNG。
+            bs1_pages = None
+            if _JOBS.get(job_id, {}).get("mode") == "bs1":
+                from app.services.book_service.slide_render import load_pages
+                bs1_pages = load_pages(workdir)
+                if not bs1_pages:
+                    raise RuntimeError("bs1 页单缺失 (workdir/pages.json), 请重新规划")
+                from app.services.ppt_service import Slide as _Slide
+                slides = [_Slide(index=i + 1, notes=pd.get("narration") or "")
+                          for i, pd in enumerate(bs1_pages)]
+                _evt(job_id, f"bs1 页单 {len(slides)} 页, 开始建稿", "ok")
+            else:
+                slides = parse_pptx(workdir / "source.pptx")
+                _evt(job_id, f"解析完成 {len(slides)} 页, 开始建稿", "ok")
 
             # ── 1. 建 Script: 每页备注台词 = 一个 segment ──
-            host = ensure_book_account(db)
+            # bs1 (0908): 老谭读书账号 (老谭音色) — pptx 链路才是静读书账号
+            from app.services.book_service.persona import ensure_laotan_book_account
+            if _JOBS.get(job_id, {}).get("mode") == "bs1":
+                host = ensure_laotan_book_account(db)
+            else:
+                host = ensure_book_account(db)
             persona = db.query(Persona).filter(Persona.host_id == host.id).first()
             article = Article(title="[拆书PPT]", raw_text="", track="tech")
             db.add(article); db.flush()
@@ -114,8 +132,11 @@ def _run_ppt_pipeline(job_id: str) -> None:
             # 拼音因子 (2026-09-03): <字|PINYIN> 引擎边界改裸拼音输出 (旧缓存=字拼音
             # 双读坏音频), key 掺 py1 自动失效旧标注音频。
             import hashlib as _hl
+            # 0910 修: 引擎因子取真实 backend (旧硬编码 indextts2 令 2.5 与 2 缓存互串)
+            _eng = ("indextts25" if (voice is not None and voice.backend == "indextts25")
+                    else str(getattr(voice, "backend", "") or "indextts2"))
             cache_key = _hl.sha256(
-                ("indextts2+emo+py1" + "\x00" + str(voice_id or "") + "\x00"
+                (_eng + "+emo+py1" + "\x00" + str(voice_id or "") + "\x00"
                  + "\x00".join(seg.text for seg in segments)).encode()
             ).hexdigest()
             cached_job = (
@@ -128,6 +149,13 @@ def _run_ppt_pipeline(job_id: str) -> None:
             combined_af = None
             timings_cache: list[dict] | None = None
             audio_files: list[AudioFile] = []
+            if cached_job:
+                # 0910 修: 命中先验产物在盘 (清场后旧 job 残留 → 复用 = 零音轨草稿)
+                _cj_dir = Path(cached_job.output_dir)
+                _cj_wavs = sorted(_cj_dir.glob("0*.wav")) if _cj_dir.is_dir() else []
+                if len(_cj_wavs) < len(segments):
+                    _evt(job_id, f"TTS 缓存命中但产物缺失 ({len(_cj_wavs)}/{len(segments)} wav), 重新合成", "warn")
+                    cached_job = None
             if cached_job:
                 # 缓存命中: 复用已有音频 + 按时长排时间线 (台词相同, 顺序一致)
                 # 2026-08-21 修复: 之前按 af.id(UUID 随机序) 排序 → 缓存音频段被打乱
@@ -185,7 +213,7 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 # 同源现场标注 (与 TTS 输入完全同文本, 零错配窗口)。拆书线走
                 # 读书版规则 (calm+confident 混合打底 + melancholic 共情,
                 # 2026-09-03 用户定稿); 失败落整篇 calm/2 兜底 (读书人设)。
-                from app.services.pinyin_fix import apply_pinyin_marks, scan_pinyin_hits
+                from app.services.pinyin_fix import tts_adapt, scan_pinyin_hits
                 from app.services.boost_service import (
                     _parse_emotion_annotations,
                     annotate_emotions,
@@ -196,23 +224,35 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 hits = scan_pinyin_hits(clean_text)
                 if hits:
                     _evt(job_id, f"纠音词表命中 {len(hits)} 处: {'、'.join(hits)}", "ok")
-                tts_text = apply_pinyin_marks(clean_text)
+                tts_text = tts_adapt(clean_text)
+                # 情绪 profile 分流 (0908): 静读书=book (calm 打底); 老谭读书=book_laotan
+                # (confident+serious 混合打底 0907 定稿 — 此前硬编码 book, 老谭线拿到
+                # 静读书平静版, 用户实听「基本没什么情绪」实锤)
+                _emo_style = "book_laotan" if _JOBS.get(job_id, {}).get("mode") == "bs1" else "book"
                 emotion_segments = [{"emotion": "calm", "strength": 2, "text": tts_text}]
-                _evt(job_id, "情绪标注中…", "info")
+                if _emo_style == "book_laotan":
+                    emotion_segments = [{"emotion": "confident", "strength": 3, "text": tts_text}]
+                _skip_p5 = voice is not None and getattr(voice, "backend", "") == "indextts25"
+                if _skip_p5:
+                    _evt(job_id, "2.5 情感参考通道, 跳过情绪标注 (韵律=情感参考音频)", "info")
+                else:
+                    _evt(job_id, "情绪标注中…", "info")
                 try:
                     persona_name = ((getattr(host, "stamp_name", None) or host.name)
                                     if host else "静姐")
-                    raw_anno = annotate_emotions(tts_text, persona_name, style="book")
+                    raw_anno = (None if _skip_p5 else
+                                annotate_emotions(tts_text, persona_name, style=_emo_style))
                     parsed = _parse_emotion_annotations(raw_anno) if raw_anno else None
                     if parsed:
                         emotion_segments = parsed
                         _evt(job_id, f"情绪标注完成: {len(parsed)} 段", "ok")
                     else:
-                        _evt(job_id, "情绪标注解析失败, 整篇平静温柔打底(2档)", "warn")
+                        _evt(job_id, ("2.5 通道已跳过标注" if _skip_p5 else
+                                      f"情绪标注解析失败, 整篇兜底打底({_emo_style})"), "warn")
                 except Exception as exc:
                     logger.warning("[ppt %s] emotion annotate failed, fallback calm: %s",
                                    job_id[:8], exc)
-                    _evt(job_id, f"情绪标注失败, 整篇平静温柔打底(2档): {exc}", "warn")
+                    _evt(job_id, f"情绪标注失败, 整篇兜底: {exc}", "warn")
                 if _JOBS.get(job_id, {}).get("cancel"):
                     raise _Cancelled()
 
@@ -264,9 +304,10 @@ def _run_ppt_pipeline(job_id: str) -> None:
 
             # ── 4. 逐页渲染 ──
             # 系列皮肤对齐 (2026-08-21): 非母本集 apply 母本皮肤 (背景/色/字号)
+            # bs1 页单自带版式, 不 apply 皮肤 (0908)
             bound = _JOBS.get(job_id, {})
             skin = None
-            if bound.get("book_id"):
+            if bound.get("book_id") and bs1_pages is None:
                 from app.services.skin_pack_service import load_skin, apply_skin_to_slides, extract_master
                 skin = load_skin(bound["book_id"])
                 if skin and bound.get("ep_index") == skin.master_ep:
@@ -314,20 +355,28 @@ def _run_ppt_pipeline(job_id: str) -> None:
                         Episode.ep_index == int(bound.get("ep_index") or 1),
                     ).first()
                 total_end = max((float(t.get("end", 0)) for t in (timings or [])), default=0.0)
+                # 尾卡模板分流 (0908): 老谭读书=bs1 族, 静读书=hf 纸墨系 (两线不互通)
+                _is_lt = _book_brand(db, book)[0] == "老谭读书" if book else False
+                _tpl_q = "bs1-bookquote-v1" if _is_lt else "hf-bookquote-v1"
+                _tpl_i = "bs1-bookinfo-v1" if _is_lt else "hf-bookinfo-v1"
                 if book and ep_row:
                     qi = _build_bookquote_input(db, book, ep_row, 5)
                     if qi:
-                        png = _render_card_png(db, "hf-bookquote-v1", qi, workdir, "quote_card.png")
+                        png = _render_card_png(db, _tpl_q, qi, workdir, "quote_card.png")
                         if png:
                             tail_cards.append({"png": png, "dur": 4.5, "label": "B-Q1 书摘金句卡"})
                 if book:
-                    bi = _build_bookinfo_input(book, 5)
+                    bi = _build_bookinfo_input(db, book, 5)
                     if bi:
-                        png = _render_card_png(db, "hf-bookinfo-v1", bi, workdir, "book_card.png")
+                        png = _render_card_png(db, _tpl_i, bi, workdir, "book_card.png")
                         if png:
                             tail_cards.append({"png": png, "dur": 5.0, "label": "B-08 书籍信息卡"})
                 if tail_cards:
                     _evt(job_id, "尾卡就绪: " + " + ".join(c["label"] for c in tail_cards), "ok")
+            # bs1 页间大气口 (0910): 0.5s 段落呼吸 (config bs1_page_gap_sec, 0=关)
+            _bs1_gap = (float(getattr(cfg.defaults if hasattr(cfg, "defaults") else cfg, "bs1_page_gap_sec", 0.5))
+                        if mode == "jy2" and bs1_pages is not None else 0.0)
+            _gap_cum = 0.0
             for i, s in enumerate(slides):
                 if bound.get("cancel"):
                     raise _Cancelled()
@@ -335,6 +384,34 @@ def _run_ppt_pipeline(job_id: str) -> None:
                 timing = next((t for t in timings if t.get("segment_id") == seg_id), None)
                 start = timing.get("start", 0.0) if timing else 0.0
                 dur = (timing.get("end") - timing.get("start")) if timing else 6.0
+                if mode == "jy2" and bs1_pages is not None:
+                    # bs1 页: 整幅模板帧单层 base (确认版 PNG 直接消费; 缺失现场补渲染)
+                    # 页间大气口 (0910 用户令): 页窗后移累计间隙, 页时长+间隙=PNG定格,
+                    # 逐页音频照旧摆 start → 尾部自然静音呼吸 (段落级气口)
+                    start += _gap_cum
+                    pd = bs1_pages[i]
+                    png = workdir / pd["png"] if pd.get("png") else None
+                    if png is None or not png.exists():
+                        from app.services.book_service.slide_render import (
+                            build_context as _bc, render_bs1_pages as _rb,
+                        )
+                        _bc_db = db
+                        _ctx = _bc(_bc_db, bound["book_id"], int(bound["ep_index"]))
+                        if _ctx and _rb(bs1_pages, _ctx, workdir, only=[i]):
+                            png = workdir / (bs1_pages[i].get("png") or "")
+                    if png is None or not png.exists():
+                        raise RuntimeError(f"bs1 第 {i+1} 页 PNG 缺失且补渲染失败")
+                    element_pages.append({
+                        "start_sec": round(start, 3),
+                        "duration_sec": round(dur + _bs1_gap, 3),
+                        "audio_file": seg_wav_map.get(seg_id),
+                        "narration": s.notes or "",
+                        "layers": [{"kind": "base", "file": str(png)}],
+                    })
+                    _gap_cum += _bs1_gap
+                    _evt(job_id, f"bs1 页 {i+1}/{len(slides)} ({dur:.1f}s)", "info",
+                         progress=f"{i+1}/{len(slides)}")
+                    continue
                 html = build_slide_html(s, skin=skin)
                 page_dir = workdir / f"page_{s.index:02d}"
                 png = clips_dir / f"page_{s.index:02d}.png"
@@ -395,7 +472,7 @@ def _run_ppt_pipeline(job_id: str) -> None:
             # 尾卡双卡摆位 (2026-09-05): PPT 之后静音追加, B-Q1 → B-08 垫底
             for c in tail_cards:
                 element_pages.append({
-                    "start_sec": round(total_end, 3), "duration_sec": c["dur"],
+                    "start_sec": round(total_end + _gap_cum, 3), "duration_sec": c["dur"],
                     "audio_file": None, "narration": "",
                     "layers": [{"kind": "base", "file": str(c["png"])}],
                     "sfx": "title_in",
@@ -430,8 +507,9 @@ def _run_ppt_pipeline(job_id: str) -> None:
                     disclaimer = ""
                 draft_name = f"PPT_{time.strftime('%Y%m%d_%H%M')}_{job_id[:8]}"
                 _evt(job_id, f"元素级编排 {len(element_pages)} 页 → 剪映草稿…", "info")
-                # 系列角标: 书名 + 集数 (左上角呼吸闪烁)
+                # 系列角标: 书名 + 集数 (左上角呼吸闪烁); 品牌/台标按书的 persona (0907 双人物)
                 book_title = ""
+                book_brand = "静读书"
                 ep_index = bound.get("ep_index")
                 if bound.get("book_id"):
                     try:
@@ -439,19 +517,30 @@ def _run_ppt_pipeline(job_id: str) -> None:
                         bk = db.query(BookProject).filter(BookProject.id == bound["book_id"]).first()
                         if bk:
                             book_title = bk.book_title or ""
+                            book_brand = _book_brand(db, bk)[0]
                     except Exception:
                         book_title = ""
                 try:
                     from app.services.jy_draft_service.watermark import (
                         WATERMARK_ASSET, prepare_watermark,
                     )
-                    logo_png = prepare_watermark()
-                    if not logo_png:
-                        _evt(job_id, "logo 台标跳过 (素材缺失且源 logo 不可达)", "warn")
+                    # 台标资产: 老谭读书用专属 logo (缺失跳过), 其余静读书
+                    _lt_logo = _laotan_book_logo()
+                    if book_brand == "老谭读书" and _lt_logo.exists():
+                        logo_png = str(_lt_logo)
+                    elif book_brand != "老谭读书":
+                        logo_png = prepare_watermark()
+                        if not logo_png:
+                            _evt(job_id, "logo 台标跳过 (素材缺失且源 logo 不可达)", "warn")
+                    else:
+                        logo_png = None
+                        _evt(job_id, "logo 台标跳过 (老谭读书 logo 未落位: "
+                                     "assets/watermark/laotanbook_logo.png)", "warn")
                     draft = export_element_draft(draft_name, element_pages, canvas=(1920, 1080),
                                                  disclaimer=disclaimer,
                                                  book_title=book_title, ep_index=ep_index,
-                                                 watermark=logo_png)
+                                                 watermark=logo_png,
+                                                 book_brand=book_brand)
                     _JOBS[job_id]["draft"] = draft
                     _evt(job_id, f"元素级剪映草稿就绪: {draft['draft_name']} "
                                  f"(base{draft['base_segments']}+元素{draft['element_segments']}"
@@ -492,27 +581,63 @@ def _run_ppt_pipeline(job_id: str) -> None:
             "done" if not j.get("error") else "failed")
 
 
-def _logo_data_uri() -> str:
-    """静读书 logo (透明 PNG) → data URI (拆书线尾卡固定件).
+def _logo_data_uri(asset: Path | None = None) -> str:
+    """拆书线尾卡 logo (透明 PNG) → data URI.
 
     原图 1004px/1.8MB → base64 2.5M 字符超 json_schema maxLength;
     显示位仅 120px 高 → 降采样 240px (2x) 足清, ~几十 KB。
+    asset (2026-09-07 双人物): 缺省静读书 (jingbook_logo.png);
+    老谭读书 = assets/watermark/laotanbook_logo.png (logo 后续提供, 缺失返回空串=卡上无 logo)。
     """
     import base64
     import io
     from app.services.jy_draft_service.watermark import WATERMARK_ASSET
+    src = Path(asset) if asset else WATERMARK_ASSET
     try:
-        if not WATERMARK_ASSET.exists():
+        if not src.exists():
             return ""
         from PIL import Image
-        im = Image.open(WATERMARK_ASSET)
+        im = Image.open(src)
         im.thumbnail((240, 240), Image.LANCZOS)
         buf = io.BytesIO()
         im.save(buf, format="PNG", optimize=True)
         return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
     except Exception as exc:
-        logger.warning("[ppt] logo 读取失败: %s", exc)
+        logger.warning("[ppt] logo 读取失败 (%s): %s", src.name, exc)
         return ""
+
+
+def _laotan_book_logo() -> Path:
+    # 老谭读书 logo 约定路径 (0907 用户: logo 重新生成后落此文件名即自动生效)
+    from app.services.jy_draft_service.watermark import WATERMARK_ASSET
+    return WATERMARK_ASSET.parent / "laotanbook_logo.png"
+
+
+def _book_brand(db, book) -> tuple[str, str]:
+    """书的账号品牌 (2026-09-07 双人物): book.persona_id → (brand_name, logo_data_uri).
+
+    无 persona / 查不到 → 回退静读书 (旧行为)。老谭读书 logo 缺失时 logo 为空串
+    (尾卡无 logo, 文字 brand 照常), logo 文件落位后自动生效。
+    """
+    default = ("静读书", _logo_data_uri())
+    try:
+        ij = book.input_json if isinstance(book.input_json, dict) else {}
+        pid = ij.get("persona_id")
+        if not pid:
+            return default
+        from app.models import Persona
+        persona = db.query(Persona).filter(Persona.id == pid).first()
+        if not persona or not persona.host_id:
+            return default
+        from app.models import Host
+        host = db.query(Host).filter(Host.id == persona.host_id).first()
+        key = (host.persona_key if host else "") or ""
+        if key == "laotan-book":
+            return (persona.brand_name or persona.name, _logo_data_uri(_laotan_book_logo()))
+        return (persona.brand_name or persona.name, _logo_data_uri())
+    except Exception as exc:
+        logger.warning("[ppt] 品牌解析失败, 回退静读书: %s", exc)
+        return default
 
 
 def _render_card_png(db, template_id: str, input_data: dict, workdir: Path,
@@ -543,8 +668,9 @@ def _render_card_png(db, template_id: str, input_data: dict, workdir: Path,
         return None
 
 
-def _build_bookinfo_input(book, page_dur: float) -> dict | None:
-    """B-08 书籍信息卡输入 (2026-09-05 拍板版): 书名/作者/指南/简介 + 静读书品牌."""
+def _build_bookinfo_input(db, book, page_dur: float) -> dict | None:
+    """B-08 书籍信息卡输入 (2026-09-05 拍板版): 书名/作者/指南/简介 + 账号品牌
+    (2026-09-07 双人物: 按书的 persona 解析, 静读书/老谭读书各自品牌+logo)."""
     import re as _re
     ij = book.input_json if isinstance(book.input_json, dict) else {}
     guide = ""
@@ -569,13 +695,14 @@ def _build_bookinfo_input(book, page_dur: float) -> dict | None:
             bio_lines.append(cur)
     if not (book.author or guide or bio_lines):
         return None
+    _brand, _logo = _book_brand(db, book)
     return {
         "title": f"《{book.book_title}》"[:64],
         "author": (book.author or "")[:128],
         "guide": guide,
         "bio": "|||".join(bio_lines[:3]),
-        "brand_name": "静读书",
-        "logo_b64": _logo_data_uri(),
+        "brand_name": _brand,
+        "logo_b64": _logo,
         "duration_sec": max(4, min(10, round(page_dur))),
     }
 
@@ -590,9 +717,10 @@ def _build_bookquote_input(db, book, ep, page_dur: float) -> dict | None:
         return None
     if len(quotes) < 3:
         return None
+    _brand, _logo = _book_brand(db, book)
     data = {"book_title": f"《{book.book_title}》"[:96],
-            "brand_name": "静读书",
-            "logo_b64": _logo_data_uri(),
+            "brand_name": _brand,
+            "logo_b64": _logo,
             "duration_sec": max(4, min(8, round(page_dur)))}
     for i in range(3):
         data[f"q{i+1}"] = str(quotes[i].get("text") or "")[:120]
@@ -609,7 +737,7 @@ def _render_book_card(db, book_id: str, workdir: Path, page_dur: float) -> Path 
     book = db.query(BookProject).filter(BookProject.id == book_id).first()
     if not book:
         return None
-    input_data = _build_bookinfo_input(book, page_dur)
+    input_data = _build_bookinfo_input(db, book, page_dur)
     if not input_data:
         return None
     return _render_card_png(db, "hf-bookinfo-v1", input_data, workdir, "book_card.png")

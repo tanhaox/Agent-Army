@@ -17,7 +17,7 @@ from app.services.pexels_service.types import (
 )
 from app.services.pexels_utils import validate_video
 
-__all__ = ["search_pexels", "download"]
+__all__ = ["search_pexels", "search_pexels_photos", "download"]
 
 
 def search_pexels(
@@ -43,6 +43,33 @@ def search_pexels(
     except json.JSONDecodeError as exc:
         raise PexelsResolveError(f"invalid json: {exc}") from exc
     return data.get("videos", [])
+
+
+def search_pexels_photos(
+    svc: Any, query: str, per_page: int, page: int = 1, orientation: str = "any",
+) -> list[dict[str, Any]]:
+    """调 Pexels API 搜索图片, 返回原始 photo dict 列表 (图片反推页参考图).
+
+    图片搜索与视频同 base: {PEXELS_API_BASE}/search; orientation 官方支持
+    portrait/landscape/square (比视频多 square, 2026-09-06)。
+    """
+    url = f"{PEXELS_API_BASE}/search"
+    params: dict[str, Any] = {"query": query, "per_page": min(per_page, 80), "page": page}
+    if orientation in ("portrait", "landscape", "square"):
+        params["orientation"] = orientation
+    try:
+        resp = http_session(svc).get(url, params=params, timeout=(10, 30))
+    except requests.exceptions.RequestException as exc:
+        raise PexelsResolveError(f"network error: {exc}") from exc
+    if resp.status_code == 401:
+        raise PexelsAuthError(f"Pexels API returned 401. url={url}")
+    if resp.status_code != 200:
+        raise PexelsResolveError(f"Pexels API status {resp.status_code}: {resp.text[:200]}")
+    try:
+        data = resp.json()
+    except json.JSONDecodeError as exc:
+        raise PexelsResolveError(f"invalid json: {exc}") from exc
+    return data.get("photos", [])
 
 
 def _remove_partial(dest: Path) -> None:

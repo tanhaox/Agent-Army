@@ -280,3 +280,14 @@ class PexelsImportRequest(BaseModel):
     query: str = Field(default="", max_length=256)  # 用于打标/溯源 raw_query
     prefer_resolution: str | None = Field(default=None, pattern=r"^(UHD|FHD|HD|SD)$")
     items: list[PexelsImportItem] = Field(..., min_length=1, max_length=40)
+
+
+class PexelsImageSearchRequest(BaseModel):
+    """图片在线搜索请求 (2026-09-06) — 图片反推页参考图, 只返回预览元数据.
+
+    orientation 比 video 搜索多 square: Pexels 图片 API 原生支持三方。
+    """
+    query: str = Field(..., min_length=1, max_length=256)
+    orientation: str | None = Field(default="any", pattern=r"^(landscape|portrait|square|any)$")
+    per_page: int = Field(default=24, ge=1, le=80)
+    page: int = Field(default=1, ge=1)

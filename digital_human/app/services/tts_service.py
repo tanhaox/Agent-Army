@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import time
 from pathlib import Path
@@ -19,6 +20,10 @@ from scripts import tts_client
 from ..config import DefaultsConfig
 from ..models import AudioFile, AudioJob, Segment, Voice
 
+# 2026-09-07: 下方 ASR 校验 except 分支的 logger.warning 曾因缺定义抛 NameError,
+# 把 89/89 段全部成功的 job 直接炸成 failed (job afe22ba1 实锤)。
+logger = logging.getLogger(__name__)
+
 
 class TTSService:
     def __init__(self, defaults: DefaultsConfig):
@@ -32,6 +37,7 @@ class TTSService:
         progress_callback: Callable[[int, int, str | None, AudioFile], None] | None = None,
         emotion_annotations: list[dict[str, Any]] | None = None,
         status_callback: Callable[[str, str], None] | None = None,
+        module_json: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Generate per-line WAV files and manifest.
 
@@ -41,6 +47,8 @@ class TTSService:
             voice: Voice configuration.
             progress_callback: Called with (completed, total, current_text, audio_file) after each line.
             status_callback: (消息, 级别) 状态事件 (ASR 回听校验等非逐段进度)。
+            module_json (0917 模块总线): 六拍模块表 [{idx,name,tail}] — 模块边界
+                强制断包 + 模块尾大气口 + manifest 带 module_id; 缺省无模块行为不变。
         """
         output_dir = Path(job.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +90,25 @@ class TTSService:
         voice_params.setdefault(
             "duration_factor", getattr(self.defaults, "indextts_duration_factor", 0.75)
         )
+        # 2.5 老谭读书通道 (2026-09-10): 实测定稿配方注入 — 音色/情感双参考分离。
+        # 0913 晚回摆 (用户听感定谳): 巡航 1.16 + emo_alpha 0.8 是"带气口的自然说书速" —
+        # 白天试的 1.00+0.6 组合气口全无/语速飙 7+/说的硬, 全篇感受差, 已弃。
+        # 5.3 地板只在首分钟窗口生效 (见 tts_verify), 正文自然方差是特性不是病。
+        _hook_df = None
+        _hook_chars = 0
+        _speed_zones = None
+        if backend == "indextts25":
+            voice_params.setdefault("duration_factor", 1.16)
+            voice_params.setdefault("emo_alpha", 0.8)
+            _emo_ref = getattr(self.defaults, "indextts25_emo_ref", "")
+            if _emo_ref:
+                voice_params.setdefault("emo_audio_prompt", _emo_ref)
+            _hook_df = voice_params.pop("hook_duration_factor", 0.95)
+            _hook_chars = voice_params.pop("hook_chars", 60)
+            _speed_zones = voice_params.pop("speed_zones", None) or [
+                {"upto_chars": 60, "duration_factor": 0.95},
+                {"upto_chars": 150, "duration_factor": 1.05},
+            ]
 
         # ── 段数据快照 (2026-08-25) ──
         # TTS 是长任务 (GPU 冷启动 + 逐段合成数分钟)。期间文稿保存会 _reparse_segments
@@ -97,8 +124,22 @@ class TTSService:
         # Build text preserving line breaks and control chars.
         # 拼音纠音 (2026-08-25): 易错词 → <字|PINYIN> 标注, IndexTTS2/2.5 前端解析;
         # 只改 TTS 输入, 文稿/字幕不受影响。替代旧的"错别字音频替换"事后补丁。
-        from .pinyin_fix import apply_pinyin_marks
-        text = apply_pinyin_marks("\n".join(t for _, t in seg_pairs))
+        from .pinyin_fix import tts_adapt
+        text = tts_adapt("\n".join(t for _, t in seg_pairs))
+
+        # 六拍模块墙 (0917 模块总线): tail 锚在当刻行序列 (Segment 拼接) 上定位 —
+        # 行切分口径由本入口定义, 物理行/段行差异天然免疫; 定位必须在 tts_adapt
+        # 之前的纯文本上做 (拼音标注会改文字致 tail 匹配失败, 行数不变故行号有效)。
+        _module_walls: set[int] = set()
+        if module_json:
+            from .book_service.module_map import find_walls
+            _module_walls, _missed = find_walls(
+                [t for _, t in seg_pairs], module_json)
+            if _missed:
+                logger.warning("[tts] 模块墙 %d/%d 段定位失败 (正文与模块表不符): %s",
+                               len(_missed), len(module_json), _missed)
+            if not _module_walls:
+                _module_walls = set()  # 全部失配 = 无墙照旧, 不猜
 
         # Collect the AudioFile rows created as synthesis progresses. Each
         # completed segment yields exactly one row (via _manifest_callback),
@@ -109,7 +150,14 @@ class TTSService:
         def _manifest_callback(completed: int, total: int, text: str, manifest_seg: dict[str, Any] | None) -> None:
             if not progress_callback or not manifest_seg:
                 return
-            seg_id = seg_pairs[completed - 1][0]
+            # 防御 (2026-09-05): TTS 行切分与段数不一致时 (页备注含 \n 等场景)
+            # 越界会崩整单 — 钳到最后一段, 行数差异由对齐层吸收
+            # 0913 包化: completed 计的是包, manifest 条目带 line_indices —
+            # AudioFile.segment_id 挂包首行 (页/重roll经 manifest 取整包文本)
+            _first = (manifest_seg.get("line_indices")
+                      or [manifest_seg.get("index", completed - 1)])[0]
+            pair = seg_pairs[min(int(_first), len(seg_pairs) - 1)]
+            seg_id = pair[0]
             file_path = output_dir / manifest_seg["file"]
             audio_file = AudioFile(
                 audio_job_id=job.id,
@@ -162,8 +210,17 @@ class TTSService:
             # 批合成 (2026-08-25 回退 150): IndexTTS2 RTF~1.8, 句级批(一句一调)总时长远超
             # 批合成, 恢复 3-5 句一批。句级批是为 2.5 (RTF 0.54 + 服务端逗号切分/拼接
             # 静音问题)设计的实验配置 — 回 2.5 时改回 batch_max_chars=1。
-            batch_max_chars=150,
+            # 2.5 语义段喂 (0910 用户令: 一句一喂=神经病模式; 连续句合并≤80字,
+            # 句边界切分绝不腰斩, 80字<120token 不触发服务端内部切分)
+            batch_max_chars=(80 if backend == "indextts25" else 150),
             emotion_segments=emotion_segments,
+            hook_duration_factor=_hook_df,
+            hook_chars=_hook_chars,
+            speed_zones=_speed_zones,
+            # 0913 包化 (用户令根治批切分漂移): indextts 系走 chunk — 一包一次完整
+            # 解码一个 wav, 静音切分行环节结构性消失; fish/f5 维持行模式待各自验证
+            synth_unit=("chunk" if backend in ("indextts", "indextts25") else "line"),
+            module_walls=(_module_walls or None),
         )
 
         # ── ASR 回听校验 (2026-09-03): 拼接前逐行回听, 错音自动 <字|PINYIN> 重合成 ──
@@ -175,7 +232,8 @@ class TTSService:
             try:
                 from .tts_verify import verify_pronunciation
 
-                def _resynth_line(idx: int, clean_line: str, marked_line: str) -> None:
+                def _resynth_line(idx: int, clean_line: str, marked_line: str,
+                                  duration_factor: float | None = None) -> None:
                     from scripts.tts_lib.orchestrator import _synthesize_single
                     from scripts.tts_lib.text import _tts_text
                     import re as _re
@@ -186,6 +244,10 @@ class TTSService:
                     emo = next((s for s in (emotion_segments or [])
                                 if clean_line and _n(clean_line) in _n(s.get("text", ""))), None)
                     tmp = output_dir / f"_verify_{idx:03d}.wav"
+                    # 0913 语速地板: verify 自动⏩ 用折算 df 覆盖 (副本不污染 voice_params)
+                    _vp = dict(voice_params)
+                    if duration_factor is not None:
+                        _vp["duration_factor"] = float(duration_factor)
                     _synthesize_single(
                         text=_tts_text(marked_line, keep_breaks=(backend == "indextts")),
                         output_path=tmp, backend=backend, voice_id=voice_id,
@@ -193,7 +255,7 @@ class TTSService:
                         base_url_fish=base_url_fish, base_url_f5=base_url_f5,
                         base_url_indextts=base_url_indextts,
                         master_audio=master_audio, master_text=master_text,
-                        params=voice_params,
+                        params=_vp,
                         emo_vector=emo.get("vector") if emo else None,
                         emo_alpha=(emo.get("alpha", 1.0) if emo else 1.0),
                     )
@@ -209,7 +271,25 @@ class TTSService:
                     output_dir=output_dir, manifest=manifest,
                     resynth_line=_resynth_line,
                     on_event=(lambda m, lv: status_callback(m, lv)) if status_callback else None,
+                    # 0913 语速地板: 传区参供自动⏩折算本行 df
+                    speed_zones=_speed_zones,
+                    global_df=float(voice_params.get("duration_factor", 1.00)),
                 )
+                # 0912: 回听报告落盘 + 收尾摘要 (用户令: 回听要看得见 — 报告只活在
+                # SSE 流里=没接入的观感; 未解决错音行必须在产物目录可查)
+                try:
+                    (output_dir / "verify_report.json").write_text(
+                        json.dumps(verify_report, ensure_ascii=False, indent=1), encoding="utf-8")
+                    _unres = [str(u.get("file") or u.get("index")) for u in (verify_report.get("unresolved") or [])]
+                    if status_callback:
+                        status_callback(
+                            f"回听校验完成: 检查{verify_report.get('checked', 0)}行, "
+                            f"修复{len(verify_report.get('fixed') or [])}处, "
+                            f"未解决{len(_unres)}处"
+                            + (f" ({','.join(_unres[:6])}) — 请人工听这些行" if _unres else ""),
+                            "warn" if _unres else "info")
+                except Exception:
+                    pass
                 # 修复行时长已变 → 同步 AudioFile 行与 manifest 段, 并重写 manifest.json
                 # (2026-09-05: 只更新 DB 不回写 manifest, 导出按旧时长截段 → 吞尾字;
                 #  下游 jy 轨/字幕 cum 均以 manifest 为时间轴真理源)

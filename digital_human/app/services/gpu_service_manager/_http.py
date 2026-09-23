@@ -6,7 +6,7 @@ import subprocess
 import urllib.request
 from typing import Any
 
-__all__ = ["http_ok", "port_of", "pids_listening_on"]
+__all__ = ["http_ok", "port_of", "pids_listening_on", "proc_cmdline"]
 
 
 def http_ok(url: str, timeout: float = 3.0) -> bool:
@@ -48,3 +48,18 @@ def pids_listening_on(port: int) -> list[int]:
                 except ValueError:
                     pass
     return sorted(pids)
+
+
+def proc_cmdline(pid: int) -> str:
+    """Windows: 按 PID 取进程完整命令行 (取证/验明正身); 失败或已退出返回 ''."""
+    if os.name != "nt" or pid <= 0:
+        return ""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""

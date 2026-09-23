@@ -21,6 +21,27 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+def _render_common_blocks(base: str) -> str:
+    """公共提示词块渲染 (2026-09-07): {{common:xxx}} → config/common/xxx.txt。
+
+    tech/geo 模板的人设/互动时序/TTS约束/真实性红线/输出格式五块已抽公共库,
+    消除双轨人工同步漂移 (通用技巧只改一处, 两线同时生效)。只渲染一层 —
+    公共块内禁止再嵌 {{common:}}; 引用不存在的块原样保留 (typo 可见于产物)。
+    """
+    import re
+
+    from ..config import PROJECT_ROOT as _root
+
+    def _sub(m: "re.Match[str]") -> str:
+        p = _root / "config" / "common" / f"{m.group(1)}.txt"
+        try:
+            return p.read_text(encoding="utf-8").strip()
+        except OSError:
+            return m.group(0)
+
+    return re.sub(r"\{\{common:([a-z_]+)\}\}", _sub, base)
+
+
 def _load_prompt_template(prompt_template: str | None) -> str:
     """Load prompt template from config/ if a name is provided, otherwise return as-is."""
     if not prompt_template:
@@ -33,6 +54,8 @@ def _load_prompt_template(prompt_template: str | None) -> str:
     candidate = PROJECT_ROOT / "config" / f"{prompt_template}.txt"
     if candidate.exists():
         base = candidate.read_text(encoding="utf-8").strip()
+        # 2026-09-07: {{common:xxx}} 公共块渲染 (模板瘦身, 见 _render_common_blocks)
+        base = _render_common_blocks(base)
         # 2026-08-22: 全系统统一限流词注入 (config/compliance_common.json — 拆书/新闻线/未来系统共用)
         try:
             from .compliance import build_redline_prompt
@@ -44,19 +67,64 @@ def _load_prompt_template(prompt_template: str | None) -> str:
 
 
 class LLMService:
-    """LLM 客户端: 包装 DeepSeek chat/completions.
+    """LLM 客户端: 包装 OpenAI 兼容 chat/completions.
+
+    2026-09-09 用户令: kimi 主力 / deepseek 系统兜底 (fallback= 参数)。
+    新闻线洗稿/拆书编排/导演工序单等原 deepseek 入口统一走本类,
+    单次请求内按 主力→兜底 自动切换。
 
     connection-level 重试只针对 "请求还没发出去/连接建立失败" 的错误
     (requests.ConnectionError / 超时), 不重试 HTTP 4xx/5xx — 后者
     在 stream=True 时可能已吐出部分内容, 重发会重复。
     """
-    # 远端连接抖动/长连接被重置时重试 (10054/10060/11001 等)
-    _RETRYABLE = (requests.ConnectionError, requests.Timeout)
+    # 远端连接抖动/长连接被重置时重试 (10054/10060/11001 等)。
+    # 0915 修: 只重试"请求没发出去"级 (ConnectionError/ConnectTimeout);
+    # ReadTimeout (服务端收了请求不回话, deepseek 过载实锤) 不重试 — 直接换下一厂商,
+    # 否则 300s×3 次 = 单调用卡 15 分钟 (A2 重规划卡死实锤)。
+    _RETRYABLE = (requests.ConnectionError, requests.ConnectTimeout)
     _MAX_RETRIES = 2
     _BACKOFF_SEC = 2.0
+    # 触发切换兜底的 HTTP 码: 鉴权/限流/服务端错。
+    # 400 = 自家 payload 问题, 换端同样炸, 不浪费一轮兜底。
+    _FALLBACK_STATUS = {401, 403, 404, 408, 429, 500, 502, 503, 504}
+    # 0915 熔断: 厂商失败后 5 分钟内跳过 (deepseek 队列过载时单调用可拖 900s)
+    _BREAKER_SEC = 300.0
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, fallback=None):
+        """fallback 可传单个 provider 或列表 (0915: kimi → deepseek → qwen 三级链)."""
         self.cfg = cfg
+        if fallback is None:
+            self.fallbacks: list = []
+        elif isinstance(fallback, (list, tuple)):
+            self.fallbacks = list(fallback)
+        else:
+            self.fallbacks = [fallback]
+        self._provider_down: dict[int, float] = {}
+
+    @staticmethod
+    def _sanitize_payload(cfg, payload: dict) -> None:
+        """厂商 payload 适配: kimi coding 系仅收 temperature=1 (2026-09-09 实测,
+        传 0.2~0.7 全 400), 发送前统一摘除走远端默认; enable_thinking 为
+        DeepSeek 私有参数但 kimi 容忍 (实测 200), 保留不动。
+        0915: deepseek V4 也关思考 — flash 默认思考开 (官方 thinking_mode 文档),
+        结构化单发调用 (导演规划等) 思考纯属耗时烧钱; 语法同 kimi
+        {"thinking":{"type":"disabled"}} (OpenAI 格式 extra_body 字段, 直传 JSON 同效)。
+        qwen (百炼 compatible-mode): enable_thinking=false — 思考版"在的"烧 28 token
+        vs 关后 2 token (实测), 备份配额有限必须省。"""
+        if "kimi.com" in (cfg.base_url or "") or "deepseek.com" in (cfg.base_url or ""):
+            payload.pop("temperature", None)
+            # 0910: kimi 思考开关原生翻译 (boost 通道同款修复) — 大 prompt 思考烧光
+            # 输出预算 → content 空 (bs1 真稿规划 0 字符实锤); chat 路径一律关思考
+            payload["thinking"] = {"type": "disabled"}
+        elif "aliyuncs.com" in (cfg.base_url or ""):
+            payload["enable_thinking"] = False
+
+    def _resolve_model_for(self, cfg, model: str | None) -> str:
+        """Resolve 'flash'/'pro' aliases per provider (各家模型名不同), 具体名透传."""
+        if model is None:
+            model = cfg.default_model
+        aliases = {"flash": cfg.model_flash, "pro": cfg.model_pro}
+        return aliases.get(model, model)
 
     def _post_with_retry(self, url, *, headers, json, stream, timeout=120):
         """POST with connection-level retry. 见类 docstring 的重试范围约定."""
@@ -75,12 +143,77 @@ class LLMService:
                     time.sleep(delay)
         raise last_exc
 
-    def _resolve_model(self, model: str | None) -> str:
-        """Resolve 'flash'/'pro' aliases or pass through a concrete model name."""
-        if model is None:
-            model = self.cfg.default_model
-        aliases = {"flash": self.cfg.model_flash, "pro": self.cfg.model_pro}
-        return aliases.get(model, model)
+    def _post_providers(self, payload: dict, *, stream: bool, timeout: int = 120):
+        """按 主力→兜底 链发请求, 返回首个成功 response.
+
+        每厂商: 解析模型别名 → payload 适配 → connection-level 重试;
+        连接失败/超时/HTTP 兜底码/200+错误体 → 记日志换下一厂商。
+        response 成功返回后才读 body, 故 stream 场景兜底不会重复内容。
+
+        0915 熔断器: 厂商失败 (含 900s 队列错误体) 后 _BREAKER_SEC 内直接跳过 —
+        deepseek 过载时客户端超时拦不住服务端保活连接 (实测拖满 900s),
+        不熔断则每次调用都要白等一轮才轮到下一家。
+        非流式额外校验 body: 200 + {"error":...} 错误体 (deepseek 队列超时形态)
+        也算厂商级失败, 标记熔断并换下一家。
+        """
+        providers = [self.cfg] + self.fallbacks
+        providers = [c for c in providers if c is not None and c.api_key]
+        if not providers:
+            raise RuntimeError(
+                "LLM API key is not configured. "
+                "Set KIMI_API_KEY / DEEPSEEK_API_KEY environment variables before starting the server."
+            )
+        now = time.time()
+        last_exc: Exception | None = None
+        for idx, cfg in enumerate(providers):
+            if now - self._provider_down.get(idx, 0) < self._BREAKER_SEC:
+                logger.warning("[llm] provider#%d %s 熔断中 (最近失败 %.0fs 内), 跳过",
+                               idx, cfg.base_url, self._BREAKER_SEC)
+                continue
+            body = dict(payload)
+            body["model"] = self._resolve_model_for(cfg, payload.get("model"))
+            self._sanitize_payload(cfg, body)
+            headers = {
+                "Authorization": f"Bearer {cfg.api_key}",
+                "Content-Type": "application/json",
+            }
+            url = f"{cfg.base_url.rstrip('/')}/chat/completions"
+            try:
+                resp = self._post_with_retry(url, headers=headers, json=body,
+                                             stream=stream, timeout=timeout)
+            except (*self._RETRYABLE, requests.ReadTimeout) as exc:
+                last_exc = exc
+                self._provider_down[idx] = time.time()
+                logger.warning("[llm] provider#%d %s 连接失败/读超时: %s → 换下一厂商",
+                               idx, cfg.base_url, exc)
+                continue
+            if resp.status_code in self._FALLBACK_STATUS:
+                last_exc = requests.HTTPError(f"HTTP {resp.status_code}", response=resp)
+                self._provider_down[idx] = time.time()
+                logger.warning("[llm] provider#%d %s HTTP %s → 换下一厂商",
+                               idx, cfg.base_url, resp.status_code)
+                continue
+            if not stream:  # 200 + 错误体也当厂商失败 (deepseek 900s 队列超时形态)
+                try:
+                    data = resp.json()
+                except ValueError:
+                    self._provider_down[idx] = time.time()
+                    last_exc = RuntimeError("非 JSON 响应体")
+                    logger.warning("[llm] provider#%d %s 非 JSON 体 → 换下一厂商",
+                                   idx, cfg.base_url)
+                    continue
+                if "choices" not in data:
+                    err = (data.get("error") or {}).get("message") or str(data)[:200]
+                    self._provider_down[idx] = time.time()
+                    last_exc = RuntimeError(f"错误体: {err}")
+                    logger.warning("[llm] provider#%d %s 200+错误体 → 换下一厂商: %s",
+                                   idx, cfg.base_url, err[:120])
+                    continue
+            self._provider_down.pop(idx, None)
+            if idx > 0:
+                logger.warning("[llm] 请求兜底到 provider#%d %s", idx, cfg.base_url)
+            return resp
+        raise last_exc or RuntimeError("no LLM provider available")
 
     def chat(self, system: str, user: str, model: str | None = None,
              temperature: float = 0.7, timeout: int = 300,
@@ -92,13 +225,8 @@ class LLMService:
         max_tokens/response_format (2026-08-25): 可选注入 — 结构化调用方(director 工序单)
         此前不设上限, 长稿输出截断 = JSON 解析失败 = job 报废。
         """
-        if not self.cfg.api_key:
-            raise RuntimeError(
-                "DeepSeek API key is not configured. "
-                "Set the DEEPSEEK_API_KEY environment variable before starting the server."
-            )
         payload: dict[str, Any] = {
-            "model": self._resolve_model(model),
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -110,15 +238,43 @@ class LLMService:
             payload["max_tokens"] = max_tokens
         if response_format is not None:
             payload["response_format"] = response_format
-        headers = {
-            "Authorization": f"Bearer {self.cfg.api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
-        response = self._post_with_retry(url, headers=headers, json=payload,
-                                         stream=False, timeout=timeout)
+        response = self._post_providers(payload, stream=False, timeout=timeout)
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        data = response.json()
+        # 0915 实锤: deepseek 队列过载时回 HTTP 200 + {"error":{...}} 错误体
+        # (900s 排队超时原文) — 没有 choices, 旧代码 KeyError 崩得不明不白
+        if "choices" not in data:
+            err = (data.get("error") or {}).get("message") or str(data)[:200]
+            raise RuntimeError(f"LLM 服务商错误体: {err[:300]}")
+        return data["choices"][0]["message"]["content"]
+
+    def chat_turns(self, messages: list[dict[str, Any]], model: str | None = None,
+                   temperature: float = 0.7, timeout: int = 300,
+                   max_tokens: int | None = None,
+                   response_format: dict[str, Any] | None = None) -> str:
+        """多轮对话 (0917 用户令: 调优优先 — 哪步适合多轮哪步用, 不一刀切).
+
+        messages 携带 assistant 历史 (模型看着自己的旧产出修正, 优于把旧稿贴进新 user)。
+        用于"先答后改"式渐进 (动画线: 立意确认轮/全片巡检轮); 单轮结构化调用继续走
+        chat() 不动。与 chat() 同一厂商兜底链与错误体防御。
+        """
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if response_format is not None:
+            payload["response_format"] = response_format
+        response = self._post_providers(payload, stream=False, timeout=timeout)
+        response.raise_for_status()
+        data = response.json()
+        if "choices" not in data:
+            err = (data.get("error") or {}).get("message") or str(data)[:200]
+            raise RuntimeError(f"LLM 服务商错误体: {err[:300]}")
+        return data["choices"][0]["message"]["content"]
 
     def rewrite_article(
         self,
@@ -156,7 +312,7 @@ class LLMService:
         ]
 
         payload: dict[str, Any] = {
-            "model": self._resolve_model(model),
+            "model": model,
             "messages": messages,
             "stream": stream,
             "temperature": 0.7,
@@ -166,18 +322,7 @@ class LLMService:
         if response_format is not None:
             payload["response_format"] = response_format
 
-        headers = {
-            "Authorization": f"Bearer {self.cfg.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        if not self.cfg.api_key:
-            raise RuntimeError(
-                "DeepSeek API key is not configured. "
-                "Set the DEEPSEEK_API_KEY environment variable before starting the server."
-            )
-        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
-        response = self._post_with_retry(url, headers=headers, json=payload, stream=stream)
+        response = self._post_providers(payload, stream=stream)
         response.raise_for_status()
 
         if not stream:
@@ -249,7 +394,7 @@ class LLMService:
         )
         user_content = f"【修正观点】\n{perspective.strip()}\n\n【带行号稿】\n{numbered}"
         payload: dict[str, Any] = {
-            "model": self._resolve_model(model),
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
@@ -259,12 +404,7 @@ class LLMService:
             "max_tokens": 3000,
             "response_format": {"type": "json_object"},
         }
-        headers = {
-            "Authorization": f"Bearer {self.cfg.api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
-        response = self._post_with_retry(url, headers=headers, json=payload, stream=False)
+        response = self._post_providers(payload, stream=False)
         response.raise_for_status()
         data = json.loads(response.json()["choices"][0]["message"]["content"])
         changes = data.get("changes") if isinstance(data, dict) else None
@@ -313,24 +453,13 @@ class LLMService:
         ]
 
         payload: dict[str, Any] = {
-            "model": self._resolve_model(model),
+            "model": model,
             "messages": messages,
             "stream": stream,
             "temperature": 0.6,  # 修正用稍低温度，保持连贯
         }
 
-        headers = {
-            "Authorization": f"Bearer {self.cfg.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        if not self.cfg.api_key:
-            raise RuntimeError(
-                "DeepSeek API key is not configured. "
-                "Set the DEEPSEEK_API_KEY environment variable before starting the server."
-            )
-        url = f"{self.cfg.base_url.rstrip('/')}/chat/completions"
-        response = self._post_with_retry(url, headers=headers, json=payload, stream=stream)
+        response = self._post_providers(payload, stream=stream)
         response.raise_for_status()
 
         if not stream:
@@ -354,3 +483,26 @@ class LLMService:
                 if chunk_callback:
                     chunk_callback(delta)
         return full_text
+
+
+def get_llm_service() -> LLMService:
+    """全系统统一 LLM 入口。
+
+    0915 三级链 (用户令): kimi 主力 → qwen (token-plan 套餐, 不用白不用,
+    用完为止 → 套餐耗尽自然落到 deepseek) → deepseek 末位兜底。
+    kimi key 未配置时 qwen 顶主力, 再退 deepseek 单 provider。
+    """
+    from ..config import get_config
+
+    cfg = get_config()
+    fallbacks = []
+    qw = getattr(cfg, "qwen", None)
+    if qw is not None and qw.api_key:
+        fallbacks.append(qw)
+    if cfg.deepseek.api_key:
+        fallbacks.append(cfg.deepseek)
+    if cfg.kimi.api_key:
+        return LLMService(cfg.kimi, fallback=fallbacks)
+    if fallbacks:
+        return LLMService(fallbacks[0], fallback=fallbacks[1:])
+    return LLMService(cfg.deepseek)

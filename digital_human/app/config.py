@@ -40,25 +40,17 @@ class QwenConfig:
 
 
 @dataclass(frozen=True)
-class SiliconFlowConfig:
-    api_key: str
-    base_url: str
-    model_flash: str
-    model_pro: str
-
-
-@dataclass(frozen=True)
 class ZhipuConfig:
     """智谱联网搜索 (2026-08-15): 素材聚合补搜专用, 独立 /web_search 端点."""
 
     api_key: str
     base_url: str  # https://open.bigmodel.cn/api/paas/v4
-    search_engine: str  # search_std / search_pro / search_pro_sogou / search_pro_quark
+    search_engines: tuple[str, ...]  # 轮流降级阶梯 (一个用完自动切下一个); 单引擎场景填一项即可
     content_size: str  # medium(摘要) / high(详细)
     count: int
     recency: str  # oneDay/oneWeek/oneMonth/oneYear/noLimit
     timeout_sec: int
-    free_quota_expires: str  # 免费额度到期日 YYYY-MM-DD, 到期提示用
+    free_quota_expires: str  # 额度到期日 YYYY-MM-DD; 留空=关闭本地拦截(付费资源包, 服务端额度报错兜底)
 
 
 @dataclass(frozen=True)
@@ -83,6 +75,10 @@ class DefaultsConfig:
     # IndexTTS2.5 语速 (2026-08-25): 2.5 基线比 2 慢 ~26% (实测中位 4.8 vs 6.5 字/s),
     # 0.75 ≈ 拉回旧版听感; 音色 config_json.params.duration_factor 显式值优先于此默认。
     indextts_duration_factor: float
+    # 2.5 老谭读书通道 (2026-09-10): 情感参考音频 + 实测配方
+    indextts25_emo_ref: str
+    # bs1 页间大气口 (0910 用户令: 段落级呼吸, 拼装层静音+画面定格)
+    bs1_page_gap_sec: float
     base_url_comfyui: str
     comfyui_output_dir: str
     comfyui_input_dir: str
@@ -151,7 +147,7 @@ class DefaultsConfig:
 class Config:
     app: AppConfig
     deepseek: DeepSeekConfig
-    siliconflow: SiliconFlowConfig
+    kimi: DeepSeekConfig
     qwen: QwenConfig
     local_llm: LocalLLMConfig
     zhipu: ZhipuConfig
@@ -235,6 +231,17 @@ def load_config(path: Path | str | None = None) -> Config:
         default_model=ds_raw.get("default_model", "flash"),
     )
 
+    # kimi (2026-09-09 用户令): 主力 LLM, deepseek 降级为系统兜底。
+    # 复用 DeepSeekConfig 形状 (base_url/flash/pro/default_model 四元)。
+    km_raw = raw.get("kimi", {})
+    kimi = DeepSeekConfig(
+        api_key=_resolve_env(km_raw.get("api_key", "")),
+        base_url=km_raw.get("base_url", "https://api.kimi.com/coding/v1"),
+        model_flash=km_raw.get("model_flash", "kimi-for-coding-highspeed"),
+        model_pro=km_raw.get("model_pro", "k3"),
+        default_model=km_raw.get("default_model", "flash"),
+    )
+
     qw_raw = raw.get("qwen", {})
     qwen = QwenConfig(
         api_key=_resolve_env(qw_raw.get("api_key", "")),
@@ -264,6 +271,9 @@ def load_config(path: Path | str | None = None) -> Config:
         base_url_f5=defaults_raw.get("base_url_f5", "http://127.0.0.1:7861"),
         base_url_indextts=defaults_raw.get("base_url_indextts", "http://127.0.0.1:7862"),
         indextts_duration_factor=float(defaults_raw.get("indextts_duration_factor", 0.75)),
+        indextts25_emo_ref=str(defaults_raw.get(
+            "indextts25_emo_ref", "E:/数字人计划/voices/laotan25_emo_fandeng.mp3")),
+        bs1_page_gap_sec=float(defaults_raw.get("bs1_page_gap_sec", 0.5)),
         base_url_comfyui=defaults_raw.get("base_url_comfyui", "http://127.0.0.1:8188"),
         comfyui_output_dir=defaults_raw.get(
             "comfyui_output_dir", "E:/AI/ComfyUI_windows_portable/ComfyUI/output"
@@ -334,28 +344,21 @@ def load_config(path: Path | str | None = None) -> Config:
         ppt_work_root=defaults_raw.get("ppt_work_root", "E:/数字人计划/ppt"),
     )
 
-    # 硅基流动 (可选, 缺失时用空值替代)
-    sf_raw = raw.get("siliconflow", {})
-    siliconflow = SiliconFlowConfig(
-        api_key=_resolve_env(sf_raw.get("api_key", "")),
-        base_url=sf_raw.get("base_url", "https://api.siliconflow.cn/v1"),
-        model_flash=sf_raw.get("model_flash", "deepseek-ai/DeepSeek-V4-Flash"),
-        model_pro=sf_raw.get("model_pro", "deepseek-ai/DeepSeek-V4-Pro"),
-    )
-
     # 智谱联网搜索 (2026-08-15): 素材聚合补搜, 独立 web_search 端点
     zp_raw = raw.get("zhipu", {})
+    # 引擎轮流 (2026-09-20): 阶梯列表优先; 兼容旧单值键 search_engine
+    zp_engines = zp_raw.get("search_engines") or [zp_raw.get("search_engine") or "search_pro"]
     zhipu = ZhipuConfig(
         api_key=_resolve_env(zp_raw.get("api_key", "")),
         base_url=zp_raw.get("base_url", "https://open.bigmodel.cn/api/paas/v4"),
-        search_engine=zp_raw.get("search_engine", "search_pro"),
+        search_engines=tuple(str(e) for e in zp_engines),
         content_size=zp_raw.get("content_size", "high"),
         count=int(zp_raw.get("count", 5)),
         recency=zp_raw.get("recency", "noLimit"),
         timeout_sec=int(zp_raw.get("timeout_sec", 30)),
-        free_quota_expires=zp_raw.get("free_quota_expires", "2026-09-12"),
+        free_quota_expires=zp_raw.get("free_quota_expires", ""),
     )
-    return Config(app=app, deepseek=deepseek, siliconflow=siliconflow, qwen=qwen, local_llm=local_llm, zhipu=zhipu, defaults=defaults, raw=raw)
+    return Config(app=app, deepseek=deepseek, kimi=kimi, qwen=qwen, local_llm=local_llm, zhipu=zhipu, defaults=defaults, raw=raw)
 
 
 # ── Lazy global accessor (loaded by app.main.lifespan) ──────────────

@@ -4,12 +4,27 @@
 """
 from __future__ import annotations
 
+import re
+
 __all__ = [
     "_normalize_chart_input",
     "_coerce_items",
     "_chart_fallback",
     "_apply_chart_metadata",
+    "_chart_has_data",
 ]
+
+
+def _chart_has_data(chart: dict) -> bool:
+    """图卡是否有可渲染数据: items 非空, 或 growth 带锚点数值.
+
+    两者皆无 = 全空数据: hf_chart 模板空兜底会造 value:0 的 470px 巨数
+    ("页面上只有一个字母 o", 2026-09-09 slot #32 实锤), 调用方应降级标题卡。
+    """
+    chart = chart or {}
+    if chart.get("items"):
+        return True
+    return bool(re.search(r"-?\d+(?:\.\d+)?", str(chart.get("growth") or "")))
 
 
 def _coerce_items(data) -> list[dict]:

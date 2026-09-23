@@ -89,7 +89,9 @@ async function correctScript() {
         updateCharCount();
       } else if (data.type === 'correct_done') {
         source.close();
-        setStatus('status-correct', '修正完成', false, true);
+        setStatus('status-correct', data.had_boost
+          ? '修正完成 — 旧改造稿基于旧观点已作废, 编辑区现为修正后洗稿稿; 仍需爆款结构请重新点「爆品改造」'
+          : '修正完成', false, true);
         document.getElementById('script-text').value = '';
         fetchScript(data.script_id);
         toggle('btn-correct', true);

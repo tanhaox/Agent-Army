@@ -26,7 +26,10 @@ from app.services.jy_draft_service.common import (
     _trange_sec,
 )
 from app.services.jy_draft_service.sfx import _probe_duration, attach_sound, sound_path
-from app.services.jy_draft_service.subtitle_style import _StyledTextSegment
+from app.services.jy_draft_service.subtitle_style import (
+    _StyledTextSegment,
+    _SUBTITLE_COLOR_HF,
+)
 from app.services.jy_draft_service.subtitle_text import (
     find_highlight_ranges,
     split_subtitle,
@@ -75,6 +78,17 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
 
     # ── audio 轨: TTS 分段逐段进轨 (时间轴 = 累计时长), 无 manifest 回退整段 ──
     manifest = _load_manifest(audio_file.file_path)
+    # 底稿双轨 (2026-09-10): 字幕读 display.json 底稿真实形 (GPT-6/百分之X),
+    # TTS 适配形只进合成; 缺 sidecar / 行数不齐回退 manifest 文 (老产物兼容)。
+    _display_lines: list[str] = []
+    try:
+        import json as _json_disp
+        _dp = Path(audio_file.file_path).parent / "display.json"
+        if _dp.is_file():
+            _display_lines = (_json_disp.loads(
+                _dp.read_text(encoding="utf-8")).get("lines")) or []
+    except Exception:
+        _display_lines = []
     n_audio = 0
     if manifest and manifest.get("segments"):
         cum = 0.0
@@ -204,9 +218,10 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
     _first_caption = [True]
     if manifest and manifest.get("segments"):
         cum = 0.0
-        for seg in manifest["segments"]:
+        for _seg_i, seg in enumerate(manifest["segments"]):
             dur = float(seg.get("duration") or 0)
-            text = (seg.get("text") or "").strip()
+            text = (_display_lines[_seg_i].strip() if _seg_i < len(_display_lines)
+                    else (seg.get("text") or "").strip())
             if dur > 0 and text:
                 washed = wash_subtitle_text(text)
                 if washed != text:
@@ -231,11 +246,18 @@ def export_job_draft(db: Session, job_id: str) -> dict[str, Any]:
                     hl = sorted(set(gold + find_highlight_ranges(chunk)))
                     rr = sorted(set(red))
                     try:
+                        # HF 窗内字幕换深蓝灰底色 (2026-09-10): 纸墨系卡底与奶油色 #F9F3C4 太近
+                        chunk_end_us = seg_start_us + max(chunk_us, 1000)
+                        on_hf = any(ws < chunk_end_us and we > seg_start_us
+                                    for ws, we in hf_windows)
+                        # HF 窗内单色 (2026-09-10 用户令): 划重点金色高亮与卡面文字
+                        # 打架, HF 段去高亮; P 线 (broll/证据图) 高亮照旧
                         seg = _StyledTextSegment(
                             chunk,
                             trange(seg_start_us, max(chunk_us, 1000)),
-                            highlight_ranges=hl,
-                            red_ranges=rr,
+                            highlight_ranges=[] if on_hf else hl,
+                            red_ranges=[] if on_hf else rr,
+                            base_color=_SUBTITLE_COLOR_HF if on_hf else None,
                             clip_settings=ClipSettings(transform_y=-0.75),
                         )
                         # 动态字幕 v2→v3: 动画挂字幕段本身 (不加层, 零重合)

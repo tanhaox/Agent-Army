@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models import DirectorSlot, VisualRenderJob
 from app.schemas import get_video_format_spec
 from app.services.slot_workflows.common import _pick_hf_template
-from app.services.slot_workflows.hf_chart import _normalize_chart_input
+from app.services.slot_workflows.hf_chart import _chart_has_data, _normalize_chart_input
 from app.services.slot_workflows.hf_extract import _extract_hf_content
 from app.services.template_library import TEMPLATES
 
@@ -109,6 +109,25 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     if workflow == "hf_title" and (slot.params_json.get("render_config") or {}).get("style") == "references":
         return _execute_hf_source(db, slot)
 
+    duration = round(slot.end_sec - slot.start_sec, 3)
+    render_config = slot.params_json.get("render_config") or {}
+    input_data = _extract_hf_content(slot.text_context or "")
+    # render_config 里的真实数据(如 title/metrics/chart)优先,覆盖从口播提取的结果
+    _merge_render_config(input_data, render_config)
+
+    # chart 数据贯通 (问题2): 归一化器统一 render_config.chart_type/data/label/unit/growth
+    # 与口播提取结构为 {type, unit, growth, label, color_scheme, items}, 经 {{chart_json}} 进模板
+    input_data["chart"] = _normalize_chart_input(render_config, input_data)
+
+    # 空数据降级 (2026-09-09, "页面上只有一个字母 o" 实锤): 口播全无数字且
+    # render_config 无 chart/data 时, hf_chart 模板空兜底造 value:0, bigstat 布局
+    # 渲染 470px 巨 "0" (形似字母 o), 且 title/subtitle 全不上屏。此处降级标题卡,
+    # 复用已提取的 title/subtitle 让卡有真实内容。判定须在模板/时长选择之前,
+    # 保证 duration clamp 与 schema 对齐最终模板。
+    if workflow == "hf_chart" and not _chart_has_data(input_data["chart"]):
+        logger.info("[hf] slot %s hf_chart 无图表数据, 降级 hf_title", slot.slot_index)
+        workflow = "hf_title"
+
     # 按 video_format 选模板: 横屏→news-magazine-v1-ls, 竖屏/方屏→news-magazine-v1
     template_id = _pick_hf_template(slot.director_job)
 
@@ -117,32 +136,32 @@ def execute_hf_visual_slot(db: Session, slot: DirectorSlot, workflow: str) -> st
     if workflow in ("hf_title", "hf_chart"):
         template_id = "hf-title-v3" if workflow == "hf_title" else "hf-chart-v3"
 
-    duration = round(slot.end_sec - slot.start_sec, 3)
-    render_config = slot.params_json.get("render_config") or {}
-    input_data = _extract_hf_content(slot.text_context or "")
     # 时长夹取跟随模板 duration_sec_range (单点真理): hf-title-v2 上限 10 / hf-chart-v2
     # 上限 12, 老 news-magazine 5-30。溢出部分由 composition _normalize_clip_duration
     # 冻结尾帧补齐到分配时长, 音画仍同步。(2026-08-24: 原固定 [5,30] clamp 撞上
     # hf-title-v2 schema max 10, 14.9s 的 hf_title slot 直接校验炸)
     _lo, _hi = TEMPLATES[template_id]["duration_sec_range"]
     input_data["duration_sec"] = max(_lo, min(_hi, round(duration)))
-    # render_config 里的真实数据(如 title/metrics/chart)优先,覆盖从口播提取的结果
-    _merge_render_config(input_data, render_config)
 
     # 财经标题卡 v2: kicker 用 subtitle (章节副标) — 空则模板隐藏
     if workflow == "hf_title":
         kicker = input_data.get("subtitle") or input_data.get("kicker") or ""
         input_data["kicker"] = kicker
+        # 大小字规范硬闸 (0910 实锤): render_config 缺失时口播自动提取会把
+        # 整句口播塞进卡面 (title=句子碎片 / kicker=27字长句) — 大字 2~12 字
+        # (3字短卡如「别端着」合法, 0910 实锤勿再误杀)、小字 ≤16 字, 违规直接
+        # fail → executor 降级 broll (宁缺毋滥)。
+        _t = str(input_data.get("title") or "").strip()
+        _k = str(input_data.get("kicker") or "").strip()
+        if not (2 <= len(_t) <= 12 and len(_k) <= 16):
+            raise RuntimeError(
+                f"hf_title 卡面违反大小字规范 (title={_t[:16]!r} {len(_t)}字 / "
+                f"kicker={_k[:16]!r} {len(_k)}字) — 降级 broll")
 
     # 品牌字段 (brand_name/stamp_name/brand_tag): 从 script → persona → host 闭环注入,
     # 模板共享, 不再硬编码"老陈聊财经"等账号名 (2026-08-08)
     _merge_brand(input_data, slot, db)
-
-    # chart 数据贯通 (问题2): 归一化器统一 render_config.chart_type/data/label/unit/growth
-    # 与口播提取结构为 {type, unit, growth, label, color_scheme, items}, 经 {{chart_json}} 进模板
-    input_data["chart"] = _normalize_chart_input(render_config, input_data)
     _ensure_metrics(input_data)
-
     job = VisualRenderJob(template_id=template_id, input_json=input_data, status="queued")
     db.add(job)
     db.commit()

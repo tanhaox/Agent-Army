@@ -20,8 +20,9 @@ logger = logging.getLogger("sync_hf_templates")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "templates" / "hf_prep_v3"
-TEMPLATE_DIRS = ["hf_title_v3", "hf_chart_v3", "hf_quote_v2", "hf_source_v2",
-                 "hf_identity_v1", "hf_follow_v1", "hf_bookinfo_v1", "hf_bookquote_v1"]
+# 0910 修: 硬编码清单漏了 bs1_* 十三页型家族 (veil 改动同步不到 E 盘实锤) —
+# 改为源目录全量扫描, 源里有什么同步什么 (目标侧旧黑金模板不在源里, 天然不触碰)
+TEMPLATE_DIRS = None  # 动态: main() 里取 SRC_ROOT 全部子目录
 
 
 def _target_root() -> Path:
@@ -46,7 +47,8 @@ def main(dry_run: bool = False) -> int:
         return 1
 
     copied: list[str] = []
-    for name in TEMPLATE_DIRS:
+    names = sorted(d.name for d in SRC_ROOT.iterdir() if d.is_dir())
+    for name in names:
         src = SRC_ROOT / name
         if not src.is_dir():
             logger.warning("跳过缺失目录: %s", src)

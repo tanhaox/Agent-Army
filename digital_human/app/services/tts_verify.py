@@ -34,6 +34,9 @@ _MIN_HAN_CHARS = 4
 _MAX_FLAG_RATIO = 0.30
 # 单次合成最多自动修复行数 (防 ASR 噪声风暴拖垮产线)
 _MAX_FIXES = 6
+# 0913 TTS2 吃字率升高: 静态 6 一轮就烧光 (job 628cef1b 10行 fix_budget 饿死实锤);
+# 跟 bleed 同律改动态 — max(12, 行数//8)。取用处在 verify_pronunciation 内重算。
+_DYNAMIC_FIX_FLOOR = 12
 # 结构助词/轻声多读字 (的地得着了) — ASR/TTS 两读常态摇摆, 且拼音标注无从判定
 # 哪个才是本句正确读音 (需深层语境, pypinyin 也只给词典默认如 地=di4)。
 # 自动修反而会把正确的轻声改错 → 一律豁免不报 (漏检 恰如"目的dì"认了)。
@@ -47,6 +50,15 @@ _DIGITS_CN = "零一二三四五六七八九"
 _UNITS = ["", "十", "百", "千"]
 _MARK_SPLIT = re.compile(r"(<\S{1,4}\|[A-Z]+[1-5]>)")
 _ARABIC_NUM = re.compile(r"(\d{4}(?![\d.])|\d+(?:\.\d+)?)")  # 4位整数优先单捕(年份)
+
+# 0913 语速地板 (用户令, 晚间定谳): 5.3字/s **只在首分钟窗口生效** — 前20秒快节奏
+# 是硬标准; 正文自然说书方差 (拖腔/气口 4.3-5.2字/s) 是特性不是病, 全篇强压地板
+# 实测"气口没了说的硬"已弃。窗口=三区末边界 (150字≈前25s)。度量=去空白字符数
+# (含标点)/wav实测时长, 与 0913 全篇排查口径一致。
+SPEED_FLOOR = 5.3
+SPEED_FLOOR_WINDOW_CHARS = 150
+# 语速自动⏩预算 (窗口内最多自动加速重合成的行数; 超出留人工)
+_SLOW_AUTO_BUDGET = 12
 
 
 def _int_to_cn(num: int) -> str:
@@ -90,11 +102,18 @@ def _num_to_reading(tok: str) -> str:
     return _int_to_cn(int(tok))
 
 
+_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s?%")
+
+
 def _normalize_asr(text: str) -> str:
     """ASR 输出规整: 阿拉伯数字 → 中文读法 (whisper 实测按数值归一: 十块钱→"10块钱",
     五百万→"500万", 全库回听 2026-09-03)。拼音标注段 <字|PINYIN1> 原样保留 —
-    其中的数字是声调, 展开会毁标注。"""
-    parts = _MARK_SPLIT.split(text)
+    其中的数字是声调, 展开会毁标注。
+    0913 补: "90%"→"百分之九十" — whisper 把百分之X写成百分号 (job 628cef1b
+    行3/22/61 三行假吃字实锤, 财经稿满地百分比必复发)。"""
+    def _pct(m: re.Match) -> str:
+        return "百分之" + _num_to_reading(m.group(1))
+    parts = _MARK_SPLIT.split(_PCT_RE.sub(_pct, text))
     return "".join(
         p if p.startswith("<") else _ARABIC_NUM.sub(lambda m: _num_to_reading(m.group(0)), p)
         for p in parts
@@ -142,7 +161,7 @@ def _syl_similar(x: str, y: str) -> bool:
 _Transcriber = Callable[[Path], str]
 _Event = Callable[[str, str], None]
 # (行号, 干净行文本, 标注后行文本) -> 合成成功 (wav 原位覆盖) — 失败抛异常由调用方回滚
-_Resynth = Callable[[int, str, str], None]
+_Resynth = Callable[..., None]  # (idx, 干净行, 标注行, *, duration_factor=None)
 
 
 def _is_han(ch: str) -> bool:
@@ -173,6 +192,32 @@ def _pinyin_pairs(text: str) -> list[tuple[str, str, str]]:
     if len(norm) != len(han) or len(t3) != len(han):
         return []
     return list(zip(han, norm, t3))
+
+
+def _bleed_hit(probe: str, heard_han: str) -> bool:
+    """bleed 子串容差匹配: 精确命中, 或逐字无声调拼音滑窗相似命中。
+
+    0913 实锤 (job 39ee68a8 行17/18): 稿「头一档」whisper 听写「投一档」— 一个
+    同音字让精确子串匹配整条失明, 正向 bleed 漏检 → 成片"说两遍"靠人耳才发现。
+    容差复用错音层的 _syl_similar (声母混淆组+韵母同), 不放宽到全同音 (防误报)。"""
+    if not probe:
+        return False
+    if probe in heard_han:
+        return True
+    pp = _pinyin_pairs(probe)
+    hh = _pinyin_pairs(heard_han)
+    n = len(pp)
+    # 模糊路径仅 ≥3 字探针 (生产判据恒 3 字), 且为**纯同音匹配** (无声调拼音逐字相等,
+    # 如 头/投 复/付 代/带 — whisper 听写同音换字)。不用 _syl_similar 的 n/ng 等混淆
+    # 容差: bleed=音频里真念了下句首, ASR 只会换同音字; 混淆容差会把 撞墙/赚钱 类
+    # 邻韵词误判成串句 (0913 回归实锤)。
+    if n < 3 or len(hh) < n:
+        return False
+    probe_syl = [p[1] for p in pp]
+    for i in range(len(hh) - n + 1):
+        if all(hh[i + k][1] == probe_syl[k] for k in range(n)):
+            return True
+    return False
 
 
 def _diff_readings(script: str, heard: str) -> list[dict[str, Any]]:
@@ -280,15 +325,27 @@ def _add_nvidia_dll_dirs() -> None:
 
 
 def _whisper_transcribe(wav: Path) -> str:
-    """单行 wav → 文本 (faster-whisper large-v3, 进程级单例复用, CUDA)。"""
+    """单行 wav → 文本 (faster-whisper large-v3, 进程级单例复用, CUDA)。
+
+    initial_prompt (0912): 诱导逐字转写保留语气词 — whisper 默认吞 嗯/呃,
+    会令语气词污染检失聪; 逐字口径对错音比对同样更准 (只会更忠实, 无副作用)。
+    """
     _add_nvidia_dll_dirs()
     from app.services.alignment_service._models import _ensure_model
 
     model = _ensure_model()
     segments, _info = model.transcribe(
         str(wav), language="zh", word_timestamps=False, vad_filter=False,
+        initial_prompt="以下是逐字转写,一字不漏,保留全部语气词:嗯、呃。",
     )
     return "".join(getattr(s, "text", "") for s in segments)
+
+
+# 语气词污染字符 (0912 用户令: 稿里有的豁免, 稿里没有的=污染)
+_FILLER_CHARS = ("嗯", "呃")
+# 插字检测 (0912 行24 实锤: 稿中无"第一"语音念"第一" — 行尾破折号续写幻觉等)
+# 稿里没有的多字连接词出现在 ASR = 插字嫌疑 → 重roll
+_INSERT_WORDS = ("第一", "第二", "第三", "然后", "接着", "那么", "其次")
 
 
 def verify_pronunciation(
@@ -298,7 +355,9 @@ def verify_pronunciation(
     resynth_line: _Resynth,
     on_event: _Event | None = None,
     transcriber: _Transcriber | None = None,
-    max_fixes: int = _MAX_FIXES,
+    max_fixes: int = 0,
+    speed_zones: list[dict] | None = None,
+    global_df: float = 1.00,
 ) -> dict[str, Any]:
     """逐行回听校验 + 错音自动修复。
 
@@ -321,6 +380,9 @@ def verify_pronunciation(
                 pass
 
     _asr = transcriber or _whisper_transcribe
+    # 0913 动态修复预算: max(12, 行数//8) — TTS2 吃字率高, 静态 6 一轮饿死
+    if max_fixes <= 0:
+        max_fixes = max(_DYNAMIC_FIX_FLOOR, (len(manifest.get("segments") or []) or 8) // 8)
     report: dict[str, Any] = {
         "checked": 0, "suspect_lines": [], "fixed": [], "unresolved": [],
     }
@@ -352,6 +414,50 @@ def verify_pronunciation(
         if not heard or not _pinyin_pairs(heard):
             continue
         _heard_cache[idx] = heard  # bleed 扫描复用 (不再重复转录)
+
+        # ── 语气词污染检 (0912 用户令: 对齐稿件 — 稿里有的豁免, 没有的是污染 → 重roll) ──
+        _fillers = [ch for ch in _FILLER_CHARS if ch in heard and ch not in text]
+        _inserts = [w for w in _INSERT_WORDS if w in heard and w not in text]
+        if _fillers or _inserts:
+            entry_f = {"index": idx, "file": wav.name, "text": text[:40],
+                       "diffs": [{"char": ch, "expect": "无(稿中无此语气词)",
+                                  "heard": ch} for ch in _fillers]
+                                 + [{"char": w, "expect": "无(稿中无此词)",
+                                     "heard": w} for w in _inserts]}
+            if attempts >= max_fixes:
+                report["unresolved"].append({**entry_f, "reason": "filler_budget"})
+                _emit(f"行{idx} 语气词污染「{''.join(_fillers)}」预算尽 — 请人工听", "warn")
+            else:
+                attempts += 1
+                _emit(f"行{idx} 语气词污染「{''.join(_fillers)}」(稿中无) — 重合成", "warn")
+                bak = wav.with_suffix(".wav.bak")
+                try:
+                    shutil.copy2(wav, bak)
+                    resynth_line(idx, text, text)  # 干净稿重roll (采样重roll大概率丢弃语气词)
+                    heard2 = _asr(wav)
+                    if heard2 and not any((ch in heard2 and ch not in text) for ch in _FILLER_CHARS) \
+                            and not any((w in heard2 and w not in text) for w in _INSERT_WORDS):
+                        import soundfile as sf
+                        try:
+                            dur = round(sf.info(str(wav)).duration, 3)
+                        except Exception:
+                            dur = None
+                        report["fixed"].append({**entry_f, "reason": "filler", "duration": dur})
+                        _heard_cache[idx] = heard2
+                        _emit(f"行{idx} 语气词已清除 (重roll)", "ok")
+                        heard = heard2  # 用干净版继续走下方发音校验
+                    else:
+                        raise RuntimeError("重roll后语气词仍在")
+                except Exception as exc:
+                    logger.warning("[tts_verify] 行%s 语气词修复失败回滚: %s", idx, exc)
+                    try:
+                        shutil.copy2(bak, wav)
+                        bak.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    report["unresolved"].append({**entry_f, "reason": "filler"})
+                    _emit(f"行{idx} 语气词两roll未除 — 请人工听 {wav.name}", "warn")
+
         diffs = _diff_readings(text, heard)
         if not diffs:
             continue
@@ -383,8 +489,11 @@ def verify_pronunciation(
             marked = _apply_markup(text, {d["idx"]: d["t3"] for d in diffs})
             resynth_line(idx, text, marked)
             # 复检: 标注字符在拼音对里天然过滤, 与干净文本同口径
+            # 0912 补: 发音修复的 reroll 也可能带入语气词 (028 实锤: 亲字修复带进嗯)
+            # → 复检同时查语气词, 带入即视为修复失败回滚
             heard2 = _asr(wav)
-            if heard2 and not _diff_readings(marked, heard2):
+            _new_fillers = [ch for ch in _FILLER_CHARS if ch in heard2 and ch not in text]
+            if heard2 and not _diff_readings(marked, heard2) and not _new_fillers:
                 import soundfile as sf
                 try:
                     dur = round(sf.info(str(wav)).duration, 3)
@@ -407,67 +516,195 @@ def verify_pronunciation(
         finally:
             bak.unlink(missing_ok=True)
 
-    # ── bleed 邻行独立全量扫描 (2026-09-05 二次实锤改版): 批合成 IndexTTS 在
-    # "||"→"，" 边界偶发把下句开头念进上段尾部; 静音切分后上段(行N-1)尾带下句
-    # 句首 → 成片"这句话说了两遍"。原实现只在行 N 被错音修复后才查 N-1 —
-    # 018 行 ASR 恰把"就业越强"听成"就越强"通过错音校验, 017 的 bleed 漏检
-    # (job 55b5b15c "就业越强说两次" 实锤)。改版: 主循环 ASR 全量留存, 对
-    # 全部相邻行对独立判 bleed, 不依赖错音触发。
+    # ── bleed 双向独立全量扫描 (2026-09-07 三次实锤改版) ──
+    # 批合成 IndexTTS 串句是双向的: ① 上句尾串下句首 (0905 已修); ② 本行头部
+    # 带上句尾 (job 9193c63b 实锤: 135 行念了 134 尾 + 135 全文)。两向都致成片
+    # "说两遍"。bleed 与错音分开预算: 旧实现共享 _MAX_FIXES=6, bleed 爆发时
+    # 预算瞬烧光、其余行静默带病放行 (同 job 158 段染 20 行, 仅 6 行获修机会,
+    # 成片"多次重复"的直接根因)。受染行分布与批首/批尾无关 (批内随机, 生成端
+    # 重复), 逐行检测是产线侧唯一可靠抓手。
     _by_index = {int(s.get("index", -1)): s for s in segments}
 
     def _han_only(s: str) -> str:
         return "".join(c for c in (s or "") if _is_han(c))
 
-    for seg in segments:
-        idx = int(seg.get("index", -1))
-        prev = _by_index.get(idx - 1)
-        if not prev or idx - 1 not in _heard_cache or attempts >= max_fixes:
-            continue
-        prev_text = str(prev.get("text") or "")
-        if sum(1 for c in prev_text if _is_han(c)) < _MIN_HAN_CHARS:
-            continue
-        # 下句句首取 3~5 汉字窗口 (太短误报, 太长 ASR 转写漂移匹配不上)
-        nxt_head = _han_only(seg.get("text") or "")[:5]
-        if len(nxt_head) < 3:
-            continue
-        hp = _han_only(_heard_cache[idx - 1])
-        # bleed 判据: 上行听到了下句句首, 且该片段不在上行自己文本里
-        # (全文任意位置查 — 口癖/排比重复不算 bleed, 宁可漏检不误重合成)
-        if nxt_head[:3] not in hp or nxt_head[:3] in _han_only(prev_text):
-            continue
-        prev_wav = output_dir / str(prev.get("file") or "")
-        if not prev_wav.exists():
-            continue
-        _emit(f"行{idx - 1} 尾部串入下句开头「{nxt_head[:3]}…」(批切分 bleed) — 重合成去重", "warn")
-        attempts += 1
-        bak = prev_wav.with_suffix(".wav.bak")
+    bleed_budget = max(16, len(segments) // 4)
+    bleed_attempts = 0
+
+    def _fix_bleed_line(idx: int, label: str, verify) -> None:
+        """重合成受染行 + 复检 + 回写 ASR 缓存 (正反向共用)。verify(heard2)->bool。"""
+        nonlocal bleed_attempts
+        seg = _by_index.get(idx)
+        if not seg:
+            return
+        wav = output_dir / str(seg.get("file") or "")
+        text = str(seg.get("text") or "")
+        if not wav.exists():
+            return
+        bleed_attempts += 1
+        bak = wav.with_suffix(".wav.bak")
         try:
-            shutil.copy2(prev_wav, bak)
-            resynth_line(idx - 1, prev_text, prev_text)
-            heard2 = _asr(prev_wav)
-            if heard2 and nxt_head[:3] not in _han_only(heard2) and not _diff_readings(prev_text, heard2):
+            shutil.copy2(wav, bak)
+            resynth_line(idx, text, text)
+            heard2 = _asr(wav)
+            if heard2 and verify(heard2):
                 import soundfile as sf
                 try:
-                    dur = round(sf.info(str(prev_wav)).duration, 3)
+                    dur = round(sf.info(str(wav)).duration, 3)
                 except Exception:
                     dur = None
                 report["fixed"].append({
-                    "index": idx - 1, "file": prev_wav.name, "text": prev_text[:40],
-                    "diffs": [{"char": nxt_head[0], "expect": "", "heard": "串句bleed"}],
+                    "index": idx, "file": wav.name, "text": text[:40],
+                    "diffs": [{"char": label[0], "expect": "", "heard": label}],
                     "duration": dur,
                 })
-                _emit(f"行{idx - 1} bleed 已修复", "ok")
+                _heard_cache[idx] = heard2  # 后续相邻行判定用修复后文本
+                _emit(f"行{idx} bleed 已修复 ({label})", "ok")
             else:
                 raise RuntimeError("bleed 重合成后仍异常")
         except Exception as exc:
-            logger.warning("[tts_verify] 行%s bleed 修复失败回滚: %s", idx - 1, exc)
+            # 宁可不修不可修错: 回滚原音频, 留给人工听
+            logger.warning("[tts_verify] 行%s bleed 修复失败回滚: %s", idx, exc)
             try:
                 if bak.exists():
-                    shutil.copy2(bak, prev_wav)
+                    shutil.copy2(bak, wav)
             except Exception:
-                logger.error("[tts_verify] 行%s 回滚失败, 原音频在 %s", idx - 1, bak)
+                logger.error("[tts_verify] 行%s 回滚失败, 原音频在 %s", idx, bak)
+            report["unresolved"].append({
+                "index": idx, "file": wav.name, "text": text[:40],
+                "diffs": [{"char": label[0], "expect": "", "heard": label}],
+                "reason": "bleed_resynth_failed",
+            })
         finally:
             bak.unlink(missing_ok=True)
+
+    def _bleed_entry(idx: int, label: str) -> dict[str, Any]:
+        seg = _by_index.get(idx) or {}
+        return {"index": idx, "file": str(seg.get("file") or ""),
+                "text": str(seg.get("text") or "")[:40],
+                "diffs": [{"char": label[0], "expect": "", "heard": label}]}
+
+    for seg in segments:
+        idx = int(seg.get("index", -1))
+        cur = _by_index.get(idx)
+        prev = _by_index.get(idx - 1)
+        if not cur:
+            continue
+        cur_text = str(cur.get("text") or "")
+        cur_han = _han_only(cur_text)
+
+        # ── 正向: 上行 (idx-1) 尾部串入本句句首 → 修 idx-1 ──
+        if prev and (idx - 1) in _heard_cache:
+            prev_text = str(prev.get("text") or "")
+            prev_han = _han_only(prev_text)
+            if sum(1 for c in prev_text if _is_han(c)) >= _MIN_HAN_CHARS:
+                # 下句句首取 3~5 汉字窗口 (太短误报, 太长 ASR 转写漂移匹配不上)
+                nxt_head = cur_han[:5]
+                hp = _han_only(_heard_cache[idx - 1])
+                # bleed 判据: 上行听到了下句句首, 且该片段不在上行自己文本里
+                # (全文任意位置查 — 口癖/排比重复不算 bleed, 宁可漏检不误重合成)
+                # 0913: 匹配改 _bleed_hit 容差 (同音漂移防漏检, 见其 docstring)
+                if (len(nxt_head) >= 3 and _bleed_hit(nxt_head[:3], hp)
+                        and nxt_head[:3] not in prev_han):
+                    if bleed_attempts >= bleed_budget:
+                        report["unresolved"].append(
+                            {**_bleed_entry(idx - 1, "串句bleed"),
+                             "reason": f"bleed_budget:{bleed_budget}"})
+                        _emit(f"行{idx - 1} bleed 超修复预算未修, 请人工听", "warn")
+                        continue
+                    _emit(f"行{idx - 1} 尾部串入下句开头「{nxt_head[:3]}…」(批切分 bleed) — 重合成去重", "warn")
+                    _fix_bleed_line(
+                        idx - 1, "串句bleed",
+                        lambda h2, nh=nxt_head[:3], pt=prev_text:
+                            nh not in _han_only(h2) and not _diff_readings(pt, h2))
+
+        # ── 反向: 本行 (idx) 头部带上句尾 → 修 idx (2026-09-07 新增) ──
+        if prev and idx in _heard_cache:
+            prev_text = str(prev.get("text") or "")
+            prev_han = _han_only(prev_text)
+            hc = _han_only(_heard_cache[idx])
+            if sum(1 for c in prev_text if _is_han(c)) >= _MIN_HAN_CHARS:
+                prev_tail = prev_han[-5:]
+                if (len(prev_tail) >= 3 and _bleed_hit(prev_tail[-3:], hc)
+                        and prev_tail[-3:] not in cur_han):
+                    if bleed_attempts >= bleed_budget:
+                        report["unresolved"].append(
+                            {**_bleed_entry(idx, "头串bleed"),
+                             "reason": f"bleed_budget:{bleed_budget}"})
+                        _emit(f"行{idx} bleed 超修复预算未修, 请人工听", "warn")
+                        continue
+                    _emit(f"行{idx} 头部带上句结尾「{prev_tail[-3:]}…」(批切分 bleed) — 重合成去重", "warn")
+                    _fix_bleed_line(
+                        idx, "头串bleed",
+                        lambda h2, pt=prev_tail[-3:], ct=cur_text:
+                            pt not in _han_only(h2) and not _diff_readings(ct, h2))
+
+    # ── 0913 语速地板: 首分钟窗口确定性体检 + 自动⏩加速闭环 ──
+    # 只查窗口内 (前 SPEED_FLOOR_WINDOW_CHARS 字) — 正文自然方差不进地板。
+    # 慢行不再人工挨个 ⏩: 在本行落区 df 基础上按实测速率折算目标 df (目标 5.6 留余量,
+    # 下限 0.5), 重合成复测; 两次仍不过留 slow_lines 给人工。预算 _SLOW_AUTO_BUDGET
+    # 防拖腔风暴烧 GPU。修复行入 fixed[] (duration 随既有回写链同步 manifest/DB)。
+    import wave as _wave_mod
+    try:
+        from scripts.tts_lib.lines import zone_duration_factor as _zdf
+    except Exception:
+        _zdf = None
+    report["slow_lines"] = []
+    _off = 0
+    _auto_left = _SLOW_AUTO_BUDGET
+    for seg in segments:
+        wav = output_dir / str(seg.get("file") or "")
+        idx = int(seg.get("index", -1))
+        text = str(seg.get("text") or "")
+        n_chars = len(re.sub(r"\s", "", text))
+        dur = 0.0
+        if idx >= 0 and wav.exists() and n_chars >= 4:
+            try:
+                with _wave_mod.open(str(wav), "rb") as w:
+                    dur = w.getnframes() / w.getframerate()
+            except Exception:
+                dur = 0.0
+        if dur > 0.3 and _off < SPEED_FLOOR_WINDOW_CHARS and n_chars / dur < SPEED_FLOOR:
+            _slow_entry = {"index": idx, "file": seg.get("file"), "text": text[:20],
+                           "rate": round(n_chars / dur, 2), "duration": round(dur, 2)}
+            _df_used = (global_df if _zdf is None or not speed_zones
+                        else _zdf(speed_zones, _off, global_df))
+            _fixed = False
+            _att = 0
+            # 自动⏩仅在引擎支持语速控制 (duration_factor) 时可行 — speed_zones 缺省
+            # (=backend 非 2.5, TTS2 忽略 df) 时只上报不烧 GPU
+            while speed_zones and _auto_left > 0 and _att < 2:
+                _att += 1
+                _auto_left -= 1
+                _df_new = max(round(_df_used * (n_chars / dur) / 5.6, 3), 0.5)
+                _emit(f"行{idx} 语速{_slow_entry['rate']}字/s <{SPEED_FLOOR} — 自动⏩ df={_df_new}", "warn")
+                try:
+                    resynth_line(idx, text, text, duration_factor=_df_new)
+                except TypeError:
+                    # 回调不支持 df 覆盖 (旧签名) — 退回纯上报
+                    _auto_left = 0
+                    break
+                except Exception as exc:
+                    logger.warning("[tts_verify] 行%s 自动加速失败: %s", idx, exc)
+                    break
+                try:
+                    with _wave_mod.open(str(wav), "rb") as w:
+                        dur = w.getnframes() / w.getframerate()
+                except Exception:
+                    break
+                if dur > 0.3 and n_chars / dur >= SPEED_FLOOR:
+                    report["fixed"].append({**_slow_entry, "duration": round(dur, 3),
+                                            "reason": "slow", "diffs": []})
+                    _emit(f"行{idx} 自动⏩过地板 ({round(n_chars / dur, 2)}字/s)", "ok")
+                    _fixed = True
+                    break
+                _df_used = _df_new  # 仍慢 → 在新 df 上再折一档
+            if not _fixed:
+                report["slow_lines"].append(_slow_entry)
+        _off += len(text)
+    if report["slow_lines"]:
+        _emit(f"语速地板 <{SPEED_FLOOR}字/s: {len(report['slow_lines'])} 行自动加速未过, 请 ⏩/人工",
+              "warn")
 
     n_fix, n_bad = len(report["fixed"]), len(report["unresolved"])
     if n_fix or n_bad:

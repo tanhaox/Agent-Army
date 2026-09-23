@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models import VideoAsset, VideoOutput
 from app.schemas import (
     ImportFolderRequest,
+    PexelsImageSearchRequest,
     PexelsImportRequest,
     PexelsOnlineSearchRequest,
     VideoAssetOut,
@@ -296,6 +297,49 @@ def pexels_online_search(body: PexelsOnlineSearchRequest, db: Session = Depends(
             "in_library": pid in existing_ids,
             "disliked": pid in dislike_ids,
             "video": v,  # 完整 dict 回传, import 时免二次拉取
+        })
+    return {"items": items, "query": query}
+
+
+@router.post("/pexels/image-search")
+def pexels_image_search(body: PexelsImageSearchRequest):
+    """在线搜索 Pexels 图片 (2026-09-06) — 图片反推页参考图.
+
+    只返回预览元数据 (缩略图/大图 URL), 不下载不入库, 不消耗下载配额.
+    图片与视频同 key 同 base, 复用 P线 http_session 与鉴权链路.
+    """
+    from app.services.pexels_service import PexelsAuthError, pexels_service
+    from app.services.pexels_service._http import search_pexels_photos
+
+    query = body.query.strip()
+    if not query:
+        raise HTTPException(400, "query 不能为空")
+    try:
+        pexels_service._ensure_config()
+        photos = search_pexels_photos(
+            pexels_service, query,
+            per_page=body.per_page, page=body.page, orientation=body.orientation or "any",
+        )
+    except PexelsAuthError as exc:
+        raise HTTPException(503, str(exc))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[library/pexels] image search failed: %s", exc)
+        raise HTTPException(502, f"Pexels 图片搜索失败: {exc}")
+
+    items = []
+    for p in photos:
+        pid = p.get("id")
+        if not pid:
+            continue
+        src = p.get("src") or {}
+        items.append({
+            "photo_id": pid,
+            "photographer": p.get("photographer") or "",
+            "alt": p.get("alt") or "",
+            "width": p.get("width"), "height": p.get("height"),
+            "thumb": src.get("medium"),
+            "preview": src.get("large2x") or src.get("large") or src.get("original"),
+            "pexels_url": p.get("url"),
         })
     return {"items": items, "query": query}
 

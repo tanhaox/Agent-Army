@@ -16,7 +16,7 @@ from app.services.director_events import PlanCancelled, publish as _evt
 from app.services.director_parser import parse_llm_plan
 from app.services.director_prompt import build_director_prompt
 from app.services.director_service._trace import append_trace
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMService, get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def _llm_plan_phase(
 ) -> Any:
     """Run LLM plan phase, return parsed plan or None (failed path handled)."""
     cfg = get_config()
-    llm = LLMService(cfg.deepseek)
+    llm = get_llm_service()
     # 优先用爆品改造稿 (boosted_text), 让导演按观众实际听到的新稿配画面.
     # 若未改造或改造为空, 回退到原始洗稿稿.
     director_script = (script.boosted_text or script.script_text) if hasattr(script, "boosted_text") else script.script_text

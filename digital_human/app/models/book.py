@@ -80,7 +80,17 @@ class Episode(Base):
     # 进产线桥接 (2026-08-19): 确认后生成 Script+segments, 复用 TTS/导演/合成/JY 全链
     script_id: Mapped[str | None] = mapped_column(String(36), default=None)
     director_job_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    # bs1 页单快照 (2026-09-08 老谭读书产线): 确认后的页单 (含字段/配图/时长),
+    # [{type, narration, fields, img_query, img_cap, img_file, img_pexels_id, png, est_sec}]
+    bs1_pages_json: Mapped[list[Any] | None] = mapped_column(JSON, default=None)
+    # 六拍模块表 (0917 模块总线): [{idx, name, tail}] — 结构真相源, 正文标签只是
+    # 人读视图; 生成/修稿时由 module_map.parse_modules 落库。TTS 模块墙/切场/分镜
+    # 全取此表, 标记在正文中存活与否不影响下游。
+    module_json: Mapped[list[Any] | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(String(32), default="pending")
+    # 成稿时间 (2026-09-12): 当前稿落定时刻 (生成/修稿都刷新) — 测试期各集版本不同靠它分辨;
+    # updated_at 会被确认/进产线等任何写碰脏, 不能当稿龄用
+    script_generated_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

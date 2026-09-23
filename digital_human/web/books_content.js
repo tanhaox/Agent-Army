@@ -21,7 +21,15 @@ function renderPage(b) {
       <div class="kv"><span class="k">核心主张</span>${esc(field('全书核心主张') || '-')}</div>
       <div class="kv"><span class="k">概念</span>${esc((field('关键概念清单') || []).join(' / '))}</div>
       <div class="kv"><span class="k">金句</span>${esc((field('核心金句') || []).slice(0,2).join(' / '))}</div>
-      <div class="kv"><span class="k">目标读者</span>${esc(field('目标读者画像') || '-')} ${(inp['目标读者画像']||{}).tier === 'persona' ? '<span class="badge">来自人设</span>' : ''}</div>
+      <div class="kv"><span class="k">目标读者</span>${esc(field('目标读者画像') || '-')} ${(inp['目标读者画像']||{}).tier === 'persona' ? '<span class="badge">来自人设·兜底</span>' : (field('目标读者画像') ? '<span class="badge distilled">来自书内容</span>' : '')}</div>
+      ${(() => { const am = (inp['受众地图']||{}).value; if (!am || !am.L1) return '';
+        const pool = arr => (arr || []).map(p =>
+          `<span style="display:inline-block;margin-right:0.6rem"><b style="color:#c9a25e">${esc(p.group||'')}</b><span style="color:#8aa0b8"> — ${esc(p.bridge||'')}</span></span>`).join('')
+          || '<span style="color:#64748b">书撑不起此轴</span>';
+        return `
+      <div class="kv"><span class="k">闲话池·上下游</span><span class="badge">价值链同构</span> ${pool(am['上下游'])}</div>
+      <div class="kv"><span class="k">闲话池·上下层</span><span class="badge">组织同构</span> ${pool(am['上下层'])}</div>
+      <div class="hint" style="margin:0.2rem 0 0.4rem">受众两层 (0914): 主线"你"=上方目标读者, 全篇不换人; 闲话层在迁移落地处按轴搭桥点名 (总纲从池中分配, 桥=机制同构)。</div>`; })()}
       ${needs.length ? `<div class="kv red"><span class="k">待补</span>${needs.join('、')}</div>` : ''}
       ${(() => { const r = (b.input_json || {}).risk_assessment; if (!r) return '';
         const icon = { green: '🟢', yellow: '🟡', red: '🔴' }[r.tier] || '❓';

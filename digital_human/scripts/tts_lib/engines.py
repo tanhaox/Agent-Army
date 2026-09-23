@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
@@ -17,10 +18,12 @@ from typing import Any
 import numpy as np
 
 from .audio import _write_wav
+
+logger = logging.getLogger(__name__)
 from .constants import DEFAULT_F5_URL, DEFAULT_FISH_URL, DEFAULT_INDEXTTS_URL
 from .http import _http_post_bytes, _http_post_json, _pack_msgpack, requests
 
-__all__ = ["fish_speech_tts", "f5_tts", "indextts_tts",
+__all__ = ["fish_speech_tts", "f5_tts", "indextts_tts", "indextts25_tts",
            "_marks_to_bare_pinyin", "_strip_pinyin_marks"]
 
 # 拼音标注协议 <字|PINYIN> (repo 内部通用形态, 见 app/services/pinyin_fix.py)。
@@ -167,7 +170,7 @@ def indextts_tts(
     top_p: float = 0.8,
     top_k: int = 30,
     temperature: float = 0.8,
-    max_text_tokens_per_segment: int = 120,
+    max_text_tokens_per_segment: int = 300,
     seed: int | None = None,
     use_emo_text: bool = False,
     emo_text: str | None = None,
@@ -248,9 +251,90 @@ def _fetch_indextts_audio(base_url: str, payload: dict[str, Any]) -> bytes:
     req = urllib.request.Request(
         url, data=data, headers={"Content-Type": "application/json"}, method="POST"
     )
+    # 0919 超时自适应 (ep4 实锤: GPU 被 ComfyUI 驻留栈挤压 → 10.4s/步 × 25 步 >
+    # 300s 定额 → 整 job "timed out"): 按文本量伸缩 + 超时单次重试 (服务端
+    # 无副作用, 重试安全; 已生成包走断点续传, 重试只救当前包)
+    n_chars = len(str(payload.get("text") or ""))
+    timeout = 300 + int(n_chars * 2.0)
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"IndexTTS2 HTTP {exc.code}: {body}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError):
+        import time as _t
+        logger.warning("[indextts] 超时 (%ds, %d字) — 清场后单次重试", timeout, n_chars)
+        _t.sleep(5)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+
+# ── IndexTTS-2.5 老谭读书通道 (2026-09-10) ──
+# 与 indextts_tts 的三点差异 (案卷见 memory indextts-25-upgrade):
+#   1. 保留 <字|PIN> 原生注音 (2.5 前端解析; 2 只认裸拼音, 故老引擎做转换)
+#   2. 2.5 预洗: ｜【】剥离 / 连续大写缩写加点 (HBO→H.B.O) / 裸 --→到
+#   3. 情感参考音频 (emo_audio_prompt) — 音色克隆老谭 + 韵律克隆参考音
+_ABBREV_RE = re.compile(r"(?<![A-Za-z.])([A-Z]{3,})(?![A-Za-z])")
+
+_ANNOT_RE = re.compile(r"<[^<>|]*\|[^<>]*>")
+
+def _wash_indextts25(text: str) -> str:
+    """2.5 文本预洗 (实测 bug 清单): 标点静默丢弃类直接剥, 缩写强制分读, -- 转口语.
+
+    注音标签 <字|PIN> 内部必须原样保护 — 缩写加点若误伤标签内拼音
+    (<行|HANG2>→<行|H.A.N.G2>) 前端拿到碎拼音直接念鬼话 (首样张实锤)。
+    """
+    parts = _ANNOT_RE.split(text)
+    keep = _ANNOT_RE.findall(text)
+    washed = []
+    for i, seg in enumerate(parts):
+        seg = re.sub(r"[｜【】]", " ", seg)
+        seg = _ABBREV_RE.sub(lambda m: ".".join(m.group(1)), seg)  # HBO → H.B.O
+        seg = seg.replace("--", "到")
+        # 书名号 2.5 直接跳过 (0910 实锤: 《后西游记》连读奇怪) — 开书名号换气口,
+        # 闭书名号跟随原句读; 去重防标点堆叠 (，，→，; ，。→。)
+        seg = seg.replace("《", "，").replace("》", "，")
+        # 0912 行尾破折号幻觉: 行尾开放式 —— (未完句感) 会让模型续写下一行开头
+        # ("三个维度——"→念出"第一,") — 行尾破折号一律剥掉, 停顿交给静音切分
+        seg = re.sub(r"[—…]+$", "", seg.rstrip())
+        seg = re.sub(r"，([，。！？；：、])", lambda m: m.group(1), seg)
+        seg = seg.replace("，，", "，")
+        washed.append(seg)
+        if i < len(keep):
+            washed.append(keep[i])
+    return "".join(washed)
+
+
+def indextts25_tts(
+    text: str,
+    output_path: Path,
+    base_url: str,
+    master_audio: Path | None = None,
+    master_text: str = "",
+    do_sample: bool = True,
+    top_p: float = 0.8,
+    top_k: int = 30,
+    temperature: float = 0.8,
+    max_text_tokens_per_segment: int = 300,
+    emo_alpha: float = 0.6,
+    emo_audio_prompt: Path | str | None = None,
+    duration_factor: float = 1.16,
+) -> Path:
+    """调 IndexTTS2.5 api_server (7866) /v1/tts — 老谭读书专用通道.
+
+    采样参数 do_sample=True 必须保持 (关=念经, 用户实测); duration 1.16 /
+    emo_alpha 0.6 为 webui 实测定稿默认, 调用方可覆盖。P5 情绪向量不传 —
+    韵律全部来自 emo_audio_prompt 情感参考 (樊登说书感)。"""
+    if master_audio is None or not master_audio.exists():
+        raise RuntimeError(f"indextts25 requires master_audio, got {master_audio}")
+    payload = _build_indextts_payload(
+        _wash_indextts25(text), master_audio, master_text, "calm",
+        do_sample, top_p, top_k, temperature, max_text_tokens_per_segment,
+        None, False, None, None, emo_alpha, emo_audio_prompt,
+        duration_factor=duration_factor,
+    )
+    audio_bytes = _fetch_indextts_audio(base_url, payload)
+    if not audio_bytes or len(audio_bytes) < 44:
+        raise RuntimeError("IndexTTS2.5 returned empty or invalid wav")
+    output_path.write_bytes(audio_bytes)
+    return output_path

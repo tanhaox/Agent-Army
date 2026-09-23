@@ -69,6 +69,55 @@ def _concat_wavs_with_fade(
     return output_path
 
 
+def _concat_wavs_with_pauses(
+    pieces: list[tuple[Path, float]],
+    output_path: Path,
+) -> Path:
+    """按 (wav, 片尾停顿秒) 顺序拼接, 每片尾垫自己的停顿 (0917 -Xs- 合成硬边界)。
+
+    与 _concat_wavs_with_fade 的差别: 间隔逐段可变、不加淡入淡出 — TTS 片段
+    自带句尾气口, 淡出会吃掉句尾辅音; 静音=纯零垫 (同 _apply_breath_pauses
+    的 apad 语义)。末片停顿是否垫由调用方决定 (批路径清零防与 wav 尾垫双垫,
+    reroll 全垫 — 无人再替它垫)。
+    """
+    if not pieces:
+        raise ValueError("No WAV files to concatenate")
+    if len(pieces) == 1:
+        wav, pause = pieces[0]
+        if pause <= 0:
+            shutil.copy2(wav, output_path)
+            return output_path
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(wav), "-af", f"apad=pad_dur={pause:.3f}",
+             str(output_path)],
+            capture_output=True, text=True, errors="replace",
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"FFmpeg pad failed: {r.stderr}")
+        if not output_path.exists():
+            raise RuntimeError("FFmpeg pad produced no output")
+        return output_path
+    inputs: list[str] = []
+    for wav, _ in pieces:
+        inputs += ["-i", str(wav)]
+    fc_parts = []
+    for i, (_, pause) in enumerate(pieces):
+        filters = f"apad=pad_dur={pause:.3f}" if pause > 0 else "anull"
+        fc_parts.append(f"[{i}:a]{filters}[a{i}]")
+    fc_parts.append(
+        "".join(f"[a{i}]" for i in range(len(pieces)))
+        + f"concat=n={len(pieces)}:v=0:a=1[out]"
+    )
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(fc_parts),
+           "-map", "[out]", str(output_path)]
+    r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    if r.returncode != 0:
+        raise RuntimeError(f"FFmpeg concat failed: {r.stderr}")
+    if not output_path.exists():
+        raise RuntimeError("FFmpeg concat produced no output")
+    return output_path
+
+
 def _ffprobe_duration(wav_path: Path) -> float | None:
     """ffprobe 音频时长 (秒); 失败返回 None."""
     try:

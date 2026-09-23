@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>风格选择板 — 动画风格选型</title>
+<link rel="stylesheet" href="/web/books.css">
+<style>
+  body{background:#14110d;color:#ece5d8}
+  [hidden]{display:none!important}  /* 本页多个组件用 flex 布局, 防特异性压过 hidden */
+  .board-grid{display:flex;flex-direction:column;gap:1rem;margin-top:1rem}
+  .shot-row{display:grid;grid-template-columns:170px repeat(var(--cols),1fr);gap:.6rem}
+  .shot-label{font-size:.8rem;color:#a2988a;padding:.4rem .2rem}
+  .shot-label b{color:#e6c078;display:block;font-size:.85rem}
+  .cell{position:relative;border:1px solid #332d25;border-radius:6px;overflow:hidden;
+    cursor:pointer;transition:border-color .15s;background:#1a1714}
+  .cell:hover{border-color:#d2a85e}
+  .cell img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover}
+  .cell .cap{position:absolute;left:0;right:0;bottom:0;background:rgba(10,8,6,.82);
+    font-size:.68rem;padding:.25rem .45rem;color:#a2988a}
+  .col-head{font-size:.85rem;font-weight:600;color:#e6c078;padding:.35rem .1rem;
+    border-bottom:2px solid #4a4234;display:block}
+  .col-head .col-name{display:flex;align-items:baseline;gap:.3rem;min-width:0}
+  .col-head .col-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .col-head .col-acts{display:flex;flex-wrap:wrap;gap:.25rem;margin-top:.3rem}
+  .col-head .new{font-size:.62rem;background:#7c2d12;color:#fecaca;border-radius:3px;padding:.05rem .3rem}
+  .col-head.pick-h{border-bottom-color:#d2a85e;color:#e6c078}
+  .pick{outline:3px solid #d2a85e;outline-offset:-3px}
+  .pick .cap::after{content:" ✓ 待确定";color:#e6c078}
+  .sel-btn{font-size:.66rem;background:transparent;border:1px solid #4a4234;color:#a2988a;
+    border-radius:3px;padding:.08rem .4rem;cursor:pointer}
+  .sel-btn:hover{border-color:#d2a85e;color:#e6c078}
+  .ex-btn{font-size:.66rem;background:transparent;border:1px solid #4a4234;color:#6f665a;
+    border-radius:3px;padding:.08rem .4rem;cursor:pointer}
+  .ex-btn:hover{border-color:#c0564a;color:#d98b6a}
+  .col-excluded .cell{filter:grayscale(1) brightness(.45)}
+  .col-excluded{opacity:.75}
+  .keep-btn{font-size:.66rem;background:transparent;border:1px solid #4a4234;color:#a2988a;
+    border-radius:3px;padding:.08rem .4rem;cursor:pointer}
+  .keep-btn:hover{border-color:#7c8a4a;color:#c9d8a0}
+  .kept-badge{font-size:.62rem;background:#2c3a1e;color:#c9d8a0;border:1px solid #4a5a2e;
+    border-radius:3px;padding:.06rem .35rem}
+  .ex-on{font-size:.62rem;background:#3d1d1a;color:#d98b6a;border:1px dashed #7a5642;
+    border-radius:3px;padding:.06rem .35rem;cursor:pointer}
+  .col-head.pick-h{border-bottom-color:#d2a85e;color:#e6c078}
+  .confirmbar{position:sticky;bottom:0;z-index:5;display:flex;align-items:center;gap:.8rem;
+    background:#211d18;border:1px solid #d2a85e;border-radius:8px;padding:.6rem .9rem;
+    margin-top:.9rem;box-shadow:0 -6px 30px rgba(0,0,0,.5)}
+  .confirmbar b{color:#e6c078}
+  .confirmbar .grow{flex:1}
+  #lightbox{position:fixed;inset:0;background:rgba(8,6,4,.95);z-index:99;display:flex;
+    align-items:center;justify-content:center;flex-direction:column;gap:.6rem}
+  #lightbox img{max-width:96vw;max-height:88vh;border:1px solid #4a4234;border-radius:4px}
+  #lightbox .lb-cap{color:#a2988a;font-size:.8rem}
+  #lightbox .lb-nav{color:#6f665a;font-size:.72rem}
+  #lightbox .lb-x{position:absolute;top:1rem;right:1.4rem;color:#a2988a;font-size:1.6rem;
+    cursor:pointer}
+  .log{font-size:.72rem;color:#a2988a;background:#1a1714;border:1px solid #332d25;
+    border-radius:6px;padding:.5rem .7rem;margin-top:.8rem;line-height:1.8;max-height:180px;overflow:auto}
+  .banner{margin-top:.8rem;padding:.6rem .9rem;border-radius:6px;font-size:.88rem}
+  .banner.ok{background:#14532d;color:#bbf7d0;border:1px solid #166534}
+  .desc-tip{font-size:.72rem;color:#8a7f6e;line-height:1.5;margin:.2rem 0 .4rem}
+</style>
+</head>
+<body>
+<nav>
+  <div class="logo">Pipeline<span>Studio</span></div>
+  <a href="/web/books.html">拆书</a>
+  <div class="spacer"></div>
+  <a href="/docs" target="_blank">API Docs</a>
+</nav>
+<div class="container">
+  <div class="panel">
+    <h2>🎨 风格选择板 <span class="badge" id="bk">…</span></h2>
+    <p class="desc-tip">真内容试镜: 第一集钩子段切 3 镜 → 风格库全员 + Kimi 新配方提案, 样张全部本地 K2 出
+      (选中即可产)。同镜同种子 — 只比风格不赌种子。点风格列任意图选定; 新提案选中后自动入库。</p>
+    <div class="toolbar">
+      <button id="btn-start" onclick="start()">▶ 启动选型 (约 10-20 分钟)</button>
+      <span id="bound" class="badge"></span>
+    </div>
+    <div id="banner"></div>
+    <div id="board" class="board-grid"></div>
+    <div id="confirmbar" class="confirmbar" hidden>
+      <span>已选风格: <b id="picked-name"></b></span><span class="grow"></span>
+      <button class="sm" onclick="confirmPick()">✅ 确定绑定</button>
+      <button class="sm secondary" onclick="clearPick()">取消</button>
+    </div>
+    <div id="log" class="log" hidden></div>
+  </div>
+</div>
+<div id="lightbox" hidden>
+  <span class="lb-x" onclick="lbClose()">✕</span>
+  <img id="lb-img" alt="放大预览">
+  <div class="lb-cap" id="lb-cap"></div>
+  <div class="lb-nav">← → 切换 · Esc 关闭 · 点击图片外关闭</div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const QS = new URLSearchParams(location.search);
+const BOOK = QS.get('book_id');
+const API = '/books/' + encodeURIComponent(BOOK) + '/style-board';
+let picked = null, timer = null, BOARD = null, EXCL = [], VER = '';
+
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2600)}
+
+async function start(){
+  const b=document.getElementById('btn-start');b.disabled=true;b.textContent='启动中…';
+  try{
+    const r=await fetch(API,{method:'POST'});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail||r.status);
+    toast('选型已启动'); poll(true);
+  }catch(e){alert('启动失败: '+e.message)}
+  b.disabled=false;b.textContent='▶ 启动选型 (约 10-20 分钟)';
+}
+
+function poll(first){
+  clearTimeout(timer);
+  fetch(API).then(r=>r.json()).then(v=>{
+    document.getElementById('bk').textContent='《'+(v.book_title||'')+'》';
+    const boundEl=document.getElementById('bound');
+    boundEl.textContent=v.bound?('已绑定: '+v.bound):'未绑定';
+    boundEl.className='badge '+(v.bound?'':'need');
+    if(v.excluded)EXCL=v.excluded;
+    const lg=document.getElementById('log');
+    if(v.retune){
+      const rt=v.retune;
+      if(rt.status==='running'){
+        const lg=document.getElementById('log');lg.hidden=false;
+        lg.innerHTML='<b style="color:#e6c078">重调中: '+esc(rt.style||'')+' — 修配方+单列重渲, 约 3-5 分钟…</b>';
+        timer=setTimeout(poll,3000);return;
+      }
+      if(rt.status==='error'){toast('重调失败: '+(rt.error||''));}
+      if(rt.status==='done'){toast('重调完成: '+esc(rt.style||'')+' — 刷新该列');}
+    }
+    if(v.job){
+      lg.hidden=false;
+      lg.innerHTML=(v.job.log||[]).map(l=>'· '+l).join('<br>')+
+        (v.job.status==='running'?`<br><b style="color:#e6c078">进行中… ${v.job.done_n} 张已出</b>`:'');
+    }
+    if(v.board) render(v.board);
+    if(v.job&&v.job.status==='running'){
+      timer=setTimeout(poll, first?1500:3000);
+    } else if(v.job&&v.job.status==='error'){
+      lg.hidden=false;lg.innerHTML+='<br><b style="color:#f87171">失败: '+v.job.error+'</b>';
+    }
+  }).catch(()=>{timer=setTimeout(poll,5000)});
+}
+
+function render(bd){
+  const n=bd.styles.length;
+  if(!n)return;
+  picked=bd.selected||null;
+  BOARD=bd; LB_CELLS=[]; VER=encodeURIComponent(bd.created_at||Date.now());  // 版本号破缓存: 轮次同名图不串档
+  let h=`<div class="shot-row" style="grid-template-columns:170px repeat(${n},1fr)">
+    <div></div>
+    ${bd.styles.map(s=>{
+      const ex=EXCL.includes(s.name);
+      return `<div class="col-head ${picked===s.name?'pick-h':''} ${ex?'col-excluded':''}" id="head-${cssId(s.name)}">
+        <span class="col-name"><b title="${esc(s.name)}">${esc(s.name)}</b>${s.is_new?'<span class="new">Kimi提案</span>':''}</span>
+        <span class="col-acts">${bd.selected?'':ex
+        ?`<span class="ex-on" onclick="excl('${esc(s.name)}', false)" title="已排除 — 点击恢复; 下轮选型重新入板">✕已排除</span>`
+        :`<button class="sel-btn" onclick="pick('${esc(s.name)}')">选定</button>`
+          +(s.is_new?(s.kept
+            ?`<span class="kept-badge" title="配方已入风格库备用">✦已留存</span>`
+            :`<button class="keep-btn" onclick="keepStyle('${esc(s.name)}')" title="风格好, 先入库备用; 仍在候选列待着, 随时可选定它 (不影响选风格)">留存</button>`):'')
+          +(s.is_new?`<button class="keep-btn" onclick="retuneStyle('${esc(s.name)}')" title="方向对但画面糙? Kimi 修配方旋钮 (LoRA/强度/质感词), 只重渲本列 3 张, 约 3-5 分钟">重调</button>`:'')
+          +`<button class="ex-btn" onclick="excl('${esc(s.name)}', true)" title="排除: 下轮选型不再入板, Kimi 补一个新提案顶位">排除</button>`}</span>
+      </div>`}).join('')}
+  </div>`;
+  bd.shots.forEach((sh,ci)=>{
+    h+=`<div class="shot-row" style="grid-template-columns:170px repeat(${n},1fr)">
+      <div class="shot-label"><b>镜${ci+1} ${esc(sh.name||'')}</b>${esc((sh.image_prompt_zh||'').slice(0,60))}…</div>
+      ${bd.styles.map((s,si)=>{
+        LB_CELLS.push({si,ci,name:s.name,shot:sh.name||('镜'+(ci+1))});
+        return `
+        <div class="cell ${picked===s.name?'pick':''}" id="cell-${si}-${ci}" title="点击放大: ${esc(s.name)}">
+          <img src="${API}/img/style${si}_${ci+1}.png?v=${VER}" loading="lazy" onclick="lbOpen(${si},${ci})" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cap',textContent:'未出图'}))">
+          <div class="cap">${esc(s.name)}${s.is_new?' · Kimi提案':''}</div>
+        </div>`}).join('')}
+    </div>`;
+  });
+  bd.styles.filter(s=>s.is_new).forEach(s=>{
+    h+=`<div class="desc-tip"><b style="color:#e6c078">Kimi 提案 · ${esc(s.name)}</b> — ${esc(s.desc||'')} ${s.lora?'(LoRA: '+esc(s.lora)+')':'(纯提示词)'}</div>`;
+  });
+  if(bd.selected) h+=`<div class="banner ok">已绑定: ${esc(bd.selected)} — 动画开工即用此风格</div>`;
+  document.getElementById('board').innerHTML=h;
+}
+
+/* ── 重调 (0922): 方向对但画面糙 — Kimi 修配方, 单列重渲 3 张 ── */
+async function retuneStyle(name){
+  const note=prompt(`重调「${name}」— 说说问题 (会交给 Kimi 修配方旋钮, 方向不变):`, '画面粗糙, 请精修还原度');
+  if(note===null)return;
+  try{
+    const r=await fetch(API+'/retune',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({style:name,note})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail||r.status);
+    toast('重调已启动: '+name+' (约 3-5 分钟)');
+    poll(true);
+  }catch(e){alert('重调失败: '+e.message)}
+}
+
+/* ── 留存 (0922 用户令): 这本书用不上, 但风格好 — 配方入库备用, 不绑本书 ── */
+async function keepStyle(name){
+  if(!confirm(`留存「${name}」?\n配方入风格库备用 — 它仍在本板候选列, 随时可选定; 以后别的书也能用。`))return;
+  try{
+    const r=await fetch(API+'/keep',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({style:name})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail||r.status);
+    toast(j.kept?('✦ 已留存: '+name+' → 风格库备用'):(name+' — '+(j.note||'已在库')));
+    if(BOARD){const st=BOARD.styles.find(x=>x.name===name);if(st&&j.kept)st.kept=true;render(BOARD);}
+  }catch(e){alert('留存失败: '+e.message)}
+}
+
+/* ── 排除 (0922 用户令): 下轮选型不入板, Kimi 提案补位; ✕已排除 可点击恢复 ── */
+async function excl(name, on){
+  if(on && !confirm(`排除「${name}」?\n下轮选型该风格不再入板, Kimi 会补一个新提案顶位 (本轮板仅置灰)。`))return;
+  try{
+    const r=await fetch(API+'/exclude',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({style:name,on})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail||r.status);
+    EXCL=j.excluded||[];
+    toast(on?('已排除 '+name+' — 下轮选型生效'):(name+' 已恢复'));
+    if(BOARD)render(BOARD);  // 本轮立即置灰/取消置灰
+  }catch(e){alert('操作失败: '+e.message)}
+}
+
+function cssId(s){return String(s).replace(/[^a-zA-Z0-9_一-龥]/g,'_')}
+
+/* ── 两步选定: 点[选定]高亮列 → 确定栏 [✅确定绑定] 才落库 ── */
+function pick(name){
+  picked=name;
+  document.querySelectorAll('.cell.pick,.col-head.pick-h').forEach(el=>el.classList.remove('pick','pick-h'));
+  const id=cssId(name);
+  const head=document.getElementById('head-'+id);
+  if(head) head.classList.add('pick-h');
+  BOARD.styles.forEach((s,si)=>{ if(s.name===name)
+    BOARD.shots.forEach((_,ci)=>document.getElementById(`cell-${si}-${ci}`)?.classList.add('pick')); });
+  document.getElementById('picked-name').textContent=name;
+  document.getElementById('confirmbar').hidden=false;
+}
+function clearPick(){
+  picked=null;
+  document.querySelectorAll('.cell.pick,.col-head.pick-h').forEach(el=>el.classList.remove('pick','pick-h'));
+  document.getElementById('confirmbar').hidden=true;
+}
+async function confirmPick(){
+  if(!picked)return;
+  try{
+    const r=await fetch(API+'/select',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({style:picked})});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.detail||r.status);
+    toast('已绑定: '+picked);
+    clearPick(); poll();
+  }catch(e){alert('绑定失败: '+e.message)}
+}
+
+/* ── 放大灯箱: ←→ 跨全部样张轮看, Esc/点外关闭 ── */
+let LB_CELLS=[], LB_I=0;
+function lbOpen(si,ci){
+  LB_I=LB_CELLS.findIndex(c=>c.si===si&&c.ci===ci);
+  lbShow();
+  document.getElementById('lightbox').hidden=false;
+}
+function lbShow(){
+  const c=LB_CELLS[LB_I]; if(!c)return;
+  document.getElementById('lb-img').src=`${API}/img/style${c.si}_${c.ci+1}.png?v=${VER}`;
+  document.getElementById('lb-cap').textContent=`${c.name} · ${c.shot} (${LB_I+1}/${LB_CELLS.length})`;
+}
+function lbClose(){document.getElementById('lightbox').hidden=true}
+document.getElementById('lightbox').addEventListener('click',e=>{if(e.target.id==='lightbox')lbClose()});
+document.addEventListener('keydown',e=>{
+  const lb=document.getElementById('lightbox');
+  if(lb.hidden)return;
+  if(e.key==='Escape')lbClose();
+  if(e.key==='ArrowRight'){LB_I=(LB_I+1)%LB_CELLS.length;lbShow()}
+  if(e.key==='ArrowLeft'){LB_I=(LB_I-1+LB_CELLS.length)%LB_CELLS.length;lbShow()}
+});
+
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+poll();
+</script>
+</body>
+</html>

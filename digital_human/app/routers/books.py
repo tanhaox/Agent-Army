@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,9 +17,12 @@ from sqlalchemy.orm import Session
 from app.config import get_config
 from app.database import get_db
 from app.models import BookProject, Episode
+from app.models.base import _now
 from app.services.book_service import orchestrator as orch
 from app.services.book_service.persona import ensure_book_account
 from app.services.book_service.reader import scan_book_sources
+
+from ._sse import sse_stream
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,9 @@ class BookCreate(BaseModel):
     selling_point: str | None = None
     source_path: str | None = None  # L0 精华/原书; 空则 UI 从书库选
     source_url: str | None = None  # 知海书页: 爬元数据/简介/目录当 L1
+    # 拆书人物即账号 (2026-09-07 双人物): 选定 = 人设模板+音色+品牌;
+    # 落 input_json.persona_id, 逐集生成/进产线/尾卡品牌/音色全链消费
+    persona_id: str | None = None
 
 
 class EpisodeEdit(BaseModel):
@@ -50,17 +57,144 @@ class ProduceRequest(BaseModel):
     persona_id: str | None = None
     # 强制重跑 (2026-08-20): 删旧 Script/segments 重建 — 发现错误/换新产线时用
     force: bool = False
+    # TTS 先行试听 (0912 用户令): 草稿态即可预产音频供人耳验收 (稿→音→确认);
+    # 稿已变则自动重建 segments, 未变复用现 Script
+    preview: bool = False
 
+
+
+_SETUP_JOBS: dict = {}
+
+
+@router.post("/books/{book_id}/fandeng-full")
+def fandeng_full(book_id: str, body: dict | None = None, db: Session = Depends(get_db)):
+    """樊登全书稿 (0912 樊登前置架构): 蒸馏一遍成型全书讲述, 分段续写, 2-5min.
+
+    总编剧吃它 (编段落号) 输出每集樊登切片; 逐集生成拐棍=切片 (零 LLM 调用)。
+    force=true 重产。已有稿时幂等返回 exists。
+    """
+    b = _book_or_404(db, book_id)
+    from app.services.book_service.fandeng_full import run_fandeng_full
+    r = run_fandeng_full(db, b, force=bool((body or {}).get("force")))
+    if r.get("status") == "failed":
+        raise HTTPException(500, r.get("error") or "樊登全书稿失败")
+    return r
+
+
+@router.get("/books/{book_id}/fandeng-full")
+def fandeng_full_text(book_id: str, db: Session = Depends(get_db)):
+    """樊登全书稿原文 (纯文本, 页面 📖 按钮新标签打开; 存 txt 不入库)."""
+    b = _book_or_404(db, book_id)
+    from app.services.book_service.fandeng_full import load_fandeng_full
+    txt = load_fandeng_full(b.book_title)
+    if not txt:
+        raise HTTPException(404, "樊登全书稿不存在, 先点 🎭 生成")
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(txt, media_type="text/plain; charset=utf-8")
+
+
+@router.post("/books/{book_id}/episodes/{n}/hook-variants")
+def hook_variants(book_id: str, n: int, db: Session = Depends(get_db)):
+    """钩子段多版×KPI分化 (0913 机制⑤⑦): 复用最新留档的 03_user 全料,
+    一次产 3 版各标 KPI 轴 (收藏型/评论型/共鸣型), 人工选版 = 用户网页版选择器角色产线化。
+    """
+    import re as _re
+    from pathlib import Path as _Path
+    b = _book_or_404(db, book_id)
+    ep = _ep_or_404(db, book_id, n)
+    root = Path(__file__).resolve().parents[1] / "outputs" / "拆书"
+    bdir = _re.sub(r'[\\/:*?"<>|\s]+', "_", b.book_title).strip("_") or "unnamed"
+    gens = sorted((root / bdir / f"ep{n}").glob("gen_*")) if (root / bdir / f"ep{n}").exists() else []
+    if not gens or not (gens[-1] / "03_user.txt").exists():
+        raise HTTPException(400, "该集无生成留档, 先跑一次「生成 (pro)」")
+    user_p = (gens[-1] / "03_user.txt").read_text(encoding="utf-8")
+    from app.services.book_service.creation_common import elastic_labels, _llm, _parse_json
+    from app.services.book_service.feed_registry import load_ban_list
+    h = elastic_labels(ep.target_duration_sec)[0]
+    cap = int((h[1] - h[0]) * 4.8)
+    v_sys = (
+        "你是顶级短视频编导。只写钩子段 (第一个时间标签段的内容), 一次产出 3 版, 按 KPI 分化:\n"
+        "A收藏型 — 判定动作/口诀前置, 让人想截屏 (工具感最强);\n"
+        "B评论型 — 职场共鸣争议钩, 让人忍不住站队说话 (从读者共鸣料取场景);\n"
+        "C共鸣型 — 单一人群场景深扎, 只对一类人说话 (从层级清单取一类)。\n"
+        f"每版结构: 断言(狠话无弱化词)→锤连击(数字+结局双要素, 只许观众世界的数字)→"
+        f"认领收窄→悬念收口(断言式半截话, 禁猜谜问句)。每版 ≤{cap}字。\n"
+        "铁律: 钩子段零书世界 (书名/书里/书中/《作品名》全禁); 禁弱化词(可能/也许/大概/搞不好/说不定);"
+        "数字锤离谱具体带参照物; 概念名最多一个。"
+        + load_ban_list()
+        + '\n\n输出严格 JSON (无围栏): {"variants":[{"kpi":"收藏型","axis":"判定表口诀前置",'
+          '"text":"..."},{"kpi":"评论型","axis":"...","text":"..."},{"kpi":"共鸣型","axis":"...","text":"..."}]}'
+    )
+    raw = _llm().chat(v_sys, user_p, model="pro", temperature=0.8)
+    data = _parse_json(raw) or {}
+    variants = [v for v in (data.get("variants") or []) if (v.get("text") or "").strip()]
+    if not variants:
+        raise HTTPException(500, "钩子三版产出不可解析")
+    try:
+        (gens[-1] / "08_hook_variants.json").write_text(
+            json.dumps({"cap": cap, "variants": variants}, ensure_ascii=False, indent=1),
+            encoding="utf-8")
+    except Exception:
+        pass
+    return {"cap": cap, "variants": variants, "gen_dir": str(gens[-1])}
+
+
+@router.post("/books/{book_id}/setup-full")
+def setup_full(book_id: str, db: Session = Depends(get_db)):
+    """一键管线 (0909): 蒸馏(跳过已蒸)→L0→视角→总纲 全自动, 后台跑, 不阻塞 HTTP.
+
+    返回 setup_id; 轮询 GET /books/{book_id}/setup-status 看进度;
+    完成后 status=ok 且总纲落库待确认。
+    """
+    import threading
+    book = _book_or_404(db, book_id)
+    if not book.source_path:
+        raise HTTPException(400, "书无源文件 (source_path 空)")
+    from app.services.book_service import pipeline as _pipe
+    if _pipe.SETUP_JOBS.get(book_id, {}).get("status") == "running":
+        raise HTTPException(409, "该书管线正在跑")
+    _pipe.SETUP_JOBS[book_id] = {"status": "running", "steps": []}
+
+    def _on_log(msg):
+        _pipe.SETUP_JOBS.setdefault(book_id, {"status": "running", "steps": []})
+        _pipe.SETUP_JOBS[book_id]["steps"].append(msg)
+        # 只保留最近 60 步防内存涨
+        _pipe.SETUP_JOBS[book_id]["steps"] = _pipe.SETUP_JOBS[book_id]["steps"][-60:]
+
+    def _run():
+        from app.database import db_session
+        from app.services.book_service.pipeline import run_book_setup
+        try:
+            with db_session() as db2:
+                result = run_book_setup(db2, book.source_path, create_book=False,
+                                        on_log=_on_log, book_id=book_id)
+            _pipe.SETUP_JOBS[book_id] = dict(result, steps=_pipe.SETUP_JOBS.get(book_id, {}).get("steps", []))
+        except Exception as exc:
+            _pipe.SETUP_JOBS[book_id] = {"status": "failed", "error": str(exc),
+                                         "steps": _pipe.SETUP_JOBS.get(book_id, {}).get("steps", [])}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"setup_id": book_id, "status": "running"}
+
+
+@router.get("/books/{book_id}/setup-status")
+def setup_status(book_id: str):
+    from app.services.book_service import pipeline as _pipe
+    return _pipe.get_setup_state(book_id)
 
 class RoadmapRow(BaseModel):
-    """总纲单行: 可编辑 6 字段 (与 build_roadmap 生成结构对齐)."""
+    """总纲单行: 可编辑字段 (与 build_roadmap 生成结构对齐; 0908 加秘籍/卖点)."""
     ep: int
     主题: str = ""
+    本集秘籍: str = ""
     对应书中内容: str = ""
     核心任务: str = ""
+    卖点: str = ""
     承上: str = ""
     启下: str = ""
     概念: list[str] = []
+    # 构件/拆解三步 = 导演层字段 (总纲生成时落库), 讲书页表格不编辑不提交 —
+    # 0913b 修: 从 update 映射摘除, 防 UI 全量保存时把空串覆写上去 (构件曾被此路径抹掉)
 
 
 class RoadmapUpdate(BaseModel):
@@ -158,29 +292,24 @@ def distill_clear():
 @router.get("/distill/events")
 async def distill_events(request: Request):
     """SSE: 蒸馏批次关键节点实时推送 (启动/每书/每章/完成/腾卡)."""
-    import asyncio as _aio
-    import json as _json
     from fastapi.responses import StreamingResponse
+
     from app.services.director_events import subscribe, unsubscribe
 
+    def _heartbeat() -> str:
+        return f"data: {json.dumps({'level': 'info', 'msg': '…'}, ensure_ascii=False)}\n\n"
+
     queue = subscribe("distill")
-
-    async def event_stream():
-        try:
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    data = await _aio.wait_for(queue.get(), timeout=20.0)
-                    yield f"data: {_json.dumps(data, ensure_ascii=False)}\n\n"
-                    if data.get("type") in ("distill_done", "distill_error"):
-                        break
-                except _aio.TimeoutError:
-                    yield f"data: {_json.dumps({'level': 'info', 'msg': '…'}, ensure_ascii=False)}\n\n"
-        finally:
-            unsubscribe("distill", queue)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        sse_stream(
+            request, queue,
+            heartbeat=_heartbeat,
+            timeout=20.0,
+            terminal_types=("distill_done", "distill_error"),
+            on_close=lambda: unsubscribe("distill", queue),
+        ),
+        media_type="text/event-stream",
+    )
 
 
 @router.get("/book-sources/leaderboard")
@@ -195,9 +324,11 @@ def source_leaderboard():
 
 @router.get("/book-sources/ready")
 def ready_book_sources():
-    """全流程蒸馏完成的书 (2026-08-23): 蒸馏txt + L0 章节 + 全 facing — 新书下拉只列这些.
-
-    防「只有蒸馏txt就建书 → auto_fill 静默空」; 未就绪的书需先跑蒸馏/L0/facing.
+    """可建书的书源 (2026-09-07 修正): 有蒸馏 txt 即入列 — 恢复原设计意图
+    "蒸馏合格就出现在下拉"。L0/facing 由建书流程自动补跑 (POST /books 的
+    _run_prepare 后台线程 + 前端轮询 /prep), 不该是下拉的前置条件 —
+    2026-08-23 加 _book_l0_ready 过滤后, 只有蒸馏 txt 的书全被挡, 补跑路径
+    成死代码 (只剩蛤蟆一本可建, 用户实锤)。
     """
     from app.services.book_service import distiller
     from app.services.book_service.reader import clean_book_title
@@ -206,8 +337,8 @@ def ready_book_sources():
         if distiller.DISTILL_SUFFIX not in s["filename"]:
             continue
         title = clean_book_title(Path(s["filename"]).stem).replace(".蒸馏", "").strip()
-        if _book_l0_ready(title):
-            out.append({"path": s["path"], "book_title": title})
+        out.append({"path": s["path"], "book_title": title,
+                    "l0_ready": _book_l0_ready(title)})
     return {"ready": out}
 
 
@@ -349,7 +480,14 @@ def _run_prepare(book_id: str, book_title: str) -> None:
 @router.post("/books")
 def create_book(body: BookCreate, db: Session = Depends(get_db)):
     ensure_book_account(db)  # 幂等建书账号人设
-    book = BookProject(**body.model_dump(exclude_none=True))
+    # 人物即账号 (2026-09-07): persona_id 落 input_json, 逐集生成/进产线/
+    # 尾卡品牌/音色全链消费; 未选回退静读书 (既有行为)
+    if body.persona_id:
+        from app.models import Persona as _P
+        if not db.query(_P).filter(_P.id == body.persona_id).first():
+            raise HTTPException(404, f"人物不存在: {body.persona_id}")
+    book = BookProject(**body.model_dump(exclude={"persona_id"}, exclude_none=True))
+    book.input_json = {"persona_id": body.persona_id} if body.persona_id else {}
     db.add(book)
     db.commit()
     db.refresh(book)
@@ -394,6 +532,278 @@ def auto_fill_l0(book_id: str, db: Session = Depends(get_db)):
     b = _book_or_404(db, book_id)
     filled = orch.auto_fill_from_l0(db, b)
     return {"book_id": book_id, "auto_filled": filled}
+
+
+# ── 风格选择板 (0922 用户令): 真内容试镜 → 库轮询+Kimi新配方 → 点选落绑定 ──
+
+@router.post("/books/{book_id}/style-board")
+def style_board_start(book_id: str, db: Session = Depends(get_db)):
+    """启动风格选型 (后台 job): ep1 总纲切 3 试镜镜 → 库全员+Kimi提案 × K2 样张."""
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    ep1 = db.query(Episode).filter(Episode.book_id == b.id, Episode.ep_index == 1).first()
+    if not ep1 or not (ep1.roadmap_json or {}).get("主题"):
+        raise HTTPException(409, "先完成总纲 (ep1 主题空) 再做风格选型")
+    ij = b.input_json if isinstance(b.input_json, dict) else {}
+    material = {
+        "书名": b.book_title, "核心主张": b.core_claim or "",
+        "灵魂三问": ij.get("灵魂三问") or {},
+        "第1集": {k: (ep1.roadmap_json or {}).get(k) for k in
+                 ("主题", "黄金三秒钩子", "赌注层级", "贯穿人物", "对应书中内容", "核心任务")},
+    }
+    try:
+        return style_board.start_board(b.id, b.book_title, material)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.get("/books/{book_id}/style-board")
+def style_board_get(book_id: str, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    view = style_board.board_view(b.id, b.book_title)
+    view["book_title"] = b.book_title
+    view["bound"] = style_board.bound_style(b.book_title)
+    view["excluded"] = style_board.exclusions(b.book_title)
+    return view
+
+
+class StyleSelectBody(BaseModel):
+    style: str
+
+
+@router.post("/books/{book_id}/style-board/select")
+def style_board_select(book_id: str, body: StyleSelectBody, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    try:
+        return style_board.select(b.book_title, body.style)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"选择板不存在, 先启动选型: {exc}")
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/books/{book_id}/style-board/img/{name}")
+def style_board_img(book_id: str, name: str, db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    try:
+        p = style_board.board_img(b.book_title, name)
+    except FileNotFoundError:
+        raise HTTPException(404, f"图不存在: {name}")
+    return FileResponse(p, headers={"Cache-Control": "no-store"})
+
+
+class StyleExcludeBody(BaseModel):
+    style: str
+    on: bool = True  # True=排除 (下轮选型不入板, Kimi 补位); False=恢复
+
+
+@router.post("/books/{book_id}/style-board/exclude")
+def style_board_exclude(book_id: str, body: StyleExcludeBody, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    cur = style_board.set_exclusion(b.book_title, body.style, body.on)
+    return {"book_title": b.book_title, "style": body.style,
+            "on": body.on, "excluded": cur}
+
+
+@router.post("/books/{book_id}/style-board/keep")
+def style_board_keep(book_id: str, body: StyleSelectBody, db: Session = Depends(get_db)):
+    """留存 (0922): 配方入库备用不绑本书."""
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    try:
+        return style_board.keep(b.book_title, body.style)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"选择板不存在, 先启动选型: {exc}")
+    except KeyError as exc:
+        raise HTTPException(404, str(exc))
+
+
+class StyleRetuneBody(BaseModel):
+    style: str
+    note: str = ""  # 用户判词, 默认 "画面粗糙, 请精修还原度"
+
+
+@router.post("/books/{book_id}/style-board/retune")
+def style_board_retune(book_id: str, body: StyleRetuneBody, db: Session = Depends(get_db)):
+    """重调 (0922): 方向对但画面糙 — Kimi 修配方旋钮, 单列重渲 3 张 (后台 job, 页面轮询)."""
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    return style_board.start_retune(b.id, b.book_title, body.style, body.note)
+
+
+# ── 艺术圣经页 (0922): 大纲→风格选型→圣经, 独立页 ──
+
+@router.get("/books/{book_id}/style-bible")
+def style_bible_get(book_id: str, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    return style_board.bible_view(b.id, b.book_title)
+
+
+class BibleGenBody(BaseModel):
+    force: bool = False  # True=无视缓存重掷
+
+
+@router.post("/books/{book_id}/style-bible/generate")
+def style_bible_generate(book_id: str, body: BibleGenBody, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    if not style_board.bound_style(b.book_title):
+        raise HTTPException(409, "先完成风格选型 (圣经吃选定配方的风格家族)")
+    try:
+        return style_board.start_bible(b.id, b.book_title, force=body.force)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post("/books/{book_id}/style-bible/save")
+def style_bible_save(book_id: str, body: dict, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    try:
+        return style_board.save_bible(b.book_title, body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.post("/books/{book_id}/style-bible/render-samples")
+def style_bible_render_samples(book_id: str, db: Session = Depends(get_db)):
+    """圣经试渲 (0922): 色板/质感/角色策略烘进画面, 后台渲 2 张."""
+    from app.services.anim_pipeline import style_board
+    b = _book_or_404(db, book_id)
+    try:
+        return style_board.render_bible_samples(b.id, b.book_title)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+# ── 角色设计台 (0923 用户令): 圣经角色卡 → 定妆照沉淀, 独立功能 ──
+
+@router.get("/books/{book_id}/style-characters")
+def style_characters_get(book_id: str, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import character_sheets, style_board
+    b = _book_or_404(db, book_id)
+    bound = style_board.bound_style(b.book_title)
+    recipe = None
+    if bound:
+        try:
+            recipe = json.loads((style_board._assets() / "风格库" /
+                                 f"{style_board._safe_name(bound)}.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+    v = character_sheets.view(b.id, b.book_title, bound, recipe)
+    v["book_title"] = b.book_title
+    return v
+
+
+class CharDesignBody(BaseModel):
+    names: list[str] = []  # 空 = 全部角色
+    looks: dict = {}  # {角色名: look} 文本框当前值随渲随存
+
+
+@router.post("/books/{book_id}/style-characters/design")
+def style_characters_design(book_id: str, body: CharDesignBody, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import character_sheets
+    b = _book_or_404(db, book_id)
+    try:
+        return character_sheets.start_design(b.id, b.book_title, body.names, body.looks or None)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+
+
+class CharSaveBody(BaseModel):
+    characters: list[dict]
+
+
+@router.post("/books/{book_id}/style-characters/save")
+def style_characters_save(book_id: str, body: CharSaveBody, db: Session = Depends(get_db)):
+    from app.services.anim_pipeline import character_sheets
+    b = _book_or_404(db, book_id)
+    try:
+        return character_sheets.save_characters(b.book_title, body.characters)
+    except FileNotFoundError:
+        raise HTTPException(404, "圣经不存在, 先在艺术圣经页生成")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/books/{book_id}/style-characters/img/{name}")
+def style_characters_img(book_id: str, name: str, db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    from app.services.anim_pipeline import character_sheets, style_board
+    b = _book_or_404(db, book_id)
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(404, name)
+    p = character_sheets._design_dir(b.book_title) / name
+    if not p.exists():
+        raise HTTPException(404, f"定妆照不存在: {name}")
+    return FileResponse(p, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/books/{book_id}/rerun-outline")
+def rerun_outline(book_id: str, db: Session = Depends(get_db)):
+    """重跑总纲 (0912): 系列总编剧强制重排, 每次调用现读最新 laotan_series_director.txt.
+
+    覆盖 灵魂三问+全系列 roadmap+集标题; 覆盖前自动备份到 data/l0/{书名}/roadmap_backup_{ts}.json.
+    逐集稿不动 — 需要时另点级联重跑. 校验未过 (rejected) 不落库, 422 带问题清单.
+    """
+    from datetime import datetime
+
+    b = _book_or_404(db, book_id)
+    # 备份现总纲 (覆盖前)
+    eps = db.query(Episode).filter(Episode.book_id == b.id).order_by(Episode.ep_index).all()
+    backup_path = None
+    if eps:
+        from app.services.book_service.l0 import _l0_dir
+        backup = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "灵魂三问": (b.input_json or {}).get("灵魂三问"),
+            "roadmap": {e.ep_index: e.roadmap_json for e in eps},
+            "titles": {e.ep_index: e.title for e in eps},
+        }
+        backup_path = _l0_dir(b.book_title) / f"roadmap_backup_{datetime.now():%m%d_%H%M%S}.json"
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        backup_path.write_text(json.dumps(backup, ensure_ascii=False, indent=1), encoding="utf-8")
+    from app.services.book_service.series_outline import run_series_outline
+    r = run_series_outline(db, b, replace=True)
+    if r.get("status") == "rejected":
+        raise HTTPException(422, "总编剧校验未过, 未落库: " + "; ".join(r.get("issues") or []))
+    if r.get("status") != "ok":
+        raise HTTPException(500, f"总编剧失败: {r.get('error') or r.get('status')}")
+    # 联动 (0912 用户令: 总纲重排必须联动单元重切 — 否则单元级精料与总纲脱钩,
+    # 逐集生成饿死单元料): units 按新总纲重切 + hooks 重产 + unit_id 回填。
+    # 受众 (0913c): 书定读者优先 (目标读者以书定), 未锁定时继承旧指纹链
+    recut = None
+    try:
+        from app.services.book_service.facing import recut_units_for_roadmap
+        from app.services.book_service.creation_steps import _book_reader_value
+        recut = recut_units_for_roadmap(
+            b, db, audience=_book_reader_value(b.input_json or {}))
+        logger.info("[rerun-outline] 单元联动重切: %s", recut)
+    except Exception as exc:
+        logger.warning("[rerun-outline] 单元重切失败 (不阻断, 可手动补跑): %s", exc)
+    # 稿件 stale 标记 (0912 同类病 b: 总纲重排后旧稿无提示): 有稿的集打 _stale_outline,
+    # 讲书页亮"旧总纲稿"徽标 — 与音频 stale 机制同构
+    stale_eps = []
+    for e in b.episodes:
+        if e.script_text:
+            rm = dict(e.roadmap_json or {})
+            rm["_stale_outline"] = True
+            e.roadmap_json = rm
+            stale_eps.append(e.ep_index)
+    if stale_eps:
+        db.commit()
+        logger.info("[rerun-outline] 旧总纲稿标记 stale: %s", stale_eps)
+    return {"book_id": book_id, "status": "ok", "backup": str(backup_path) if backup_path else None,
+            "recut": recut, "stale_eps": stale_eps,
+            "soul": r.get("soul"),
+            "episodes": [{"ep": e.get("ep"), "主题": e.get("主题")}
+                         for e in r.get("episodes") or []]}
 
 
 @router.get("/books")
@@ -538,17 +948,30 @@ def _book_progress(b: BookProject) -> dict:
 @router.get("/books/{book_id}")
 def get_book(book_id: str, db: Session = Depends(get_db)):
     b = _book_or_404(db, book_id)
+    # 樊登全书稿状态 (0912): 页面按钮显示已有稿/字数
+    _ff_info = {"exists": False, "chars": 0}
+    try:
+        from app.services.book_service.fandeng_full import load_fandeng_full
+        _fft = load_fandeng_full(b.book_title)
+        if _fft:
+            _ff_info = {"exists": True, "chars": len(_fft)}
+    except Exception:
+        pass
     return {
         "id": b.id, "book_title": b.book_title, "author": b.author,
         "status": b.status, "input_json": b.input_json,
         "source_path": b.source_path, "cart_url": b.cart_url,
         "cover_url": b.cover_url, "selling_point": b.selling_point,
         "progress": _book_progress(b),
+        "fandeng_full": _ff_info,
         "episodes": [
             {"ep": e.ep_index, "title": e.title, "status": e.status,
              "script_text": e.script_text, "coverage": e.coverage_json,
              "roadmap": e.roadmap_json, "target_duration_sec": e.target_duration_sec,
-             "script_id": e.script_id, "director_job_id": e.director_job_id}
+             "script_id": e.script_id, "director_job_id": e.director_job_id,
+             # 成稿时间 (0912): sqlite 存 naive UTC, 补 tz 让前端 new Date() 正确转本地
+             "script_generated_at": (e.script_generated_at.replace(tzinfo=timezone.utc).isoformat()
+                                     if e.script_generated_at else None)}
             for e in b.episodes],
     }
 
@@ -628,8 +1051,10 @@ def update_roadmap(book_id: str, body: RoadmapUpdate, db: Session = Depends(get_
         cur.update({
             "ep": row.ep,
             "主题": row.主题,
+            "本集秘籍": row.本集秘籍,
             "对应书中内容": row.对应书中内容,
             "核心任务": row.核心任务,
+            "卖点": row.卖点,
             "承上": row.承上,
             "启下": row.启下,
             "概念": row.概念 or [],
@@ -647,12 +1072,25 @@ def update_roadmap(book_id: str, body: RoadmapUpdate, db: Session = Depends(get_
 def edit_episode(book_id: str, n: int, body: EpisodeEdit, db: Session = Depends(get_db)):
     """人工修稿 (确认节点内)."""
     ep = _ep_or_404(db, book_id, n)
+    module_warning = None
     for f in ("script_text", "title", "target_duration_sec"):
         v = getattr(body, f)
         if v is not None:
             setattr(ep, f, v)
+    if body.script_text is not None:
+        # 六拍模块总线 (0917): 修稿是 ep1/ep2 裸稿事故元凶 — 新稿带标记则重解析落库;
+        # 标记被编辑丢失时保留旧模块表 (tail 锚在新稿重定位, 定位不到的消费端会如实报),
+        # 并亮灯提示, 不静默断总线。
+        from app.services.book_service.module_map import parse_modules
+        mods = parse_modules(body.script_text)
+        if mods:
+            ep.module_json = mods
+        else:
+            module_warning = ("稿件无六拍标记: 沿用历史模块表 (按末行锚定位); "
+                              "若正文大改, 建议补标记或重新生成 — 否则 TTS 模块墙/切场将退化为旧结构")
+        ep.script_generated_at = _now()  # 修稿也算新稿落定 (成稿时间刷新)
     db.commit()
-    return {"ep": ep.ep_index, "status": ep.status}
+    return {"ep": ep.ep_index, "status": ep.status, "module_warning": module_warning}
 
 
 @router.post("/books/{book_id}/episodes/{n}/generate")
@@ -693,11 +1131,22 @@ def produce(book_id: str, n: int, body: ProduceRequest | None = None,
 
     b = _book_or_404(db, book_id)
     ep = _ep_or_404(db, book_id, n)
+    preview = bool(body.preview) if body else False
     if ep.status != "confirmed" or not ep.script_text:
-        raise HTTPException(409, f"第{n}集未确认或无稿 (先走 确认3)")
+        # preview (TTS 先行): 草稿+有稿 即可预产音频 (人耳验收后再确认3)
+        if not (preview and ep.script_text):
+            raise HTTPException(409, f"第{n}集未确认或无稿 (先走 确认3)")
     force = bool(body.force) if body else False
-    if ep.script_id and db.get(Script, ep.script_id) and not force:
-        return {"script_id": ep.script_id, "already": True}
+    _existing = db.get(Script, ep.script_id) if ep.script_id else None
+    if _existing and not force:
+        if not preview:
+            return {"script_id": ep.script_id, "already": True}
+        # preview 复用判定: 稿没变直接复用现 Script (打 TTS), 变了才重建
+        from app.services.script_parser import clean_episode_script as _clean
+        _cleaned_now, _ = _clean(ep.script_text)
+        if _existing.script_text == _cleaned_now:
+            return {"script_id": ep.script_id, "already": True, "preview": True}
+        force = True  # 稿变了 → 重建 (segments 同步新稿)
     if force and ep.script_id:
         # 重跑: 删旧 Script + 其 segments (级联), 再重建
         old = db.get(Script, ep.script_id)
@@ -741,6 +1190,16 @@ def produce(book_id: str, n: int, body: ProduceRequest | None = None,
     cleaned_text, clean_issues = clean_episode_script(ep.script_text)
     if clean_issues:
         logger.warning("[book] 第%d集 清洗告警: %s", n, "; ".join(clean_issues))
+
+    # 六拍模块总线 (0917): 结构真相源 = ep.module_json (tail 锚, 任意文本形态重定位).
+    # 旧集缺表时从正文标签现解析回填; 墙(模块末行号)不落库 — 派生值, 由 TTS 入口
+    # 在当刻行序列 (Segment 拼接) 上现定位, 免行号口径漂移。
+    from app.services.book_service import module_map
+    _mods = ep.module_json or module_map.parse_modules(ep.script_text or "")
+    if _mods and not ep.module_json:
+        ep.module_json = _mods
+    if not _mods:
+        clean_issues.append("无六拍模块表 (TTS 模块墙/切场将退化为字数贪心)")
 
     script = Script(
         article_id=article.id,
@@ -802,3 +1261,169 @@ def delete_book(book_id: str, db: Session = Depends(get_db)):
     db.commit()
     logger.info("[book] 已删除拆书项目: %s (%s)", title, book_id)
     return {"deleted": book_id, "book_title": title}
+
+
+class PublishCardBody(BaseModel):
+    action: str = "copy"  # copy=调取三件套; covers=模板封面(横+竖)
+    sub: str | None = None    # covers: 封面红字钩子 (页面编辑框传回)
+
+
+@router.get("/books/{book_id}/episodes/{n}/publish-card")
+def publish_card(book_id: str, n: int, db: Session = Depends(get_db)):
+    """发布卡数据 (0918 用户令): 本集封面位 + 发布三件套 — 数据全对应本集."""
+    b = _book_or_404(db, book_id)
+    ep = _ep_or_404(db, book_id, n)
+    rm = ep.roadmap_json or {}
+    inp = b.input_json or {}
+    l1 = (inp.get("目标读者画像") or {})
+    l1v = str(l1.get("value") or "") if l1.get("tier") != "persona" else ""
+    # 立意模块 (若本集已动画规划)
+    metaphor = ""
+    try:
+        from app.services.anim_pipeline import shots as _shots
+        doc = _shots.load_doc(b.book_title, n)
+        metaphor = "; ".join(str(a.get("metaphor_core") or a.get("visual_metaphor") or "")
+                             for a in (doc.get("arcs") or [])[:2])
+    except Exception:  # noqa: S110 — 未规划集无立意
+        pass
+    # 已生成的模板封面 (ep 产物 publish/ 目录, 经 anim 文件路由回服务)
+    cover_v = cover_h = None
+    try:
+        from app.services.anim_pipeline import shots as _shots
+        _pub = _shots.ep_dir(b.book_title, n) / "publish"
+        _base = f"/api/anim/ep/{book_id}/{n}/file/publish/"
+
+        def _cv(name: str) -> str:
+            # ?v=mtime 破缓存 (0921 实锤: 重打样后浏览器一直吃旧图)
+            return f"{_base}{name}?v={int((_pub / name).stat().st_mtime)}"
+
+        if (_pub / "cover_v.png").exists():
+            cover_v = _cv("cover_v.png")
+        if (_pub / "cover_h.png").exists():
+            cover_h = _cv("cover_h.png")
+    except Exception:  # noqa: S110 — 未进动画线的集无 ep 目录
+        pass
+    material = (f"书: {b.book_title}\n本集主题: {rm.get('主题') or ep.title}\n"
+                f"本集秘籍: {rm.get('本集秘籍') or ''}\n黄金三秒钩子: {rm.get('黄金三秒钩子') or ''}\n"
+                f"目标读者: {l1v[:120]}\n核心隐喻: {metaphor[:160]}")
+    copy = rm.get("_publish_copy") or None
+    if copy:  # 存量 6-8 标签历史稿出卡即裁 5 (抖音上限, 0921 实测)
+        copy = {**copy, "tags": (copy.get("tags") or [])[:5]}
+    return {"book_title": b.book_title, "ep_title": ep.title, "theme": rm.get("主题") or "",
+            "material": material, "copy": copy,
+            "cover_v": cover_v, "cover_h": cover_h}
+
+
+@router.post("/books/{book_id}/episodes/{n}/publish-card")
+def publish_card_gen(book_id: str, n: int, body: PublishCardBody,
+                     db: Session = Depends(get_db)):
+    """发布物料: action=copy → 三件套 (0921 用户令: 纯程序调取零 LLM — 大纲
+    主题/钩子/概念 + 讲稿开场块即素材, LLM"生成"再像也是改写, 直接取原文);
+    action=covers → 模板封面 (可控渲染)."""
+    b = _book_or_404(db, book_id)
+    ep = _ep_or_404(db, book_id, n)
+    rm = ep.roadmap_json or {}
+
+    if body.action == "covers":
+        # 模板封面 (0918): 复古书风主模板 (横+竖) + 大字海报风 (给了核心字才出).
+        # 红字优先级: 页面编辑框 > 主题破折号后段子句收口 (与三件套同源, 不再
+        # 裸用全题 — 主题含"——"时整串上封面=三行, ep6 实锤)
+        from app.services.anim_pipeline import shots as _shots
+        from app.services.book_service.cover_render import render_covers
+        import re as _re2
+
+        def _clause2(text: str, limit: int) -> str:
+            t = str(text or "").strip()
+            if len(t) <= limit:
+                return t
+            out = ""
+            for cl in _re2.split(r"(?<=[，。；！？])", t):
+                if cl and len(out) + len(cl) <= limit:
+                    out += cl
+            return out.rstrip("，。；、 ") or t[:limit]
+
+        theme = str(rm.get("主题") or "")
+        fallback_sub = _clause2(theme.split("——")[-1].strip()
+                                if "——" in theme else theme, 20) \
+            or _clause2(str(rm.get("黄金三秒钩子") or ep.title), 20)
+        subtitle = (body.sub or "").strip() or fallback_sub
+        out_dir = _shots.ep_dir(b.book_title, n) / "publish"
+        render_covers({"ep_label": f"第{n}集", "main_title": b.book_title,
+                       "subtitle": str(subtitle)}, out_dir)
+        base = f"/api/anim/ep/{book_id}/{n}/file/publish/"
+
+        def _cv2(name: str) -> str:  # 同 GET: mtime 破缓存
+            return f"{base}{name}?v={int((out_dir / name).stat().st_mtime)}"
+
+        out = {"cover_v": _cv2("cover_v.png"), "cover_h": _cv2("cover_h.png"),
+               "slots": {"ep_label": f"第{n}集",
+                         "main_title": b.book_title,
+                         "subtitle": str(subtitle)[:26]}}
+        return out
+
+    # ── 三件套程序调取 (零 LLM): 全部字段来自大纲/讲稿原文 ──────────────
+    import re as _re
+
+    def _clause_fit(text: str, limit: int) -> str:
+        """按子句 (，。；！？) 贪心装到 limit 内 — 永不切词截半句."""
+        t = str(text or "").strip()
+        if len(t) <= limit:
+            return t
+        clauses = _re.split(r"(?<=[，。；！？])", t)
+        out = ""
+        for cl in clauses:
+            if not cl:
+                continue
+            if len(out) + len(cl) <= limit:
+                out += cl
+            else:
+                break
+        return out.rstrip("，。；、 ") or t[:limit]
+
+    def _cover_sub_from(rm: dict, ep_title: str = "") -> str:
+        """红字正源: 主题破折号后段 (悬念短句质地), ≤20 整用, 超长子句收口."""
+        theme = str(rm.get("主题") or "")
+        sub = theme.split("——")[-1].strip() if "——" in theme else theme.strip()
+        return _clause_fit(sub, 20) or _clause_fit(ep_title, 20)
+
+    def _first_sentence(text: str, limit: int = 24) -> str:
+        t = _re.split(r"[。！？!?]", str(text or "").strip())[0].strip("，,；;、 ")
+        return _clause_fit(t, limit)
+
+    def _opening_desc(script_text: str, limit: int = 122) -> str:
+        """讲稿首段 → 简介: 剥【】标注/书名句/作者句/悬尾句, 按整行贪心装 +
+        固定互动尾 — 行粒度拼装, 不截半句."""
+        paras = str(script_text or "").split("\n\n")
+        lines = [ln.strip() for ln in (paras[0].split("\n") if paras else [])
+                 if ln.strip() and not ln.strip().startswith("【")
+                 and "《" not in ln and "作者" not in ln and "译者" not in ln
+                 and not ln.strip().endswith(("——", "：", ":"))]
+        out = ""
+        for ln in lines:
+            if len(out) + len(ln) > limit - 6:  # 留互动尾空间
+                break
+            out += ln
+        out = out.rstrip("，；、 ")
+        return (out + "评论区聊聊。") if out else ""
+
+    # 标题 = 黄金三秒钩子首句 (≤24字即成品; 超长按子句收口, 回退本集标题)
+    title = _first_sentence(rm.get("黄金三秒钩子") or "") or \
+        _first_sentence(ep.title)
+    # 红字 = 主题破折号后段, 子句收口不截词 (covers 兜底同源 _cover_sub_from)
+    cover_sub = _cover_sub_from(rm, ep.title)
+    # 简介 = 讲稿开场块直出
+    desc = _opening_desc(ep.script_text)
+    # 标签 = 书名/品类/赛道 + 概念词, 上限 5 (抖音硬限)
+    concept = str((rm.get("概念") or [""])[0] or "")
+    ctag = _re.split(r"\s*vs\s*|VS|／|/|\s", concept)[0].strip()[:6]
+    tags = [t for t in dict.fromkeys([b.book_title, "拆书", "商业思维",
+                                      ctag if 2 <= len(ctag) <= 6 else "", "读书"])
+            if t][:5]
+    if not title or not desc:
+        raise HTTPException(422, "大纲/讲稿数据不全, 调取失败 — 检查本集大纲与讲稿")
+    out = {"title": title, "desc": desc, "cover_sub": cover_sub, "tags": tags}
+    # 落 roadmap (0918 同模式): 重开页面不丢, 封面红字有稳定正源
+    ep.roadmap_json = {**rm, "_publish_copy": out}
+    db.commit()
+    logger.info("[publish-card] ep%d 三件套程序调取 (零LLM): %s", n, title)
+    return out

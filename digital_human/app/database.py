@@ -69,6 +69,55 @@ def _apply_manual_migrations(engine) -> None:
                     with engine.begin() as conn:
                         conn.execute(text(f"ALTER TABLE book_episodes ADD COLUMN {col_name} {col_type}"))
                     logger.info("[db] migrated: book_episodes.%s column added", col_name)
+            # bs1 页单 (2026-09-08): 老谭读书 bs1 产线确认后的页单快照 (含字段/图/时长),
+            # render ③④⑤ 直接消费; 修页/重渲染在此 JSON 上进行
+            if "bs1_pages_json" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE book_episodes ADD COLUMN bs1_pages_json JSON"))
+                logger.info("[db] migrated: book_episodes.bs1_pages_json column added")
+            # 成稿时间 (2026-09-12): 稿生成/修稿落定时刻, 逐集分辨测试版本用
+            if "script_generated_at" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE book_episodes ADD COLUMN script_generated_at DATETIME"))
+                logger.info("[db] migrated: book_episodes.script_generated_at column added")
+            # 六拍模块表 (2026-09-17 模块总线): 结构真相源 [{idx,name,tail}] —
+            # 正文标签只是人读视图, TTS 模块墙/切场/分镜全取此表
+            if "module_json" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE book_episodes ADD COLUMN module_json JSON"))
+                logger.info("[db] migrated: book_episodes.module_json column added")
+            # 回填 (幂等, 只补 NULL): 旧稿无记录 — 取 outputs/拆书/{书}/ep{N}/gen_* 最新目录
+            # mtime (meta.json 写完=成稿); 找不到目录的留空, 不拿被确认/产线写碰脏的 updated_at 凑数
+            if _session_maker is not None:
+                try:
+                    import re as _re
+                    from datetime import datetime as _dt
+                    from datetime import timezone as _tz
+                    from pathlib import Path as _Path
+                    from .models import BookProject as _BP, Episode as _Ep
+
+                    db = _session_maker()
+                    try:
+                        rows = (db.query(_Ep)
+                                .join(_BP, _Ep.book_id == _BP.id)
+                                .filter(_Ep.script_text.isnot(None),
+                                        _Ep.script_generated_at.is_(None)).all())
+                        if rows:
+                            _outs = _Path(__file__).resolve().parents[1] / "outputs" / "拆书"
+                            fixed = 0
+                            for ep in rows:
+                                bd = _re.sub(r'[\\/:*?"<>|\s]+', "_", ep.book.book_title).strip("_") or "unnamed"
+                                gens = sorted((_outs / bd / f"ep{ep.ep_index}").glob("gen_*"))
+                                if gens:
+                                    ep.script_generated_at = _dt.fromtimestamp(gens[-1].stat().st_mtime, _tz.utc)
+                                    fixed += 1
+                            if fixed:
+                                db.commit()
+                                logger.info("[db] script_generated_at backfill: %d episode(s) from gen dir mtime", fixed)
+                    finally:
+                        db.close()
+                except Exception as exc:
+                    logger.warning("[db] script_generated_at backfill skipped: %s", exc)
 
         # audio_jobs.tts_cache_key (2026-08-21): TTS缓存 — 稿没变复用已有音频, 免重跑合成.
         if "audio_jobs" in tables:
@@ -133,12 +182,14 @@ def _apply_manual_migrations(engine) -> None:
                 except Exception as exc:
                     logger.warning("[db] personas host bind skipped: %s", exc)
 
-            # 数据修复 (2026-08-20): 目标读者画像移入人设级 — 给已有书账号 persona
-            # 补默认读者画像; 清理书 input_json.needs_supplement 里的目标读者画像条目
-            # (改由 complete_input 从 persona 继承, 不再要求录入时人工补).
+            # 数据修复 (2026-08-20 立 / 0914 收权): 只补 persona 缺省 target_reader;
+            # 书级 目标读者画像 的启动回填**摘除** — 旧逻辑给所有缺值书盖
+            # jingshu-book 人设受众 (无视书自己的 persona_id, 重建书实测误章),
+            # 且与"目标读者以书定 (auto_fill 按书内容锁定, persona 仅流程内兜底)"
+            # 冲突。缺值书由 auto_fill_from_l0 在建书流程内正确填。
             if _session_maker is not None:
                 try:
-                    from .models import Host, Persona, BookProject
+                    from .models import Persona
 
                     db = _session_maker()
                     try:
@@ -149,32 +200,9 @@ def _apply_manual_migrations(engine) -> None:
                             if not persona.target_reader:
                                 persona.target_reader = _DEFAULT_READER
                                 fixed_p += 1
-                        fixed_b = 0
-                        # 已存在书: 清 needs_supplement 里的读者画像条目 + 回填继承值
-                        book_persona = (
-                            db.query(Persona)
-                            .filter(Persona.prompt_template == "jingshu-book")
-                            .first()
-                        )
-                        inherited = (book_persona.target_reader if book_persona else None) or _DEFAULT_READER
-                        for book in db.query(BookProject).all():
-                            inp = dict(book.input_json or {})
-                            changed = False
-                            needs = inp.get("needs_supplement") or []
-                            if "目标读者画像" in needs:
-                                needs = [x for x in needs if x != "目标读者画像"]
-                                inp["needs_supplement"] = needs
-                                changed = True
-                            if not (inp.get("目标读者画像") or {}).get("value"):
-                                inp["目标读者画像"] = {"value": inherited, "tier": "persona", "inherited": True}
-                                changed = True
-                            if changed:
-                                book.input_json = inp
-                                fixed_b += 1
-                        if fixed_p or fixed_b:
+                        if fixed_p:
                             db.commit()
-                            logger.info("[db] target_reader backfill: persona=%d book_clean+inherit=%d",
-                                        fixed_p, fixed_b)
+                            logger.info("[db] target_reader backfill: %d persona(s)", fixed_p)
                     finally:
                         db.close()
                 except Exception as exc:

@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 from app.services.gpu_service_manager._http import http_ok
 
-
 # ── GPU-VPN 互斥 (2026-08-27 用户令) ─────────────────────────────────────
 # 变色龙 VPN (C:\Program Files\Cham\Main.exe) 的虚拟网卡与显卡驱动冲突,
 # 带 VPN 跑 GPU 会死机/重启。所有 GPU 会话启动前强制退出; 进程是 admin
@@ -129,6 +128,7 @@ class GPUServiceManager(ServiceLifecycleMixin):
             with self._state_lock:
                 self._waiting -= 1
                 self._active_key = backend
+            self._clear_gpu_neighborhood(backend, notify)
             self._ensure_running(backend, notify)
             self._touch(backend)
             yield
@@ -137,8 +137,8 @@ class GPUServiceManager(ServiceLifecycleMixin):
             with self._state_lock:
                 self._active_key = None
             self._gpu_lock.release()
-            if self.idle_timeout_sec <= 0:
-                # 立即释放显存模式
+            if self._effective_idle(backend) <= 0:
+                # 立即释放显存模式 (本服务阈值为 0 时; 0917 起按服务独立判定)
                 self._stop_if_idle(backend, force=True)
             else:
                 self._start_watchdog()
@@ -147,6 +147,42 @@ class GPUServiceManager(ServiceLifecycleMixin):
 
     def _touch(self, key: str) -> None:
         self._states[key].last_used = time.time()
+
+    # ── 跨族清场 (0919 ep4 实锤: K2 批结束后模型栈驻留 39G, TTS 叠上跑 10.4s/步
+    # → 300s 超时整 job "timed out"; _ensure_running 的互斥只在"目标服务未起"时
+    # 触发, 健康快返回 + 外部拉起的 ComfyUI 是盲区) ─────────────────────────
+    # 初版双 bug 修复: specs 值是 ServiceSpec 对象不是 dict (spec.get() AttributeError
+    # 被 except 静默吞 = 清场从未执行, 用户实锤"没起作用"); TTS 族从 specs 动态取
+    # (漏 indextts25 同源病)。
+    def _clear_gpu_neighborhood(self, backend: str, notify: Callable[[str], None]) -> None:
+        """起本族服务前清掉异族驻留: TTS 起时卸 ComfyUI 模型栈 (POST /free, 进程
+        保温零重启); ComfyUI 起时停托管 TTS (小栈重启廉价)。失败静默 (清场尽力)。"""
+        try:
+            tts_keys = set(self.specs) - {"comfyui"}
+            if backend in tts_keys and "comfyui" in self.specs:
+                url = self.specs["comfyui"].base_url.rstrip("/")
+                if url:
+                    import httpx
+
+                    with httpx.Client(timeout=30.0) as cli:
+                        r = cli.post(f"{url}/free",
+                                     json={"unload_models": True, "free_memory": True})
+                    if r.status_code in (200, 204):
+                        notify("GPU 清场: 已卸载 ComfyUI 驻留模型栈 (腾显存)")
+                        logger.info("[gpu_svc] 清场 ✓ ComfyUI /free (TTS 上卡前)")
+            elif backend == "comfyui":
+                for key in tts_keys:
+                    st = self._states.get(key)
+                    if st is not None and st.proc is not None:
+                        notify(f"GPU 清场: 停 {self.specs[key].display_name} 腾显存…")
+                        self._stop_service(key)
+        except Exception:  # noqa: BLE001 — 清场尽力, 不挡会话
+            logger.warning("[gpu_svc] 跨族清场失败 (忽略)", exc_info=True)
+
+    def _effective_idle(self, key: str) -> float:
+        """本服务的空闲关停阈值: spec 覆盖优先, 否则全局 (0917 ComfyUI 单独保温)."""
+        spec_idle = self.specs.get(key).idle_timeout_sec if key in self.specs else None
+        return spec_idle if spec_idle is not None else self.idle_timeout_sec
 
     # ── 状态与手动控制 ────────────────────────────────────────
 

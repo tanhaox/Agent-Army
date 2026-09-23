@@ -189,6 +189,9 @@ class AudioFileOut(BaseModel):
     file_path: str
     duration: float | None
     sample_rate: int | None
+    # 0912 逐字稿接线: 音频行携带对应段文本 + 回听嫌疑标记 (人耳复核要有参照物)
+    text: str | None = None
+    verify_flag: str | None = None
 
 
 class HostOut(BaseModel):

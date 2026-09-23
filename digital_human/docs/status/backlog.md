@@ -1443,3 +1443,59 @@ laotan-tech 加【科技版专属约束】（高于通用规则）：
 - **方向（用户原话要点）**: "最后一次生成的才储存"，例如 7 天后可清理之类；同书同集旧稿/旧 job 目录按保留策略回收。
 - **涉及范围**: `E:\数字人计划\ppt\<job_id>\`、剪映 drafts `PPT_*`/`DH_*`（DH 是导演线）、`projects/<ts>_<script>/audio`、`E:\数字人计划\hf_visual\<job>`、DB 侧 scripts/articles/audio_files 只清孤儿或不动。
 - **红线**: 清理走回收站（safe_trash），DB 不做破坏性删除；剪映草稿删除需防"卸载清 User Data"同类事故（只按明确名字删目录）。
+
+### 🔲 ID-059：【对标·画面轨】源 s6 复古美国广告 infographic 风格 LoRA/checkpoint（2026-09-11 挂起）
+
+- **状态**: parked（用户令 2026-09-11：机制已破解即止，**不复刻**；仅挂起"最值钱动作"）
+- **优先级**: P2
+- **背景**: 对标样本6（86万赞拆书，23min）机制已破解，全文见 `.tmp/benchmarks/tech/hits/20260911_样本6_前90s双轨对照.md`：
+  西式复古广告/mid-century infographic 风格模型批量出**英文** infographic（一概念=一图=一~10-13s口播beat，切图锁beat边界；单图信息密度校准 scan3-5s+read~10s≈hold）+ **中文仅走 overlay 本地化**（0-2s打字机钩子卡/口播字幕，画内无中文）。
+- **最值钱动作**: 源同款风格 LoRA/checkpoint（复古美国广告 infographic 风）。有了它 + beat→prompt 模板（风格前缀+概念+英文短标签清单+构图语法）即可搭自动生图流。
+- **不做**: 不复刻整条流（用户令：知道机制即止）。
+- **关联/约束**: 若走本地工作流碰 ComfyUI 0827 停止令（需用户解除）；路线A=API生图loop（bailian/qwen-image）不动停止令。图层分离原则：画内保持英文，中文走 overlay。
+- **实现参考**: DeepSeek 读图+ComfyUI 方案已存档于 `.tmp/benchmarks/tech/hits/20260911_样本6_前90s双轨对照.md` 附录（SDXL Juggernaut/DreamShaper + Retro Poster/Infographic/Vintage ad LoRA 0.6-0.8 + Regional Prompter 或 ControlNet + Ultimate SD Upscale(Tile, denoise 0.3-0.4) + 文字后期 PS/Canva 粗体无衬线）。其"画内文字=后期加"为待验假设（与"生图流 baked-in"分叉），启动时先验。
+
+### 🔲 ID-060：【角色出镜链】定妆特写→Krea2EncodeRebalance 场景出镜 + 工坊四视图切换档（2026-09-12 立项）
+
+- **状态**: idea（定妆照已入库, 链路未封装）
+- **优先级**: P2
+- **背景**: 老谭读书男女配对角色定妆照定稿（`outputs/动画/_资产/定妆照_*_20260912.png` + 提示词txt）。Krea2EncodeRebalance 考据在案（Picture N 寻址/token档位, 见 improvements 20260912）。
+- **两件事**:
+  1. **出镜链封装**: 定妆特写挂 image1 (tokens=high) + 场景 prompt 模板（身份锚段 + Picture 1 寻址 + 服装/场景变量化）→ 任意场景"图中人"出图; 批 roll 择优 + 侧脸同向/分身 QC 闸。
+  2. **工坊四视图切换档**: `web/tools/threeview_prompt_builder.html` 加 三视图/四视图 切换（模板已定稿在 `.tmp/fourview_test.py` SCENE）。
+- **红线**: 重 roll 必换 seed（节点缓存）; 负面通道无效防线在正向条款。
+- **关联**: 动画链 v1（K2 出图 → H3 图生）可复用此身份锚。
+
+### ✅ ID-061：【动画产线】效果知识库接入（R9 协同 + 密度规则 + 音效弹药参考）
+
+- **状态**: done（2026-09-15 用户令接入；三处落地：DIRECTOR_SYS 三段纪律 + impact 红色冲击渲染档 + 草稿导出 音效提示.md）
+- **优先级**: P1
+- **提出时间**: 2026-09-15
+- **开发周期**: 待定
+- **描述**: 反向审计实锤——08-16 效果知识库（R1~R19 配方，核心 R9=字幕句+关键词大字+同帧音效协同三件套；音效三层知识 语义13类/动画搭配42族/叙事功能12类；BGM 光谱6条；三色板；**密度规则前30s高密度后降档**）在动画产线 v3 引用数为 0。接入点：① R9 协同模式进 DIRECTOR_SYS 文字特效层纪律；② 密度规则进炫度纪律；③ 草稿装配或导演设计参考接音效弹药清单（jy_effect_library.py）。
+- **动机**: 用户定三层模型时明示"效果我们记忆中应该有"——这是"系统自主达抖音级"缺的拼图。
+- **涉及模块**: `anim_pipeline/director2.py` / `anim_draft.py` / `jy_effect_library.py`
+- **备注**: 载体：状态总览 08-16 段 + docs/teardown/剪映模板拆解-45期-音字稿协同.md
+
+### 🔲 ID-062：【动画产线】四视图定妆照接入人物一致性（或明确弃用留档）
+
+- **状态**: pending（0915 用户令：记录）
+- **优先级**: P2
+- **提出时间**: 2026-09-15
+- **开发周期**: 待定
+- **描述**: 0912 定稿的四视图定妆照配方 + 老谭男女主四视图资产（`outputs/动画/_资产/定妆照_*`）+ Krea2EncodeRebalance 参考图链路均记录在案，但 v3 人物跨镜一致性纯靠"双约"文字，定妆照悬空未用。要么接入（K2 参考图/导演双约引用资产），要么在案卷写明弃用理由（如画风与赛璐璐不匹配）。
+- **涉及模块**: `anim_pipeline/k2.py` / `director2.py`
+
+### 🔲 ID-063：【动画产线】工坊页风格配方切换器
+
+- **状态**: pending（0914 对话 defer，0915 补录）
+- **优先级**: P3
+- **描述**: anim.html 工坊顶栏加风格库下拉切换（当前绑定走 `风格绑定_{书}.json` 文件，页面不可换）。
+- **涉及模块**: `web/anim.html` / `anim_pipeline/config.py`
+
+### 🔲 ID-064：【动画产线】圣经生成时从风格库语义推荐
+
+- **状态**: pending（0914 对话 defer，0915 补录）
+- **优先级**: P3
+- **描述**: load_or_derive_bible 生成新圣经时，让 LLM 读风格库成员的语义标签（desc）推荐适配这本书的风格，而非只受已绑定约束。
+- **涉及模块**: `anim_pipeline/director2.py`

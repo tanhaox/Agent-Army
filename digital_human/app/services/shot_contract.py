@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""shot_contract — slot 镜头契约层 (2026-08-27, J3 前置).
+"""shot_contract — slot 镜头契约层 .
 
 来源: docs/refs/hell-grind-aigc-skill-zh 的 12 段镜头契约, 按新闻线口播+B-roll
 形态裁成 7 段 (角色/表演/对白/空间轴线段裁掉 — 无剧情角色; continuity 并入 risk_focus)。

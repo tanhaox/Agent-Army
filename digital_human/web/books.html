@@ -56,11 +56,14 @@
   <div class="modal-bg" id="create-modal">
     <div class="modal">
       <h2>新建拆书项目</h2>
-      <label>书名 (全流程蒸馏完成) *</label>
+      <label>书名 (蒸馏完成) *</label>
       <select id="c-title"><option value="">— 加载中… —</option></select>
-      <div class="hint">仅列「蒸馏txt + L0 + 全面向」跑完的书；作者/卖点自动从蒸馏带入，无需手填。</div>
+      <div class="hint">作者/卖点自动从蒸馏带入，无需手填；未跑 L0 的书建后自动补。</div>
       <div class="row">
-        <div><label>商品链接 (小黄车, 可选)</label><input id="c-cart" placeholder="抖音侧挂车用"></div>
+        <div>
+          <label>人物 (人设+音色+品牌) *</label>
+          <select id="c-persona"><option value="静读书">静读书</option></select>
+        </div>
         <div><label>卖点 (可选, 留空用自动)</label><input id="c-sell"></div>
       </div>
       <div class="row" style="margin-top:1rem">
@@ -82,7 +85,7 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="/web/books.js"></script>
+  <script src="/web/books.js?v=3"></script>
   <script>
     document.addEventListener('DOMContentLoaded', loadAll);
   </script>

@@ -13,9 +13,9 @@ from ..database import db_session, get_db, get_session_maker
 from ..models import Script, Segment, AudioJob, DirectorJob, Host, Persona
 from ..schemas import ScriptOut, ScriptUpdate, SegmentOut, SegmentUpdate, CorrectRequest, TtsAdaptRequest
 from ..services.file_utils import recycle_file
-from ..services.llm_service import LLMService
+from ..services.llm_service import LLMService, get_llm_service
 from ..services.script_parser import parse_script
-from .jobs import _publish
+from app.services.job_events import _publish
 
 logger = logging.getLogger(__name__)
 
@@ -239,10 +239,8 @@ def delete_script(script_id: str, db: Session = Depends(get_db)):
 
 
 def _get_llm() -> LLMService:
-    from ..config import get_config
-
-    cfg = get_config()
-    return LLMService(cfg.deepseek)
+    # 2026-09-09 用户令: kimi 主力 + deepseek 兜底 (统一工厂)
+    return get_llm_service()
 
 
 def _run_boost_background(script_id: str, job_id: str) -> None:
@@ -444,9 +442,36 @@ def correct_script(
                 for seg_data in segments_data:
                     db2.add(Segment(script_id=script2.id, **seg_data))
 
+                # ── 下游产物作废 (2026-09-07): correct 改洗稿稿, boost 产物仍基于旧观点 ──
+                # boost 后再 correct 时, UI (app.js fetchScript) 与音频管线均 boosted_text
+                # 优先 → 旧改造稿把新稿挡在页面后面 + 音频念旧观点 (script 7fae947f 实锤:
+                # 稿已改、页面显示未变、89 段 wav 全是旧观点)。作废 boost 产物让编辑区/
+                # 下游回落到修正后的洗稿稿; 改造稿如仍需要, 重新点「爆品改造」基于新稿重做。
+                had_boost = bool(script2.boosted_text or script2.boost_titles)
+                script2.boosted_text = None
+                script2.boost_titles = None
+                script2.emotion_annotations = None  # 旧标注基于旧最终稿
+                # 旧 completed 音频标 stale → 下次「生成音频」清 wav 强制重合成
+                # (audio.py 方案A), 杜绝 _skip_batch 断点续传复用旧音频。对齐 PUT 端点。
+                _stale = (
+                    db2.query(AudioJob)
+                    .filter(AudioJob.script_id == script2.id, AudioJob.status == "completed")
+                    .update({"status": "stale"}, synchronize_session=False)
+                )
+                if _stale:
+                    logger.info(
+                        "correct: script %s 作废 boost 产物, %d 个 AudioJob 标记 stale",
+                        script2.id[:8], _stale,
+                    )
+
                 db2.commit()
 
-                _publish(job_id, {"type": "correct_done", "script_id": script2.id})
+                _publish(job_id, {
+                    "type": "correct_done",
+                    "script_id": script2.id,
+                    # 前端提示用: 旧改造稿基于旧观点已作废, 编辑区回落为修正后洗稿稿
+                    "had_boost": had_boost,
+                })
             except Exception as exc:
                 _publish(job_id, {"type": "correct_error", "error": str(exc)})
 

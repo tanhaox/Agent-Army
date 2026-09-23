@@ -61,7 +61,8 @@ def annotate_emotions(
     混合打底 + melancholic 共情 (P5_SPAN_PROMPT_BOOK, 拆书线定稿), 漏句兜底 calm/2。
     失败返回 None (调用方落整篇兜底)。
     """
-    is_book = style == "book"
+    is_book = style in ("book", "book_laotan")
+    is_book_laotan = style == "book_laotan"
     try:
         from scripts.tts_lib.lines import _split_line_indices
         lines = _split_line_indices(text)
@@ -69,8 +70,13 @@ def annotate_emotions(
             return None
         numbered = "\n".join(f"[{i}] {ln}" for i, ln in enumerate(lines, start=1))
 
-        prompt = (P5_SPAN_PROMPT_BOOK if is_book else P5_SPAN_PROMPT).replace(
-            '{persona}', persona_name)
+        if is_book_laotan:
+            from .prompts import P5_SPAN_PROMPT_BOOK_LAOTAN as _SPAN_PROMPT
+        elif is_book:
+            from .prompts import P5_SPAN_PROMPT_BOOK as _SPAN_PROMPT
+        else:
+            from .prompts import P5_SPAN_PROMPT as _SPAN_PROMPT
+        prompt = _SPAN_PROMPT.replace('{persona}', persona_name)
         # (2026-08-27 撤 geo serious 赛道提示: 全赛道统一惊讶打底, 起伏靠强度档。)
         prompt += f"\n\n【编号句子表（共 {len(lines)} 句）】\n" + numbered
         raw = _call(prompt, json_mode=True, max_tokens=1200)
@@ -79,8 +85,11 @@ def annotate_emotions(
             logger.warning("[p5] span parse failed: %s", str(raw)[:80])
             return None
 
-        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (兜底: 新闻 surprised/2, 读书 calm/2)
-        emo_of: list[tuple[str, int]] = [("calm" if is_book else "surprised", 2)] * len(lines)
+        # 逐句情绪填充: span 区间覆盖, 漏句继承前句情绪 (兜底: 新闻 surprised/2,
+        # 静读书 calm/2, 老谭读书 confident/3)
+        _fallback_emo = ("confident", 3) if is_book_laotan else (
+            ("calm", 2) if is_book else ("surprised", 2))
+        emo_of: list[tuple[str, int]] = [_fallback_emo] * len(lines)
         spans = data.get("spans") or []
         for sp in spans:
             try:
@@ -90,6 +99,13 @@ def annotate_emotions(
             a, b = max(0, min(a, len(lines) - 1)), max(1, min(b, len(lines)))
             for i in range(a, b):
                 emo_of[i] = (emo, strength)
+        # 0909 坡度平滑 (用户令: 惊讶打底不动, 修"台阶"→"坡度"): span 边界上跳 ≥2 档时,
+        # 新档首句先落 prev+1 过渡档 — α 每档 0.05, 逐句 +1 爬升在听感上就是坡而非
+        # 换人 (008/009 实锤: 3→5 直跳 = α 0.40→0.50 情绪嵌入瞬间 +25%)。顺序级联
+        # 天然处理大跳 (3→7 → 3,4,5,6,7 阶梯)。仅平滑上跳 — 下跳(释放)保留干脆落定感。
+        for i in range(1, len(emo_of)):
+            if emo_of[i][1] - emo_of[i - 1][1] >= 2:
+                emo_of[i] = (emo_of[i][0], emo_of[i - 1][1] + 1)
         # 连续同情绪合并 → "[情绪/强度] 段文本" (TTS 行原样拼接, 与合成行天然对齐)
         blocks: list[str] = []
         cur_emo, cur_strength, cur_lines = None, 0, []

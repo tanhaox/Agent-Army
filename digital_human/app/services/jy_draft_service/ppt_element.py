@@ -301,6 +301,7 @@ def export_element_draft(
     book_title: str | None = None,
     ep_index: int | None = None,
     watermark: str | Path | None = None,
+    book_brand: str = "静读书",
 ) -> dict[str, Any]:
     """元素级剪映草稿: 每页 base 层 + 逐元素透明层, 各自 video 轨, 渐显错峰.
 
@@ -437,7 +438,7 @@ def export_element_draft(
     # 系列角标 (左上角, 第2页+末页, 呼吸闪烁)
     n_badge = 0
     if book_title:
-        badge_text = f"静读书：《{book_title}》第{ep_index or '?'}集，更多请主页观看。"
+        badge_text = f"{book_brand}：《{book_title}》第{ep_index or '?'}集，更多请主页观看。"
         if len(pages) > 2:
             n_badge = _add_series_badge(script, pages, badge_text, [1, len(pages) - 1])
         elif pages:

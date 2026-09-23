@@ -69,6 +69,25 @@ def _rules() -> dict[str, str]:
     return {}
 
 
+def add_rule(word: str, marked: str) -> bool:
+    """词表热增 (0912 页面注音闭环): 写 json + 清 lru_cache 即时生效 (免重启)。
+
+    只收词级条目 (≥2字); 调用方负责保证词级恒定读法。
+    """
+    if not word or len(word) < 2 or not marked:
+        return False
+    try:
+        data = json.loads(_MAP_PATH.read_text(encoding="utf-8"))
+        data.setdefault("rules", {})[word] = marked
+        _MAP_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _rules.cache_clear()
+        logger.info("[pinyin_fix] 词表新增: %s → %s", word, marked)
+        return True
+    except Exception:
+        logger.warning("[pinyin_fix] 词表写入失败: %s", _MAP_PATH, exc_info=True)
+        return False
+
+
 def scan_pinyin_hits(text: str) -> list[str]:
     """返回文本中命中的易错词列表 (去重保序), 供 boost 审计提示."""
     seen: list[str] = []
@@ -76,6 +95,37 @@ def scan_pinyin_hits(text: str) -> list[str]:
         if word in text and word not in seen:
             seen.append(word)
     return seen
+
+
+_YEAR_RE = re.compile(r"(?<![\d])(19|20)(\d{2})(?![\d])")
+_CN_D = {"0": "零", "1": "一", "2": "二", "3": "三", "4": "四",
+         "5": "五", "6": "六", "7": "七", "8": "八", "9": "九"}
+
+def _years_to_cn(text: str) -> str:
+    """4 位年份 → 逐位汉字读法 (1975→一九七五; TTS 整数读法会念成一千九百七十五)。
+    双轨配套: 稿写真实形 (1975), 本转换只在合成输入侧, 字幕读底稿显示 1975。"""
+    return _YEAR_RE.sub(lambda m: "".join(_CN_D[c] for c in m.group(0)), text)
+
+
+_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
+
+def _pct_to_cn(text: str) -> str:
+    """百分号 → 口语读法 (96% → 百分之九十六); 底稿/字幕显示真实形 96%。"""
+    from app.services.tts_verify import _num_to_reading
+    def _r(m):
+        try:
+            return "百分之" + _num_to_reading(m.group(1))
+        except Exception:
+            return m.group(0)
+    return _PCT_RE.sub(_r, text)
+
+
+def tts_adapt(text: str) -> str:
+    """TTS 输入统一适配 (2026-09-10 双轨改造): 连字符转换 + 拼音注音.
+
+    底稿保持真实形 (GPT-6/GLM-5.3) — 字幕/展示层读底稿零假形;
+    本函数只作用于合成输入。所有调用点经此入口, 禁再各自拼装。"""
+    return apply_pinyin_marks(normalize_model_hyphens(_pct_to_cn(_years_to_cn(text))))
 
 
 def apply_pinyin_marks(text: str) -> str:

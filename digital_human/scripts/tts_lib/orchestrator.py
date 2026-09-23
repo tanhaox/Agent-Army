@@ -19,17 +19,18 @@ from .constants import (
     DEFAULT_INDEXTTS_URL,
     DEFAULT_OUTPUT_DIR,
 )
-from .engines import f5_tts, fish_speech_tts, indextts_tts
+from .engines import f5_tts, fish_speech_tts, indextts_tts, indextts25_tts
 from .segments import _synthesize_segments
 
 logger = logging.getLogger(__name__)
-Backend = Literal["fish", "f5", "indextts", "auto"]
+Backend = Literal["fish", "f5", "indextts", "indextts25", "auto"]
 
 _BACKEND_ORDER: dict[Backend, tuple[str, ...]] = {
     "auto": ("fish", "f5"),
     "fish": ("fish",),
     "f5": ("f5",),
     "indextts": ("indextts",),
+    "indextts25": ("indextts25",),
 }
 
 __all__ = ["synthesize", "_synthesize_single", "Backend"]
@@ -168,15 +169,19 @@ def _extract_indextts_params(params: dict[str, Any] | None) -> dict[str, Any]:
         "indextts_top_p": params.get("top_p", 0.8) if params else 0.8,
         "indextts_top_k": params.get("top_k", 30) if params else 30,
         "indextts_temperature": params.get("temperature", 0.8) if params else 0.8,
-        # 服务端切分预算 (2026-08-25 回退 120): 300 是 2.5 整批推理实验值; IndexTTS2
-        # 原生 120, 恢复其默认切分行为。回 2.5 时改回 300。
+        # 服务端切分预算 (0913 用户令 120→300): 单段文本超此值服务端会自分段再拼 —
+        # 接缝劣化实锤(胡话/1s死缝); 调大给包级/行级文本留足余量, 正常喂入永不被服务端
+        # 二切。⚠反向悬崖: 模型单段解码上限 ~30s(≈150-160字), 超限**静默截断**不报错 —
+        # 客户端包上限须 ≤140字 兜住; 服务端硬顶 600 (422)。
         "indextts_max_text_tokens": (
-            params.get("max_text_tokens_per_segment", 120) if params else 120
+            params.get("max_text_tokens_per_segment", 300) if params else 300
         ),
         # IndexTTS2.5 语速控制 (2026-08-25): 2.5 基线比 2 慢 ~26% (实测中位 4.8 vs 6.5 字/s),
         # duration_factor=时长系数, <1 加速; 默认由 app.yaml defaults.indextts_duration_factor
         # 经 tts_service 注入 params, 此处 1.0 为缺省兜底 (旧版 2 服务忽略该字段).
         "indextts_duration_factor": params.get("duration_factor", 1.0) if params else 1.0,
+        # 2.5 情感参考音频 (老谭读书通道): 情绪全部来自参考音, P5 向量不传
+        "indextts25_emo_ref": params.get("emo_audio_prompt") if params else None,
     }
 
 
@@ -208,8 +213,23 @@ def _make_engine_callbacks(
             top_k=p["indextts_top_k"], temperature=p["indextts_temperature"],
             max_text_tokens_per_segment=p["indextts_max_text_tokens"],
             seed=p["seed"],
-            emo_vector=p.get("emo_vector"), emo_alpha=p.get("emo_alpha", 1.0),
+            # 0913 接回 TTS2 (老谭线): 双参考分离 — 情感参考音频与音色参考分开;
+            # 服务端语义向量/文本情绪与 emo_audio_prompt 互斥, 故带参考时 P5 向量让位
+            # (与 2.5 通道同哲学: 韵律全部来自参考音)。
+            emo_vector=(None if p.get("indextts25_emo_ref") else p.get("emo_vector")),
+            emo_alpha=p.get("emo_alpha", 1.0),
+            emo_audio_prompt=p.get("indextts25_emo_ref"),
             duration_factor=p.get("indextts_duration_factor", 1.0)),
+        "indextts25": lambda: indextts25_tts(
+            text=text, output_path=output_path, base_url=base_url_indextts,
+            master_audio=p["indextts_master_audio"],
+            master_text=p["indextts_master_text"],
+            do_sample=p["do_sample"], top_p=p["indextts_top_p"],
+            top_k=p["indextts_top_k"], temperature=p["indextts_temperature"],
+            max_text_tokens_per_segment=p["indextts_max_text_tokens"],
+            emo_alpha=p.get("emo_alpha", 0.6),
+            emo_audio_prompt=p.get("indextts25_emo_ref"),
+            duration_factor=p.get("indextts_duration_factor", 1.16)),
     }
 
 

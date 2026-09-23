@@ -30,7 +30,7 @@ WATERMARK_SOURCE = _PROJECT_ROOT / "assets" / "watermark" / "jingbook_logo_sourc
 _SKIP_SEC = 15.0       # 跳过片头封面
 _INTERVAL_SEC = 50.0   # 出现间隔
 _VISIBLE_SEC = 8.0     # 每次停留
-_HEIGHT_PX = 176       # 目标显示高 (~画布高 16%)
+_HEIGHT_PX = 96        # 0910 用户令: 竖版书法 logo 176px 过重 (压人物图), 降 ~9% 画布高
 _MARGIN_PX = 46        # 右/下留边
 
 

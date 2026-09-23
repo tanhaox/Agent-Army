@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""离线蒸馏器 (2026-08-19) — 全书 → 精华 txt (规模.txt 式), 本地 Gemma 批量跑.
+"""离线蒸馏器  — 全书 → 精华 txt (规模.txt 式), 本地 Gemma 批量跑.
 
 架构: 重计算推离线 (4090 闲时批量), 拆书产线只吃 6-15k 精华 L0 (单发上下文)。
 方法论借 cangjie-skill 阶段0+1 (Adler 整书理解 + 提取), 单模型轻量版;
@@ -21,6 +21,7 @@ import requests
 
 from app.config import get_config
 from app.services.book_service.reader import clean_book_title, read_book
+from app.services.prompt_guard import wrap_source
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +54,42 @@ _EXTRACT_SYS = (
     "你是书籍深度提取器(借 cangjie RIA-TV++ 阶段1)。对给定文本块做**穷尽式**提取,"
     "宁多勿漏, 不要过度概括。输出严格 JSON: "
     "{\"观点\":[str], \"概念\":[{\"name\":str,\"mech\":str}], "
-    "\"案例\":[{\"desc\":str,\"point\":str}], \"数据\":[str], \"原句\":[str]}。"
-    "概念必须带机制解释; 案例必须带细节与说明点; 原句必须逐字不得改写; "
-    "只提取文本中存在的, 不得编造。"
+    "\"故事\":[{\"title\":str,\"背景\":str,\"主体\":str,\"决策与转折\":str,\"结果\":str,\"启示\":str}], "
+    "\"案例\":[{\"desc\":str,\"point\":str}], "
+    "\"方法\":[{\"name\":str,\"步骤\":[str],\"来源\":\"书中明示|从案例归纳\",\"适用\":str,\"边界\":str}], "
+    "\"路径\":[{\"阶段\":str,\"触发\":str,\"动作\":str,\"结果\":str}], "
+    "\"数据\":[str], \"原句\":[str]}。"
+    "概念必须带机制解释; **故事必须是叙事体**(谁/何时/什么处境/做了什么决定/转折/结果 — "
+    "保留年份人物代名作等具体物, 禁压缩成一句干条); 方法=书里教的或从案例归纳的可执行步骤/清单"
+    "(步骤逐条列出); 路径=全书主线的关键台阶(什么触发了什么动作, 导致了什么结果); "
+    "反模式=书中的坑/失败教训(什么情境下做了什么导致坏结果, 书给的正解); "
+    "概念mech尽量带决策规则形态(遇到X→书中认为该Y); "
+    "原句必须逐字不得改写; 人物头衔/职称/年代严格照原文 (书里没写的头衔不加——如书只说'某人'"
+    "不得提取成'CEO某人'); 只提取文本中存在的, 不得编造。"
 )
 
 _COMPOSE_SYS = (
     "你是书籍精华编纂器。把【提取池】(全书穷尽提取的结构化信息)编纂成一篇面向讲书创作的精华稿。"
-    "格式仿《规模》式精华: 先「核心哲学」(3-6 句), 再「核心概念与机制」逐条(每条: 核心机制/精确策略/数据/案例/防御或应用, 有条写条), "
-    "最后「可引用原句」全量保留。只整理编排, 严禁编造池外信息, 严禁丢弃池中信息点。直接输出稿体, 不要 JSON。"
+    "讲书创作吃三类料 : 听得进的故事、带得走的方法、看得见的路径 — 三类缺一, 下游全链无米。"
+    "产物结构十节:\n"
+    "## 元问题 — 一句大白话问句: 作者到底在回答一个什么问题 , "
+    "全稿一切内容为回答它而存在\n"
+    "## 核心哲学 (3-6句)\n"
+    "## 核心概念与机制 (逐条: 反驳了什么旧认知/核心机制/精确策略/数据/防御或应用, 有条写条; "
+    "圈出 1~2 个颠覆常识的推导点, 标注【反直觉】)\n"
+    "## 故事库 — 池中【故事】全量入此, 每个保持叙事体(背景→主体→决策与转折→结果→启示), "
+    "保留年份/人物/代名作等全部具体物, 禁压缩成干条; 短案例可附在条目后\n"
+    "## 方法与清单 — 池中【方法】全量入此: 方法名+步骤逐条(1.2.3.)+来源标注(书中明示/从案例归纳)+适用场景+边界(什么情况下不适用/依赖的前提 — cangjie B元素, 收尾反调直接料); "
+    "若池无方法条但故事含可归纳步骤, 允许归纳并标注\n"
+    "## 成功路径 — 池中【路径】串成全书主线的台阶(阶段→触发→动作→结果, 一阶一阶往上), "
+    "这是讲书'上台阶'叙事的骨架\n"
+    "## 反模式与坑 — 池中【反模式】全量入此: 坑名+什么情境+错误做法+后果+书给的正解; 这是收尾反调/避坑段落的直接料\n"
+    "## 可引用原句 (全量保留)\n"
+    "## 一页核  — 最终只留: "
+    "1 个核心命题 + 2~3 个支撑论据 + 1 个绝佳案例, 便签纸容量\n"
+    "只整理编排, 严禁编造池外信息, 严禁丢弃池中信息点。直接输出稿体, 不要 JSON。"
 )
+
 
 _AUDIT_SYS = (
     "你是短视频平台合规审计器(抖音=关键词+语义上下文双重审核)。按【规则集】审计【提取池】,"
@@ -82,30 +109,69 @@ def load_book_rules() -> dict:
         return {}
 
 
-def audit_compliance(pool: dict, cb=None) -> dict:
-    """Gate A (2026-08-19): pro 模型按 compliance_rules_book.json 审计提取池.
+_AUDIT_CHUNK = 30000   # 分块审计段大小 (字符)
+_AUDIT_TIMEOUT = 180   # 小包超时: 旧 600s 是为单大包排队设的, 分块后不该等
 
+
+def audit_compliance(pool: dict, cb=None) -> dict:
+    """Gate A : pro 模型按 compliance_rules_book.json 审计提取池 (0922 分块版).
+
+    旧版单包 90k (≈5万token) 进网关排队, 保活连接拖死读超时且三级链逐家再等
+    (llm_service docstring 实测: deepseek 过载单调用拖满 900s, 客户端超时拦不住)。
+    0922 用户令改少喂多次: 池 JSON 切 ~30k 字/段, 单段 180s, 失败重试 1 次后跳过
+    该段 — 失败粒度远细于旧版"整包失败=全放行"。段边界在 JSON 串上硬切, 旧版
+    [:90000] 截断同理, 审计按条目命中不依赖整体结构。硬黑名单确定性层不受影响。
     返回 {delete, rewrite, book_rules}; 调用侧物理删除 delete 项。
     """
-    from app.services.llm_service import LLMService
-    rules = load_book_rules()
-    pool_text = json.dumps(pool, ensure_ascii=False)[:90000]
-    llm = LLMService(get_config().deepseek)
-    try:
-        out = llm.chat(_AUDIT_SYS,
-                       f"【规则集】\n{json.dumps(rules, ensure_ascii=False)}\n【提取池】\n{pool_text}",
-                       model="pro", temperature=0.2, timeout=600)
-        audit = GemmaClient.parse_json_block(out)
-    except Exception as exc:
-        logger.warning("[distill] 合规审计失败 (放行+记录): %s", exc)
+    from app.services.llm_service import get_llm_service
+    full = json.dumps(pool, ensure_ascii=False)[:90000]
+    if not full:
+        return {"delete": [], "rewrite": [], "book_rules": []}
+    rules = json.dumps(load_book_rules(), ensure_ascii=False)
+    chunks = [full[i:i + _AUDIT_CHUNK] for i in range(0, len(full), _AUDIT_CHUNK)]
+    llm = get_llm_service()
+    delete: list[str] = []
+    rewrite: list[dict] = []
+    book_rules: list[str] = []
+    for i, ck in enumerate(chunks, 1):
+        if cb:
+            cb(f"合规审计中 (云端 pro, 段 {i}/{len(chunks)})…")
         audit = {}
+        for _attempt in range(2):  # 单段重试 1 次, 仍败跳过并记录
+            try:
+                out = llm.chat(_AUDIT_SYS,
+                               f"【规则集】\n{rules}\n【提取池 第{i}/{len(chunks)}段 (JSON 可能截断)】\n{ck}",
+                               model="pro", temperature=0.2, timeout=_AUDIT_TIMEOUT)
+                audit = GemmaClient.parse_json_block(out)
+                break
+            except Exception as exc:
+                logger.warning("[distill] 合规审计段 %d/%d 失败 (attempt %d, 跳过该段): %s",
+                               i, len(chunks), _attempt + 1, exc)
+        d = [str(x) for x in (audit.get("delete") or [])]
+        r = [x for x in (audit.get("rewrite") or []) if isinstance(x, dict)]
+        b = [str(x) for x in (audit.get("book_rules") or [])]
+        if cb:
+            cb(f"审计段 {i}/{len(chunks)} ✓: 删除{len(d)} 改写{len(r)} 注意{len(b)}")
+        delete += d
+        rewrite += r
+        book_rules += b
+    # 段间去重合并 (同条目多段命中/截断边界两侧重报)
+    _seen: set[str] = set()
+    rw: list[dict] = []
+    for r in rewrite:
+        k = str(r.get("orig") or "")[:60]
+        if k and k in _seen:
+            continue
+        if k:
+            _seen.add(k)
+        rw.append(r)
     audit = {
-        "delete": [str(x) for x in (audit.get("delete") or [])][:50],
-        "rewrite": [x for x in (audit.get("rewrite") or []) if isinstance(x, dict)][:50],
-        "book_rules": [str(x) for x in (audit.get("book_rules") or [])][:30],
+        "delete": list(dict.fromkeys(delete))[:50],
+        "rewrite": rw[:50],
+        "book_rules": list(dict.fromkeys(book_rules))[:30],
     }
     if cb:
-        cb(f"合规审计: 删除{len(audit['delete'])} 改写{len(audit['rewrite'])} 注意{len(audit['book_rules'])}")
+        cb(f"合规审计完成: 删除{len(audit['delete'])} 改写{len(audit['rewrite'])} 注意{len(audit['book_rules'])}")
     return audit
 
 
@@ -241,7 +307,7 @@ def _clean_latex(s: str) -> str:
     return s.replace("$", "").replace("\\", "")
 
 
-def _chunk_text(text: str, size: int = 5500) -> list[str]:
+def _chunk_text(text: str, size: int = 12000) -> list[str]:
     """句界分块 (不截断): 保证全书每字都被提取."""
     chunks, cur = [], ""
     for sent in re.split(r"(?<=[。！？\n])", text):
@@ -252,6 +318,44 @@ def _chunk_text(text: str, size: int = 5500) -> list[str]:
     if cur.strip():
         chunks.append(cur)
     return chunks
+
+
+_BATCH_MAX = 15000   # 碎节合并包上限 (0922 用户令·A案); 单块 40k 军规不变
+
+
+def _pack_secs(secs: list[tuple[str, str]]) -> dict:
+    """节列表 → 一个提取包: 逐节标记拼接 (零截断), name 兼容旧 chunks.json 结构."""
+    body = "\n\n".join(f"〔第{i}节·{n}〕\n{t}" for i, (n, t) in enumerate(secs, 1))
+    name = secs[0][0] if len(secs) == 1 else f"{secs[0][0]} 等{len(secs)}节"
+    return {"name": name, "text": body}
+
+
+def build_batches(chapters: list[dict]) -> list[dict]:
+    """章节 → 提取包 (0922 碎节合并, 用户令 A 案).
+
+    v2 军规 (0908) 不变: 单块 ≤40k 零截断, 超长章 _chunk_text 句界细分。
+    0922 动机: zhihailib 版《定位》133 节均 913 字, 逐节单调 = 每节付一次全价
+    结构化生成 (8 类目脚手架+系统提示+质检重试), 133 次×75s = 2h47m; 相邻微节
+    合并 ~15k/包后包内逐节标记 (章节语境零丢失), 调用次数 133 → ~9。
+    """
+    secs: list[tuple[str, str]] = []
+    for ch in chapters:
+        if len(ch["text"]) < 500:
+            continue
+        parts = [ch["text"]] if len(ch["text"]) <= 40000 else _chunk_text(ch["text"], 40000)
+        secs += [(ch["name"], p) for p in parts]
+    packs: list[dict] = []
+    cur: list[tuple[str, str]] = []
+    cur_len = 0
+    for name, text in secs:
+        if cur and cur_len + len(text) > _BATCH_MAX:
+            packs.append(_pack_secs(cur))
+            cur, cur_len = [], 0
+        cur.append((name, text))
+        cur_len += len(text)
+    if cur:
+        packs.append(_pack_secs(cur))
+    return packs
 
 
 def _merge_pool(pool: dict, data: dict, seen: set) -> None:
@@ -274,6 +378,29 @@ def _merge_pool(pool: dict, data: dict, seen: set) -> None:
                 seen.add(key); pool["案例"].append({"desc": _clean_latex((c.get("desc") or "").strip()), "point": _clean_latex((c.get("point") or "").strip())})
         elif isinstance(c, str) and c.strip() and c not in seen:
             seen.add(c); pool["案例"].append({"desc": c.strip(), "point": ""})
+    for s in data.get("故事") or []:
+        if isinstance(s, dict) and (s.get("title") or s.get("决策与转折") or "").strip():
+            key = _clean_latex(((s.get("title") or "") + (s.get("决策与转折") or ""))[:40])
+            if key and key not in seen:
+                seen.add(key)
+                pool["故事"].append({k: _clean_latex(str(s.get(k) or "")) for k in
+                                     ("title", "背景", "主体", "决策与转折", "结果", "启示")})
+    for m in data.get("方法") or []:
+        if isinstance(m, dict) and (m.get("name") or "").strip():
+            key = _clean_latex(m["name"].strip())
+            if key not in seen:
+                seen.add(key)
+                steps = [str(x) for x in (m.get("步骤") or []) if str(x).strip()]
+                pool["方法"].append({"name": key, "步骤": steps,
+                                     "来源": str(m.get("来源") or ""), "适用": _clean_latex(str(m.get("适用") or "")),
+                                     "边界": _clean_latex(str(m.get("边界") or ""))})
+    for st in data.get("路径") or []:
+        if isinstance(st, dict) and (st.get("阶段") or st.get("动作") or "").strip():
+            key = _clean_latex(((st.get("阶段") or "") + (st.get("动作") or ""))[:40])
+            if key and key not in seen:
+                seen.add(key)
+                pool["路径"].append({k: _clean_latex(str(st.get(k) or "")) for k in
+                                     ("阶段", "触发", "动作", "结果")})
     for d in data.get("数据") or []:
         d = _clean_latex((d or "").strip())
         if d and d not in seen:
@@ -284,30 +411,128 @@ def _merge_pool(pool: dict, data: dict, seen: set) -> None:
             seen.add(q); pool["原句"].append(q)
 
 
+def split_sections(essence_text: str, book_title: str) -> dict:
+    """蒸馏产物按 `## ` 节拆独立文件 → data/l0/{书}/sections/ 料仓 .
+
+    下游按需给料 (金句给金句文件/素材包给故事库), 不再整 txt 灌注。
+    节名做文件名 (安全字符); 返回 {节名: 字数}。
+    """
+    out_dir = Path(__file__).resolve().parents[3] / "data" / "l0" / book_title / "sections"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    parts = re.split(r"(?m)^## ", essence_text or "")
+    stats: dict[str, int] = {}
+    for part in parts[1:]:
+        lines = part.split("\n", 1)
+        title_raw = lines[0].strip()
+        fname = re.sub(r'[\\/:*?"<>|\s]', "_", title_raw)[:40] or "未命名"
+        body = lines[1] if len(lines) > 1 else ""
+        (out_dir / f"{fname}.txt").write_text(f"## {title_raw}\n{body}", encoding="utf-8")
+        stats[title_raw[:20]] = len(body)
+    if parts and parts[0].strip():
+        (out_dir / "_头部.txt").write_text(parts[0], encoding="utf-8")
+    return stats
+
+
+def _check_extract(data: dict, chunk_len: int) -> list[str]:
+    """v2 提取质检 : 确定性验 — JSON 结构/重类目要素/原句非空."""
+    if not isinstance(data, dict) or not any(data.get(k) for k in
+            ("观点", "概念", "故事", "案例", "方法", "路径", "反模式", "数据", "原句")):
+        return ["全类目为空"]
+    issues = []
+    stories = [s for s in (data.get("故事") or []) if isinstance(s, dict)]
+    if chunk_len > 8000 and not stories:
+        issues.append("长章无故事")
+    hollow = sum(1 for s in stories
+                 if not (s.get("决策与转折") or "").strip() or not (s.get("结果") or "").strip())
+    if stories and hollow / len(stories) > 0.5:
+        issues.append(f"故事六要素空洞 {hollow}/{len(stories)}")
+    if chunk_len > 8000 and not (data.get("原句") or []):
+        issues.append("长章无原句")
+    return issues
+
+
+def _check_compose(essence: str, pool: dict) -> list[str]:
+    """v2 编纂质检 : 节头齐备 + 故事不丢料 (计数比对 ≥池×0.7)."""
+    need = ("元问题", "核心哲学", "概念与机制", "故事库", "方法与清单",
+            "成功路径", "反模式", "可引用原句", "一页核")
+    # 0908 修: 节头可带前缀 (如「核心概念与机制」) — 关键词含于任一 ## 行即算在
+    issues = [f"缺节:{k}" for k in need
+              if not re.search(rf"(?m)^##+ .{{0,6}}{k}", essence)]
+    n_pool = len(pool.get("故事") or [])
+    if n_pool:
+        body = essence[essence.find("故事库"):essence.find("## ", essence.find("故事库") + 5)]
+        n_out = len(re.findall(r"(?m)^(?:\*\s|\d+[.、]|[-•]\s|###+\s)|背景[：:]", body or ""))
+        # 编纂合并同类故事, 0.7 容忍度; 条目信号弱时退存在性判断
+        if "故事库" not in essence:
+            issues.append("池有故事但无故事库节")
+        elif n_pool >= 4 and n_out and n_out < n_pool * 0.7:
+            issues.append(f"故事丢料 {n_out}/{n_pool}")
+    if not re.search(r"## 一页核[\s\S]{20,}", essence):
+        issues.append("一页核空")
+    return issues
+
+
+def load_section(book_title: str, section: str) -> str:
+    """v2 料仓按需取料 : sections/{节名}.txt — 短名前缀匹配
+    (如 '故事库'→'故事库 — 池中….txt'); 缺失返回空串 (调用方自行 fallback)."""
+    d = Path(__file__).resolve().parents[3] / "data" / "l0" / book_title / "sections"
+    if not d.is_dir():
+        return ""
+    exact = d / f"{section}.txt"
+    if exact.exists():
+        return exact.read_text(encoding="utf-8", errors="ignore")
+    for f in d.glob("*.txt"):
+        if f.stem.startswith(section) or section in f.stem[:12]:
+            return f.read_text(encoding="utf-8", errors="ignore")
+    return ""
+
+
 def distill_book(path: str | Path, client: GemmaClient,
                  progress: dict | None = None, cb=None,
                  audit: bool = True) -> str:
-    """单书蒸馏 v2 (2026-08-19 质量重写): 全文分块穷尽提取 + LLM 编纂轮.
+    """单书蒸馏 v2 : 全文分块穷尽提取 + LLM 编纂轮.
 
     v1 三层信息丢失修复: ①截断6000→分块全读; ②裸串→结构化深提取;
     ③编纂硬上限→LLM 编纂轮全量整理(128k 上下文), 机械编纂仅兜底。
     """
     parsed = read_book(path)
+    # v2 L0 覆盖率质检 (0908 设计令): 解析字数/包内文本总字数 <80% = 整书漏读, 拒跑
+    if str(path).lower().endswith(".epub"):
+        try:
+            import zipfile as _zf
+            _z = _zf.ZipFile(path)
+            _zip_chars = sum(len(re.sub(r"<[^>]+>", "", _z.read(n).decode("utf-8", errors="ignore")))
+                             for n in _z.namelist()
+                             if n.lower().endswith((".html", ".xhtml", ".htm")))
+            if _zip_chars and parsed["total_chars"] / _zip_chars < 0.8:
+                raise RuntimeError(
+                    f"epub 解析覆盖率 {100 * parsed['total_chars'] / _zip_chars:.0f}% <80% "
+                    f"({parsed['total_chars']:,}/{_zip_chars:,}) — 整书漏读, 拒绝蒸馏")
+            if cb:
+                cb(f"解析覆盖率 {100 * parsed['total_chars'] / max(_zip_chars, 1):.0f}% ✓")
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.warning("[distill] 覆盖率检查跳过: %s", exc)
     seen: set[str] = set()
-    pool: dict = {"观点": [], "概念": [], "案例": [], "数据": [], "原句": []}
-    chunks: list[tuple[str, str]] = []
-    for ch in parsed["chapters"]:
-        if len(ch["text"]) < 500:
-            continue
-        for ck in _chunk_text(ch["text"]):
-            chunks.append((ch["name"], ck))
-    for ci, (cname, ck) in enumerate(chunks):
+    pool: dict = {"观点": [], "概念": [], "案例": [], "数据": [], "原句": [],
+                  "故事": [], "方法": [], "路径": []}
+    chunks = build_batches(parsed["chapters"])  # 0922 碎节合并 (~15k/包; ≤40k 军规不变)
+    for ci, c in enumerate(chunks):
+        cname, ck = c["name"], c["text"]
         if progress is not None:
             progress.update({"book": parsed["book_title"], "chapter": f"{ci + 1}/{len(chunks)}"})
         if cb:
             cb(f"块 {ci + 1}/{len(chunks)} ({cname}) 提取中…")
-        data = client.parse_json_block(client.chat(f"【章节】{ck}"))
-        _merge_pool(pool, data, seen)
+        data = None
+        for _attempt in range(2):  # v2 提取质检 (0908): 不过重提 1 次
+            data = client.parse_json_block(client.chat(f"【所在章节】{cname}\n【章节内容】{ck}"))
+            qc_issues = _check_extract(data, len(ck))
+            if not qc_issues:
+                break
+            if cb and _attempt == 0:
+                cb(f"章质检不过({'; '.join(qc_issues[:2])}), 重提: {cname[:20]}")
+        _merge_pool(pool, data or {}, seen)
     if cb:
         cb(f"提取完成: 观点{len(pool['观点'])} 概念{len(pool['概念'])} "
            f"案例{len(pool['案例'])} 数据{len(pool['数据'])} 原句{len(pool['原句'])}")
@@ -337,20 +562,54 @@ def distill_book(path: str | Path, client: GemmaClient,
             + "\n【本书注意点】" + "; ".join(audit_res["book_rules"]))
     essence = None
     if pool_text:
-        try:
-            out = client.chat(f"书名: 《{parsed['book_title']}》\n【提取池】\n{pool_text[:90000]}",
-                              system=comp_sys)
-            if len(out) >= max(1500, len(pool_text) // 15):
+        if cb:  # 编纂轮是本地长生成 (10-30min) 无中间进度, 先播报防"断档像死机"
+            cb(f"编纂轮: 全池 {len(pool_text) // 1000}k 字入本地 Gemma 成文中, 预计 10-30min…")
+        for _attempt in range(2):  # v2 编纂质检 (0908): 节不齐/丢料重编 1 次
+            try:
+                out = client.chat(f"书名: 《{parsed['book_title']}》\n【提取池】\n{pool_text[:90000]}",
+                                  system=comp_sys)
+                if len(out) < max(1500, len(pool_text) // 15):
+                    break
                 essence = _clean_latex(out)
-        except Exception as exc:
-            logger.warning("[distill] 编纂轮失败, 回退机械编纂: %s", exc)
+                c_issues = _check_compose(essence, pool)
+                if not c_issues:
+                    break
+                if cb:
+                    cb(f"编纂质检不过({'; '.join(c_issues[:3])})"
+                       + (", 重编" if _attempt == 0 else ", 放行带病"))
+            except Exception as exc:
+                logger.warning("[distill] 编纂轮失败, 回退机械编纂: %s", exc)
+                break
     if essence and (audit_res["rewrite"] or audit_res["book_rules"] or deleted):
         essence += (
             "\n\n## 合规备注 (Gate A 审计, 成稿前必遵)\n"
             + "".join(f"- 改写: {(r.get('orig') or '')[:50]} → {r.get('dir') or ''}\n" for r in audit_res["rewrite"])
             + "".join(f"- 注意: {r}\n" for r in audit_res["book_rules"])
             + f"- 已物理删除高危 {deleted} 条, 成稿禁用其原文\n")
-    return essence or _compose_essence_fallback(parsed["book_title"], pool)
+    # Gate 0.5 (0908): 合规映射结构化落 L0 目录 — 下游确定性过滤的机器可读源
+    # (文本备注是给人看的, JSON 是给 compliance_gate 吃的; rewrite 的 dir 是方向,
+    #  safe 由过滤层从 dir 引号抽取/后续蒸馏升级直接产逐字安全版)
+    try:
+        from .l0 import _l0_dir as _d
+        import json as _json
+        _map = {"rules": [{"orig": r.get("orig") or "", "safe": r.get("safe") or "",
+                           "note": r.get("dir") or ""} for r in audit_res["rewrite"]],
+                "hard_notes": list(audit_res["book_rules"] or []),
+                "deleted_count": int(deleted)}
+        _p = _d(parsed["book_title"]) / "合规映射.json"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.write_text(_json.dumps(_map, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[distill] 合规映射 JSON 落盘失败 (Gate0.5 回退文本解析): %s", exc)
+    final = essence or _compose_essence_fallback(parsed["book_title"], pool)
+    # sections/ 料仓 (0908): 按节拆文件, 下游按需调用
+    try:
+        stats = split_sections(final, parsed["book_title"])
+        if cb:
+            cb(f"sections 料仓落盘: {len(stats)} 节")
+    except Exception as exc:
+        logger.warning("[distill] sections 拆分失败(不阻断): %s", exc)
+    return final
 
 
 def _compose_essence_fallback(title: str, p: dict) -> str:
@@ -418,7 +677,7 @@ def batch_status() -> dict:
 
 
 def clear_state() -> dict:
-    """清空蒸馏状态/事件缓冲 (2026-08-20): 前端确认完成后调用, 恢复正常页面."""
+    """清空蒸馏状态/事件缓冲 : 前端确认完成后调用, 恢复正常页面."""
     if _BATCH["running"]:
         raise RuntimeError("蒸馏运行中, 不能清空")
     _BATCH.update(running=False, done=[], error=None, progress={}, events=[])
@@ -443,6 +702,33 @@ def start_single(path: str | Path, root: str) -> dict:
     return _BATCH
 
 
+def _auto_l0_facing(src: Path, title: str) -> None:
+    """蒸馏产物落盘后自动补 L0+facing .
+
+    L0/facing 均复用本地 Gemma (l0/facing 直接 import distiller.GemmaClient) —
+    批内 llama 已载入, 蒸馏完顺跑再腾卡, 零 API 费零额外加载;
+    幂等 (已有 L0/某 facing 则跳过); 失败只警示 — 建书 prep 机制仍可兜底重试,
+    绝不判蒸馏失败。此前 L0 是建书时才补 (books._prepare_l0_facing), 每本新书
+    建书都要等一轮 — 流程割裂, 用户实锤 "为什么蒸馏完还要补 L0"。
+    """
+    try:
+        from app.services.book_service.facing import FACINGS, run_facings
+        from app.services.book_service.l0 import _l0_dir, run_l0
+        d = _l0_dir(title)
+        if not (d / "l0-chapter-v1.json").exists():
+            _evt(f"《{title}》 L0 章节提取中 (本地Gemma)…")
+            run_l0(src)
+        missing = [n for n, spec in FACINGS.items()
+                   if not (d / "facing" / spec["file"]).exists()]
+        if missing:
+            _evt(f"《{title}》 facing 补跑: {','.join(missing)}…")
+            run_facings(d, facings=missing)
+        _evt(f"✓ 《{title}》 L0/facing 就绪, 建书免等待", "ok")
+    except Exception as exc:
+        logger.warning("[distill] %s L0/facing 自动补跑失败 (建书时 prep 兜底): %s", title, exc)
+        _evt(f"《{title}》 L0/facing 补跑失败, 建书时将自动重试", "warn")
+
+
 def _run_single(path: str | Path, root: str) -> None:
     p = Path(path)
     try:
@@ -459,6 +745,8 @@ def _run_single(path: str | Path, root: str) -> None:
         _BATCH["done"].append(out.name)
         _evt(f"✓ 《{title}》 → {out.name} ({len(essence)}字, {time.monotonic()-t0:.0f}s)", "ok",
              type="distill_done")
+        # 0907: 蒸馏完成即全就绪 — L0+facing 自动接续, 建书免等待
+        _auto_l0_facing(p, title)
     except Exception as exc:
         logger.exception("[distill] 单本蒸馏失败: %s", p.name)
         _BATCH["error"] = str(exc)
@@ -498,6 +786,8 @@ def _run_batch(root: str) -> None:
                 out.write_text(essence, encoding="utf-8")
                 _BATCH["done"].append(out.name)
                 _evt(f"✓ {i}/{len(pend)} 《{title}》 → {out.name} ({len(essence)}字, {time.monotonic()-t0:.0f}s)", "ok")
+                # 0907: 蒸馏完成即全就绪 — L0+facing 自动接续 (DeepSeek, 不占本地卡)
+                _auto_l0_facing(Path(s["path"]), title)
             except Exception as exc:
                 logger.exception("[distill] 失败: %s", s["filename"])
                 _BATCH["done"].append(f"{s['filename']} FAILED: {exc}")
@@ -515,3 +805,160 @@ def _run_batch(root: str) -> None:
 
 def _publish_done() -> None:
     _evt("批次结束", "info", type="distill_done")
+
+
+# ══════════════════════════════════════════════════════════════════
+# v2 阶段化执行 (0908 用户令: 分开跑/逐个验证/断点续跑)
+#   ① stage_parse    解析+分块 (秒)       → _pipeline/chunks.json
+#   ② stage_extract  逐章提取 (每章增量写盘, from_chapter 续跑) → _pipeline/pool.json
+#   ③ stage_gate_a   池合规审计 (分钟)     → 池内删 + 合规映射.json
+#   ④ stage_compose  编纂+质检+产物 (分钟) → 蒸馏txt + sections/
+# 验证序 (先小后大): ①秒 → ②单章 → ②小批+续跑 → ③④小池验机制 → ②全量夜跑 → ④真池
+# ══════════════════════════════════════════════════════════════════
+
+def _pipe_dir(book_title: str) -> Path:
+    d = Path(__file__).resolve().parents[3] / "data" / "l0" / book_title / "_pipeline"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def stage_parse(path: str | Path, cb=None) -> dict:
+    """阶段①: 解析+分块+覆盖率闸门 → chunks.json。秒级, 跑完人工验收章节清单."""
+    parsed = read_book(path)
+    # 覆盖率闸门 (epub)
+    if str(path).lower().endswith(".epub"):
+        import zipfile as _zf
+        _z = _zf.ZipFile(path)
+        _zip_chars = sum(len(re.sub(r"<[^>]+>", "", _z.read(n).decode("utf-8", errors="ignore")))
+                         for n in _z.namelist()
+                         if n.lower().endswith((".html", ".xhtml", ".htm")))
+        if _zip_chars and parsed["total_chars"] / _zip_chars < 0.8:
+            raise RuntimeError(
+                f"epub 解析覆盖率 {100 * parsed['total_chars'] / _zip_chars:.0f}% <80% — 整书漏读, 拒绝")
+        if cb:
+            cb(f"解析覆盖率 {100 * parsed['total_chars'] / max(_zip_chars, 1):.0f}% ✓")
+    chunks = build_batches(parsed["chapters"])  # 0922 碎节合并: 与 distill_book 同一刀
+    meta = {"book_title": parsed["book_title"], "total_chars": parsed["total_chars"],
+            "n_chapters": len(parsed["chapters"]), "n_chunks": len(chunks),
+            "done": 0}
+    d = _pipe_dir(parsed["book_title"])
+    (d / "source_path.txt").write_text(str(Path(path).resolve()), encoding="utf-8")
+    (d / "chunks.json").write_text(
+        json.dumps({"meta": meta, "chunks": chunks}, ensure_ascii=False), encoding="utf-8")
+    if cb:
+        cb(f"① 完成: {meta['n_chapters']} 章 → {meta['n_chunks']} 块, 总字 {meta['total_chars']:,}")
+    return meta
+
+
+def _load_pipe(book_title: str) -> tuple[dict, list[dict], dict, set]:
+    d = _pipe_dir(book_title)
+    pj = json.loads((d / "chunks.json").read_text(encoding="utf-8"))
+    pool = {"观点": [], "概念": [], "案例": [], "数据": [], "原句": [],
+            "故事": [], "方法": [], "路径": [], "反模式": []}
+    seen: set[str] = set()
+    pf = d / "pool.json"
+    if pf.exists():
+        saved = json.loads(pf.read_text(encoding="utf-8"))
+        pool = saved.get("pool") or pool
+        seen = set(saved.get("seen") or [])
+        pj["meta"]["done"] = saved.get("done", 0)
+    return pj["meta"], pj["chunks"], pool, seen
+
+
+def stage_extract(book_title: str, client: "GemmaClient | None" = None,
+                  limit: int = 0, cb=None) -> dict:
+    """阶段②: 逐章提取, 每章完成即增量写盘 (断点安全); limit=N 验证用只提 N 章."""
+    if client is None:
+        client, _started = ensure_gemma(GemmaClient)
+    meta, chunks, pool, seen = _load_pipe(book_title)
+    start = int(meta.get("done") or 0)
+    end = len(chunks) if not limit else min(len(chunks), start + limit)
+    for ci in range(start, end):
+        c = chunks[ci]
+        if cb:
+            cb(f"② 提取 {ci + 1}/{len(chunks)} ({c['name'][:24]})")
+        data = None
+        for _attempt in range(2):
+            data = client.parse_json_block(
+                client.chat(wrap_source(f"【所在章节】{c['name']}\n【章节内容】{c['text']}", label="书籍原文")))
+            if not _check_extract(data, len(c["text"])):
+                break
+            if cb and _attempt == 0:
+                cb(f"   章质检不过, 重提: {c['name'][:20]}")
+        _merge_pool(pool, data or {}, seen)
+        # 增量落盘 (每章) — 进程死不丢已提章节
+        _pipe_dir(book_title).joinpath("pool.json").write_text(
+            json.dumps({"done": ci + 1, "pool": pool, "seen": sorted(seen)},
+                       ensure_ascii=False), encoding="utf-8")
+    stats = {k: len(v) for k, v in pool.items()}
+    if cb:
+        cb(f"② 完成: 提取至 {end}/{len(chunks)} 章 | " +
+           " ".join(f"{k}{v}" for k, v in stats.items()))
+    return {"done": end, "total": len(chunks), "stats": stats}
+
+
+def stage_gate_a(book_title: str, cb=None) -> dict:
+    """阶段③: 池合规审计 — 高危物理删 + 合规映射.json 落盘."""
+    meta, chunks, pool, seen = _load_pipe(book_title)
+    rules = load_book_rules
+    hard = rules.get("hard_blacklist_quotes") or []
+    hard_n = _apply_delete(pool, hard)
+    audit_res = audit_compliance(pool, cb=cb)
+    deleted = hard_n + _apply_delete(pool, audit_res["delete"])
+    _map = {"rules": [{"orig": r.get("orig") or "", "safe": r.get("safe") or "",
+                       "note": r.get("dir") or ""} for r in audit_res["rewrite"]],
+            "hard_notes": list(audit_res["book_rules"] or []),
+            "deleted_count": int(deleted)}
+    d = _pipe_dir(book_title)
+    d.joinpath("pool.json").write_text(
+        json.dumps({"done": meta.get("done", 0), "pool": pool, "seen": sorted(seen)},
+                   ensure_ascii=False), encoding="utf-8")
+    d.parent.joinpath("合规映射.json").write_text(
+        json.dumps(_map, ensure_ascii=False, indent=1), encoding="utf-8")
+    if cb:
+        cb(f"③ 完成: 硬删{hard_n}+审计删{deleted - hard_n}, 改写{len(audit_res['rewrite'])}, 注意{len(audit_res['book_rules'])}")
+    return {"deleted": deleted, "rewrite": len(audit_res["rewrite"])}
+
+
+def stage_compose(book_title: str, client: "GemmaClient | None" = None, cb=None) -> str:
+    """阶段④: 编纂(质检重试1次) → 蒸馏txt + 合规备注 + sections/ 料仓."""
+    if client is None:
+        client, _started = ensure_gemma(GemmaClient)
+    meta, chunks, pool, seen = _load_pipe(book_title)
+    pool_text = json.dumps(pool, ensure_ascii=False)
+    if not pool_text or pool_text == "{}":
+        raise RuntimeError("池为空, 先跑 stage_extract")
+    essence = None
+    for _attempt in range(2):
+        out = client.chat(wrap_source(f"书名: 《{book_title}》\n【提取池】\n{pool_text[:90000]}", label="书籍提取池"),
+                          system=_COMPOSE_SYS)
+        if len(out) < max(1500, len(pool_text) // 15):
+            break
+        essence = _clean_latex(out)
+        c_issues = _check_compose(essence, pool)
+        if not c_issues:
+            break
+        if cb:
+            cb(f"   编纂质检: {c_issues[:3]}" + (" 重编" if _attempt == 0 else " 放行"))
+    if not essence:
+        essence = _compose_essence_fallback(book_title, pool)
+    if "合规映射.json" and True:
+        _m = json.loads((_pipe_dir(book_title).parent / "合规映射.json").read_text(encoding="utf-8")) \
+            if (_pipe_dir(book_title).parent / "合规映射.json").exists() else {"rules": [], "hard_notes": []}
+        essence += ("\n\n## 合规备注 (Gate A 审计, 成稿前必遵)\n"
+                    + "".join(f"- 改写: {r.get('orig', '')[:50]} → {r.get('note', '')}\n"
+                              for r in _m.get("rules") or [])
+                    + "".join(f"- 注意: {h}\n" for h in _m.get("hard_notes") or []))
+    out_path = _pipe_dir(book_title).parent / f"{book_title}.蒸馏.txt"  # L0 正本
+    out_path.write_text(essence, encoding="utf-8")
+    # 双写源书目录 (0908 用户习惯位): chunks.json meta 里没存源路径, 从 _pipeline/归档参数取
+    src_hint = _pipe_dir(book_title) / "source_path.txt"
+    if src_hint.exists():
+        import shutil as _sh
+        _src = Path(src_hint.read_text(encoding="utf-8").strip())
+        if _src.parent.is_dir():
+            _sh.copy2(out_path, _src.parent / f"{book_title}.蒸馏.txt")
+    stats = split_sections(essence, book_title)
+    if cb:
+        cb(f"④ 完成: {len(essence):,}字 → {out_path.name} + sections {len(stats)} 节")
+    return str(out_path)

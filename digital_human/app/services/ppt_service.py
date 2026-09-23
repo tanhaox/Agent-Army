@@ -362,6 +362,12 @@ def parse_pptx(path: str | Path) -> list[Slide]:
             background_b64=bg, bg_above_shape_id=bg_above_shape_id, notes=notes,
         ))
 
+    # 列宽几何裁剪 (2026-09-05 二修): 千问窄列文本框声明宽跨整页, 手工断行
+    # 在异字体下行宽漂移 → 左列文字贴进右列读成一串 (ep2 页15 实锤)。
+    # 规约: 同一水平带 (右侧框顶 落在本块文本竖向范围内) 且横向间距 >1.8in
+    # 的右侧文本框 = 邻列 → 本块宽度不得越过它 (留 0.18in 水槽)。
+    _cap_column_widths(slides)
+
     # 相邻页尾句去重 (2026-09-05): 千问生成 pptx 偶发把结尾句同时写进倒数两页
     # 备注 (ep1 实锤: 第7页备注末尾带"我是静，下期见", 第8页整页又是它 →
     # 倒数第二页音频尾+末页音频各说一遍)。本页备注以下一页备注整句收尾 → 截掉。
@@ -373,11 +379,81 @@ def parse_pptx(path: str | Path) -> list[Slide]:
             a.notes = na[: -len(nb)].rstrip()
             logger.info("[ppt] 页%d 备注尾句与页%d 重复, 已截去 %d 字",
                         a.index, b.index, len(nb))
+
+    # 末页台词重排 (2026-09-05 用户令): 千问母本偶发把人设收尾块 ("…我是静，
+    # 下期见。") 放页首、CTA 放其后 → 成片先说下期见再说评论区聊。规约:
+    # 含"下期见"的句子必须是全片台词最后一句 — 收尾块在页首时整块移到页尾。
+    # ⚠️ 拼接禁用换行: TTS _split_line_indices 按行切, 页备注内 \n 会多出
+    # 一行音频 → 17 行对 16 段 → _manifest_callback seg_pairs 越界 (实锤)。
+    last = slides[-1]
+    if last.notes and "下期见" in last.notes:
+        import re as _re
+        m = _re.match(r"^(.*?下期见[^。！？]*[。！？])", last.notes, _re.S)
+        if m and 0 < m.end() < len(last.notes.rstrip()) and m.end() <= 80:
+            block = m.group(1).strip()
+            last.notes = (last.notes[m.end():].strip() + block).strip()
+            logger.info("[ppt] 页%d 收尾块(下期见)前置 → 移到页尾 (%d 字)",
+                        last.index, len(block))
     return slides
+
+
+def _cap_column_widths(slides: list["Slide"]) -> None:
+    """按几何列边界裁文本块声明宽 (2026-09-05, 见 parse 处注释)。
+
+    竖向范围估计 = 手工行数 × 字号 × 1.3 行高 (声明框高不可信 — 千问用
+    0.15in 装饰框)。只认"右侧且明显成列"(Δleft > 1.8in) 的邻居, 防把
+    下方块误当邻列。宽度字段就地收紧, 下游 (_px_w/_flow_wrap) 全部受益。
+    """
+    EMU_PER_PX = 6350  # 1920px = 12192000 EMU
+    GUTTER = int(0.18 * 914400)
+    MIN_COL_GAP = int(1.8 * 914400)
+    for s in slides:
+        for a in s.text_blocks:
+            fs_px = max((a.font_size_pt or 11.0) * 2.0, 12.0)
+            n_lines = max((a.text or "").count("\n") + 1, 1)
+            a_top, a_bottom = a.top, a.top + n_lines * fs_px * 1.3 * EMU_PER_PX
+            cap = a.width
+            for b in s.text_blocks:
+                if b is a or b.left <= a.left:
+                    continue
+                if b.left - a.left < MIN_COL_GAP:
+                    continue  # 紧贴的同行小块 (标点/序号), 不是列
+                b_fs = max((b.font_size_pt or 11.0) * 2.0, 12.0)
+                b_n = max((b.text or "").count("\n") + 1, 1)
+                b_bottom = b.top + b_n * b_fs * 1.3 * EMU_PER_PX
+                if b.top >= a_bottom or b_bottom <= a_top:
+                    continue  # 竖向无重叠 → 是上方/下方内容不是右邻列
+                cap = min(cap, b.left - a.left - GUTTER)
+            if cap < a.width:
+                a.width = max(cap, int(1.2 * 914400))  # 至少留 1.2in 防过窄
 
 
 def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _esc_flow(s: str) -> str:
+    """流式文本转义 (2026-09-05): 千问 deck 的手工换行符保留为 <br> —
+    换行位置是设计的一部分 (窄列收行); 行超宽时由 CSS 自动换行兜底。"""
+    return (_esc(s).replace("\r\n", "\n").replace("\r", "\n")
+            .replace("\n", "<br>"))
+
+
+def _flow_wrap(tb: "TextBlock", fs: float, w_px: int) -> tuple[int, str]:
+    """千问窄列适配 (2026-09-05): 该类 deck 文本框声明宽跨整页 (wrap=none),
+    实际靠手工换行收在窄列里 — 换渲染字体后行宽漂移, 单行穿列互相重叠
+    (ep2 页15 左列文字穿过中列实锤)。按最长手工行估设计列宽, 自动换行
+    收在列内; 短行 (≤12 字) 保持声明宽直连。
+    ⚠️ 仅限左对齐 (align=0): 居中/右对齐是标题系全页排版, 收窄盒子会把
+    text-align:center 的视觉中心拉偏 (章标题副句偏移回归实锤)。"""
+    lines = [ln for ln in (tb.text or "").split("\n") if ln.strip()]
+    if not lines:
+        return w_px, ""
+    longest = max(len(l) for l in lines)
+    if tb.align != 0 or longest <= 12:
+        return w_px, _esc_flow(tb.text)
+    est = int(longest * fs * 1.12) + 8
+    return min(w_px, est), _esc_flow(tb.text)
 
 
 def _css_color(c) -> str:
@@ -442,11 +518,11 @@ def build_slide_html(slide: Slide, *, skin=None, width: int = 1920, height: int 
             els.append(
                 f'<div id="anim-{b.shape_id}" class="anim-layer" '
                 f'style="position:absolute;left:{px_left(b.left)}px;top:{px_top(b.top)}px;'
-                f'width:{px_w(b.width)}px;height:{px_h(b.height)}px;'
+                f'width:{_flow_wrap(b, fs, px_w(b.width))[0]}px;height:{px_h(b.height)}px;'
                 f'font-size:{fs}px;line-height:1.3;color:{color};'
                 f'{"font-weight:700;" if b.bold else ""}text-align:{ {0:"left",1:"center",2:"right"}.get(b.align, "left") };'
-                f'overflow:hidden;word-wrap:break-word;white-space:pre-wrap;box-sizing:border-box;'
-                f'{anim_style}">{_esc(b.text)}</div>'
+                f'overflow:visible;word-break:break-word;white-space:normal;box-sizing:border-box;'
+                f'{anim_style}">{_flow_wrap(b, fs, px_w(b.width))[1]}</div>'
             )
         else:
             els.append(
@@ -518,14 +594,15 @@ def build_text_element_html(tb: TextBlock, width: int = 1920, height: int = 1080
     """单文字块透明层 HTML: 块在自身坐标渲染 (像素级), 供剪映叠层逐级入场."""
     fs = _pt_to_px(tb.font_size_pt) if tb.font_size_pt else 28
     align = {0: "left", 1: "center", 2: "right"}.get(tb.align, "left")
+    fw, ftxt = _flow_wrap(tb, fs, _px_w(tb.width))
     div = (
         f"<div style='position:absolute;left:{_px_left(tb.left)}px;top:{_px_top(tb.top)}px;"
-        f"width:{_px_w(tb.width)}px;height:{_px_h(tb.height)}px;"
+        f"width:{fw}px;height:{_px_h(tb.height)}px;"
         f"font-size:{fs}px;line-height:1.3;color:{_css_color(tb.color)};"
         f"{'font-weight:700;' if tb.bold else ''}text-align:{align};"
         f"font-family:'Noto Sans SC','Source Han Sans SC','Microsoft YaHei','PingFang SC',sans-serif;"
-        f"overflow:hidden;word-wrap:break-word;white-space:pre-wrap;box-sizing:border-box'>"
-        f"{_esc(tb.text)}</div>"
+        f"overflow:visible;word-break:break-word;white-space:normal;box-sizing:border-box'>"
+        f"{ftxt}</div>"
     )
     return _page_shell(width, height) + div + "</body></html>"
 

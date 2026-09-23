@@ -6,14 +6,21 @@
     {search_query ≤70字符, search_engine, search_intent:false,
      count, content_size, search_recency_filter}
 
-免费额度有到期时间 (config: zhipu.free_quota_expires) — 到期/额度耗尽时
-抛出明确中文提示, 不让用户"用着用着忘了"。
+额度到期日 (config: zhipu.free_quota_expires, 留空=关闭本地拦截) — 到期/
+资源包耗尽时抛出明确中文提示, 不让用户"用着用着忘了"。
+
+引擎轮流 (2026-09-20 用户令: "一个用完用另一个"): config zhipu.search_engines
+为降级阶梯; 当前引擎资源包耗尽 (服务端额度类报错) → 自动切下一引擎重试同一
+查询, 活跃引擎落盘 data/zhipu_engine_state.json (重启不忘, 充值后自动恢复)。
+全部引擎耗尽才致命中断。仅额度类报错触发轮换, 网络/业务错误不轮换。
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -36,19 +43,50 @@ class ZhipuSearchError(Exception):
 
 
 class ZhipuUnavailableError(ZhipuSearchError):
-    """搜索功能不可用 (key 未配置 / 免费额度到期或耗尽) — 致命中断, 必须提示用户."""
+    """搜索功能不可用 (key 未配置 / 额度到期或资源包耗尽) — 致命中断, 必须提示用户."""
 
 
 def _quota_message(expires: str) -> str:
+    # expires 为空 = 付费资源包模式 (到期日在控制台管理), 只报额度耗尽
+    until = f"或已于 {expires} 到期" if expires else ""
     return (
-        f"智谱搜索免费额度已用尽或已于 {expires} 到期，"
-        "请到 open.bigmodel.cn 控制台查看额度或充值后更换 ZHIPU_API_KEY"
+        f"智谱搜索额度已用尽{until}，"
+        "请到 open.bigmodel.cn 控制台查看资源包余量或充值"
     )
 
 
 def _is_quota_error(message: str) -> bool:
     lowered = message.lower()
     return any(kw in message or kw in lowered for kw in _QUOTA_KEYWORDS)
+
+
+# ── 引擎轮流状态 (落盘, 重启不忘; 单键覆盖写, 并发竞争最坏退回阶梯头, 无害) ──
+_STATE_FILENAME = "zhipu_engine_state.json"
+
+
+def _state_path() -> Path:
+    return get_config().app.data_dir / _STATE_FILENAME
+
+
+def _load_engine_offset(ladder: tuple[str, ...]) -> int:
+    """读落盘的活跃引擎偏移; 无记录/已不在阶梯/全灭(None) → 0 (充值后自动恢复)."""
+    try:
+        raw = json.loads(_state_path().read_text(encoding="utf-8"))
+        engine = str(raw.get("engine") or "")
+        return ladder.index(engine) if engine in ladder else 0
+    except Exception:
+        return 0
+
+
+def _persist_engine(engine: str | None) -> None:
+    """记录当前活跃引擎 (None = 阶梯全灭); 失败不阻断搜索."""
+    try:
+        _state_path().write_text(
+            json.dumps({"engine": engine, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                       ensure_ascii=False),
+            encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[zhipu] 引擎状态落盘失败(不阻断): %s", exc)
 
 
 def _parse_search_result(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -86,38 +124,19 @@ def _parse_search_result(data: dict[str, Any]) -> list[dict[str, Any]]:
     return results
 
 
-def zhipu_web_search(
-    query: str,
-    *,
-    count: int | None = None,
-    content_size: str | None = None,
-    recency: str | None = None,
+def _search_once(
+    cfg: Any,
+    engine: str,
+    q: str,
+    count: int | None,
+    content_size: str | None,
+    recency: str | None,
 ) -> list[dict[str, Any]]:
-    """联网搜索, 返回 [{title, link, content, media, publish_date}].
-
-    失败 raise ZhipuSearchError (含 key 未配置/免费额度到期的明确中文提示),
-    无结果返回 []. 参数缺省读 config zhipu 节.
-    """
-    cfg = get_config().zhipu
-    if not cfg.api_key:
-        raise ZhipuUnavailableError(
-            "ZHIPU_API_KEY 未配置，请在 digital_human/.env 填写后重启服务"
-            "（open.bigmodel.cn/usercenter/apikeys）"
-        )
-    # 到期拦截 (用户 2026-08-15 要求: 到期必须明确提示, 防遗忘)
-    try:
-        if date.today() > date.fromisoformat(cfg.free_quota_expires):
-            raise ZhipuUnavailableError(_quota_message(cfg.free_quota_expires))
-    except ValueError:
-        pass  # 配置日期格式异常不拦截, 走正常调用由服务端裁决
-
-    q = query.strip()[:_QUERY_MAX]
-    if not q:
-        return []
+    """单引擎调用 (含网络退避重试); 额度类报错 raise ZhipuUnavailableError 交上层轮换."""
     url = f"{cfg.base_url.rstrip('/')}/web_search"
     payload = {
         "search_query": q,
-        "search_engine": cfg.search_engine,
+        "search_engine": engine,
         "search_intent": False,
         "count": count or cfg.count,
         "content_size": content_size or cfg.content_size,
@@ -147,7 +166,7 @@ def zhipu_web_search(
             message = str(err.get("message", ""))
             last_error = f"{code}: {message}"
             if _is_quota_error(message):
-                raise ZhipuUnavailableError(_quota_message(cfg.free_quota_expires))
+                raise ZhipuUnavailableError(f"引擎 {engine} 额度报错: {last_error}")
             if code in _RETRYABLE_CODES and attempt < _MAX_ATTEMPTS - 1:
                 time.sleep(2 * (attempt + 1))
                 continue
@@ -155,3 +174,56 @@ def zhipu_web_search(
         return _parse_search_result(data)
 
     raise ZhipuSearchError(f"智谱搜索网络失败（已重试 {_MAX_ATTEMPTS} 次）: {last_error}")
+
+
+def zhipu_web_search(
+    query: str,
+    *,
+    count: int | None = None,
+    content_size: str | None = None,
+    recency: str | None = None,
+) -> list[dict[str, Any]]:
+    """联网搜索, 返回 [{title, link, content, media, publish_date}].
+
+    引擎按 config zhipu.search_engines 阶梯轮流: 当前引擎资源包耗尽自动切
+    下一个重试同查询; 全部耗尽 raise ZhipuUnavailableError。其余失败 raise
+    ZhipuSearchError (含 key 未配置的明确中文提示), 无结果返回 [].
+    """
+    cfg = get_config().zhipu
+    if not cfg.api_key:
+        raise ZhipuUnavailableError(
+            "ZHIPU_API_KEY 未配置，请在 digital_human/.env 填写后重启服务"
+            "（open.bigmodel.cn/usercenter/apikeys）"
+        )
+    # 到期拦截 (用户 2026-08-15 要求: 到期必须明确提示, 防遗忘)
+    try:
+        if date.today() > date.fromisoformat(cfg.free_quota_expires):
+            raise ZhipuUnavailableError(_quota_message(cfg.free_quota_expires))
+    except ValueError:
+        pass  # 配置日期格式异常(含留空)不拦截, 走正常调用由服务端裁决
+
+    q = query.strip()[:_QUERY_MAX]
+    if not q:
+        return []
+
+    ladder = cfg.search_engines
+    offset = _load_engine_offset(ladder)
+    dead: list[str] = []
+    while offset < len(ladder):
+        engine = ladder[offset]
+        try:
+            results = _search_once(cfg, engine, q, count, content_size, recency)
+        except ZhipuUnavailableError:
+            # 本引擎资源包耗尽 → 轮换下一个, 重试同一查询 (2026-09-20 用户令)
+            dead.append(engine)
+            offset += 1
+            _persist_engine(ladder[offset] if offset < len(ladder) else None)
+            logger.warning("[zhipu] 引擎 %s 资源包耗尽, 切下一引擎 (已灭: %s)", engine, "→".join(dead))
+            continue
+        _persist_engine(engine)  # 成功锚定当前引擎, 下次直达
+        return results
+
+    raise ZhipuUnavailableError(
+        f"智谱搜索全部引擎资源包已用尽（{'→'.join(dead)}），"
+        "请到 open.bigmodel.cn 控制台充值；充值后自动从可用引擎恢复"
+    )

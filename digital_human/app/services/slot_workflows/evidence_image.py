@@ -91,29 +91,35 @@ def _build_vf(width: int, height: int, duration: float,
               motion: str = "pull", pan_ltr: bool = True) -> str:
     """等比缩放+pad → Ken Burns(按 motion) → fade (单 pass, 无中间文件).
 
-    step = 0.08/(frames-1) 归一 — 任何时长都恰好走满 1.0↔1.08
-    (旧式 zoom+0.0004 累加, 短片走不满: 4s 只到 1.04)。
-    图源角标已撤 (2026-09-05 用户裁决) — 尾部 hf_title 参考来源卡已承载出处。"""
+    0909 节奏修复 (用户实锤 00:34-00:41 卡): ① 缩放动画只走前 ~1.2s, 之后
+    定格在收尾状态 — 旧版 zoom 线性铺满全时长, 文字截图全文只在最后一帧
+    达成 = 一闪而过, 前段放大态读不到字; ② 缩放前 2x 上采样 — zoompan 的
+    x/y 整数像素取整在原生分辨率上产生阶梯抖动 (慢速拉远尤其明显)。
+    平移 (实物图) 保留全程缓移 — 无文本可读诉求, 漂移本身是呼吸感。"""
     dur = max(1.5, duration)
     fps = 25
     frames = int(dur * fps)
-    step = 0.08 / max(frames - 1, 1)
+    anim_frames = max(2, min(int(1.2 * fps), frames // 2))
     cx, cy = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
-    if motion == "push":            # EV-A 推近: 实物图
-        zoom = f"min(1+on*{step:.6f},1.08)"
+    if motion == "push":            # EV-A 推近: 实物图, 动画后定格放大态
+        step = 0.08 / max(anim_frames - 1, 1)
+        zoom = f"if(lt(on,{anim_frames}),min(1+on*{step:.6f},1.08),1.08)"
         x, y = cx, cy
-    elif motion == "pan":           # EV-C 平移: 实物图, 定倍横扫
+    elif motion == "pan":           # EV-C 平移: 实物图, 定倍横扫 (全程)
         zoom = "1.08"
         span = "(iw-iw/zoom)"
         x = f"{span}*on/{frames}" if pan_ltr else f"{span}*(1-on/{frames})"
         y = cy
-    else:                           # EV-B 拉远: 表格/文字类默认 (先局部后全貌)
-        zoom = f"max(1.08-on*{step:.6f},1.0)"
+    else:                           # EV-B 拉远: 表格/文字类 — 动画后定格全貌
+        step = 0.08 / max(anim_frames - 1, 1)
+        zoom = f"if(lt(on,{anim_frames}),max(1.08-on*{step:.6f},1.0),1.0)"
         x, y = cx, cy
+    # 2x 上采样 (抗 zoompan 整数取整抖动) — 先等比缩进 2 倍画框再补黑边,
+    # 榜单/跑分截图绝不能拉伸变形 (数字会糊); zoompan 输出回落到目标分辨率
+    up_w, up_h = width * 2, height * 2
     return (
-        # 先等比缩进画框再补黑边 — 榜单/跑分截图绝不能拉伸变形 (数字会糊)
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,"
+        f"scale={up_w}:{up_h}:force_original_aspect_ratio=decrease,"
+        f"pad={up_w}:{up_h}:(ow-iw)/2:(oh-ih)/2:black,"
         f"zoompan=z='{zoom}':d={frames}:x='{x}':y='{y}':s={width}x{height}:fps={fps},"
         f"fade=t=in:st=0:d=0.4,fade=t=out:st={max(0, dur - 0.4):.2f}:d=0.4"
     )

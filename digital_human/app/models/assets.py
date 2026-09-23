@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, _new_uuid, _now
 
-__all__ = ["MaterialAsset", "DownloadLog", "VideoAsset", "VideoOutput"]
+__all__ = ["MaterialAsset", "DownloadLog", "VideoAsset", "VideoOutput", "ImageExtraction"]
 
 
 class MaterialAsset(Base):
@@ -131,3 +131,30 @@ class VideoOutput(Base):
     video_format: Mapped[str | None] = mapped_column(String(16), default=None)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ImageExtraction(Base):
+    """图片反推提取记录 (2026-09-06) — 反推页「提取库」持久层.
+
+    一行 = 一次引擎提取: 图 + 目标类型(人物/道具/场景) + 重点范围 + 项目标签
+    + 提取字段 JSON。图本地落盘 image_path, 原始出处记 source_url。
+    project 为自由标签 (空串 = 未分项目), 前端按 「全部/未分/各标签」 过滤。
+    """
+    __tablename__ = "image_extractions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_uuid)
+    image_path: Mapped[str] = mapped_column(String(1024), nullable=False)      # 本地落盘路径
+    source_type: Mapped[str] = mapped_column(String(16), default="local")      # pexels | local | paste
+    source_url: Mapped[str | None] = mapped_column(String(2048), default=None)  # Pexels 页面/图 URL
+    filename: Mapped[str | None] = mapped_column(String(256), default=None)     # 原文件名/pexels_id
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)        # person | prop | scene
+    focus: Mapped[str] = mapped_column(String(128), default="all")              # all | 逗号分隔 key
+    project: Mapped[str] = mapped_column(String(128), default="")               # 项目标签, 空=未分
+    values_json: Mapped[str] = mapped_column(Text, nullable=False)              # 提取字段 JSON
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    __table_args__ = (
+        Index("idx_image_extractions_target", "target_type"),
+        Index("idx_image_extractions_project", "project"),
+        Index("idx_image_extractions_created", "created_at"),
+    )

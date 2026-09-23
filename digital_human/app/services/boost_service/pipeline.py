@@ -234,16 +234,11 @@ def run_boost(db: Session, script_id: str, *, title: str | None = None,
     # 现行: P-L(geo: 反问目录注入, 独立层) → P4(逐句表达精修, 1:1锁定结构)。
     # P5 拆离 (2026-08-25): 移到 audio.py _do_tts 入口, 与 TTS 输入同源文本现场标注 —
     # 消灭"改稿后旧标注错配"窗口, boost 回归纯内容职责。annotate_emotions 保留供调用。
-    _track = ""
-    try:
-        _track = (getattr(script.article, "track", "") or "") if script.article else ""
-    except Exception:
-        pass
-    _emit("boost_start", "爆品改造开始（P-L反问目录→P4精修）" if _track == "geo" else "爆品改造开始（P4精修）")
+    _emit("boost_start", "爆品改造开始（P-L反问目录→P4精修）")
 
-    # P-L 反问目录 (geo 专属; 失败不阻断, P4 走原稿)
-    if _track == "geo":
-        _run_loop()
+    # P-L 反问目录 (2026-09-07 全赛道: 原仅 geo — tech 缺承诺结构/平均时长抓手,
+    # 用户拍板放开; "问序=回收序"本身即前 60 秒留存设计。失败不阻断, P4 走原稿)
+    _run_loop()
 
     # P4 精修 (输入 = P-L 产物或原稿; P4 失败回退原稿, 不卡死)
     _run_p4()

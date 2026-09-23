@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from .assets import DownloadLog, MaterialAsset, VideoAsset, VideoOutput
+from .assets import DownloadLog, ImageExtraction, MaterialAsset, VideoAsset, VideoOutput
 from .base import Base, _new_uuid, _now
 from .book import BookProject, Episode
 from .material import MaterialIngestJob
@@ -42,4 +42,6 @@ __all__ = [
     "MaterialAsset", "DownloadLog", "VideoAsset", "VideoOutput",
     # 素材摄入产线 (2026-08-30)
     "MaterialIngestJob",
+    # 图片反推提取库 (2026-09-06)
+    "ImageExtraction",
 ]

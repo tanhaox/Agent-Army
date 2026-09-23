@@ -13,6 +13,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.services.job_events import _publish
+
 from ..database import db_session, get_db
 from ..models import Article, MaterialIngestJob, MaterialItem, MaterialPackage
 from ..schemas.materials import (
@@ -25,7 +27,6 @@ from ..schemas.materials import (
 )
 from ..services import material_service
 from ..services.url_fetcher import fetch_url
-from .jobs import _publish
 
 logger = logging.getLogger(__name__)
 

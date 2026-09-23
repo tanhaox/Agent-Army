@@ -29,6 +29,7 @@ from .articles import (
 from .assets import (
     ImportFolderRequest,
     MaterialAssetOut,
+    PexelsImageSearchRequest,
     PexelsImportItem,
     PexelsImportRequest,
     PexelsOnlineSearchRequest,
@@ -139,6 +140,7 @@ __all__ = [
     "TaggingRunRequest", "TaggingProgressOut",
     "ImportFolderRequest",
     "PexelsImportItem", "PexelsImportRequest", "PexelsOnlineSearchRequest",
+    "PexelsImageSearchRequest",
     "ResolveItem", "ResolveResponse", "ResolveRequest", "MaterialAssetOut",
     "PersonaCreate", "PersonaUpdate", "PersonaOut",
     # format

@@ -6,6 +6,20 @@
 // 暂存于此 → 建稿时存 articles.images_json (非空 = 搜图总闸开, 建包自动扫图)。
 let fetchedImages = [];
 
+// 搜图勾点掉即作废已暂存的候选图 (2026-09-06 修): 勾只在点「抓取」瞬间被读,
+// 抓取后再点掉勾不清空 fetchedImages → 建稿照样带图落库 → 总闸形同虚设 (job 27ba3371 实锤)
+document.addEventListener('DOMContentLoaded', () => {
+  const imgToggle = document.getElementById('fetch-images');
+  if (imgToggle) {
+    imgToggle.addEventListener('change', () => {
+      if (!imgToggle.checked && fetchedImages.length) {
+        fetchedImages = [];
+        setStatus('status-create', '已作废本次抓取的候选图（搜图已关闭）', false, true);
+      }
+    });
+  }
+});
+
 async function fetchUrl() {
   const urlInput = document.getElementById('article-url');
   const url = urlInput.value.trim();
@@ -47,9 +61,13 @@ async function createArticle() {
   // 赛道 (2026-08-16 用户方案): 建稿勾选 → 评论层解构 + 七层审计走对应分支
   const trackEl = document.querySelector('input[name="article-track"]:checked');
   const track = trackEl ? trackEl.value : 'tech';
-  // 证据图管线①: 搜图开关抓到的候选图随稿落库 (非空 = 总闸开)
+  // 证据图管线①: 搜图开关抓到的候选图随稿落库 (非空 = 总闸开)。
+  // 建稿再读一次勾状态 (2026-09-06 修): 以用户当下勾为准, 抓取时开着、建稿前点掉 → 不带图
   const body = { title, source_url: sourceUrl, raw_text: rawText, track };
-  if (fetchedImages.length) body.images = fetchedImages;
+  const imgToggleNow = document.getElementById('fetch-images');
+  const useImages = imgToggleNow ? imgToggleNow.checked : false;
+  if (useImages && fetchedImages.length) body.images = fetchedImages;
+  else fetchedImages = [];
   try {
     currentArticle = await api('POST', '/articles', body);
     fetchedImages = [];  // 已落库, 防重复提交

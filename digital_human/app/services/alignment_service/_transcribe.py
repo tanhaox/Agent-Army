@@ -6,10 +6,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 from app.services.alignment_service._models import _ensure_model
 from app.services.director_events import PlanCancelled
+
+if TYPE_CHECKING:  # 0919 pyflakes 补漏: 注解用 WhisperModel, 运行时实例化走 _ensure_model
+    from faster_whisper import WhisperModel
 
 logger = __import__("logging").getLogger(__name__)
 

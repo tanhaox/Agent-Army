@@ -14,6 +14,8 @@ from ..database import db_session, get_db, get_session_maker
 from ..models import Article, Host, Persona, Script
 
 logger = logging.getLogger(__name__)
+from app.services.job_events import _publish
+
 from ..schemas import (
     ArticleCreate,
     ArticleOut,
@@ -22,10 +24,9 @@ from ..schemas import (
     FetchUrlResponse,
     RewriteRequest,
 )
-from ..services.llm_service import LLMService
+from ..services.llm_service import LLMService, get_llm_service
 from ..services.script_parser import parse_script
 from ..services.url_fetcher import fetch_url
-from .jobs import _publish
 
 router = APIRouter(prefix="/api/articles", tags=["articles"])
 
@@ -158,10 +159,8 @@ def _create_project_dirs(script_id: str, project_root: Path) -> Path:
 
 
 def get_llm() -> LLMService:
-    from ..config import get_config
-
-    cfg = get_config()
-    return LLMService(cfg.deepseek)
+    # 2026-09-09 用户令: kimi 主力 + deepseek 兜底 (统一工厂)
+    return get_llm_service()
 
 
 @router.post("", response_model=ArticleOut)
@@ -281,8 +280,9 @@ def rewrite_article(
                 # 赛道默认模板 (2026-08-16): geo 稿未显式选模板时走 laotan-geo
                 # (必须在 article 查询之后 — 此前放在函数开头引用未定义的 article,
                 #  NameError 杀线程且无 rewrite_error 事件 → 前端永久等待卡死)
+                # 0909: tech 缺省从 laochen_default (老陈/Fish TTS 遗产) 换 laotan-tech_7layer_v2
                 if not _tpl:
-                    _tpl = "laotan-geo" if (getattr(article, "track", "tech") == "geo") else "laochen_default"
+                    _tpl = "laotan-geo" if (getattr(article, "track", "tech") == "geo") else "laotan-tech_7layer_v2"
 
 
                 # 数字人绑定
@@ -310,7 +310,7 @@ def rewrite_article(
                             _publish(job_id, {"type": "rewrite_progress",
                                               "msg": f"人设模板「{_tpl}」与地缘赛道不匹配，已自动切换 laotan-geo"})
                             _tpl = "laotan-geo"
-                        elif _track == "tech" and "tech" not in _tpl_l and _tpl_l not in ("", "laochen_default"):
+                        elif _track == "tech" and "tech" not in _tpl_l:
                             logger.warning(
                                 "[rewrite] persona 模板 %s 与赛道 tech 不匹配, 强制切 laotan-tech_7layer_v2",
                                 _tpl,
@@ -411,8 +411,10 @@ def rewrite_article(
                         raw_for_rewrite = raw_for_rewrite + "\n\n" + material_block
                     material_package_id = pkg.id
 
+                # 0910 素材隔离: 原文+素材包 = 外部内容, 包隔离标签后进洗稿提示词
+                from ..services.prompt_guard import wrap_source
                 script_text = llm.rewrite_article(
-                    raw_for_rewrite,
+                    wrap_source(raw_for_rewrite, label="新闻原文与素材"),
                     prompt_template=_tpl,
                     model=model_alias,
                     stream=True,

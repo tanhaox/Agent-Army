@@ -13,7 +13,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from app.services.gpu_service_manager._http import http_ok, pids_listening_on, port_of
+from app.services.gpu_service_manager._http import (
+    http_ok,
+    pids_listening_on,
+    port_of,
+    proc_cmdline,
+)
 from app.services.gpu_service_manager._specs import ServiceSpec
 
 if TYPE_CHECKING:
@@ -99,6 +104,12 @@ class ServiceLifecycleMixin:
         log_path = LOG_DIR / f"gpu_svc_{spec.key}.log"
         log_fh = open(log_path, "ab")
         env = dict(os.environ)
+        # 0920 根治: 后端进程内 Whisper 钉卡 (alignment_service) 会把
+        # CUDA_DEVICE_ORDER=PCI_BUS_ID 留在本进程环境; 子进程原样继承后,
+        # spec 的序号锚定语义被改写 (PCI 序 0=4060) → ComfyUI 落 8GB 卡崩溃环.
+        # spec.env 是 GPU 钉卡的唯一事实源, 继承链上的钉卡/排序变量一律剥离.
+        for leaked in ("CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"):
+            env.pop(leaked, None)
         env.update(spec.env)
         # 子进程 UTF-8 输出, 避免 fish 的 GBK UnicodeEncodeError
         env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -107,7 +118,11 @@ class ServiceLifecycleMixin:
         exe = Path(cmd[0])
         if not exe.is_absolute():
             cmd[0] = str(spec.cwd / exe)
-        logger.info("[gpu_svc] launching %s: %s", spec.key, cmd)
+        logger.info("[gpu_svc] launching %s: %s | CUDA_VISIBLE_DEVICES=%s", spec.key, cmd,
+                    env.get("CUDA_VISIBLE_DEVICES", "<unset>"))
+        # 0917 取证锚 → 0920 结案: "值=0 而落 4060" 的翻转源 = 后端进程被
+        # Whisper 钉卡写入 CUDA_DEVICE_ORDER=PCI_BUS_ID 后被子进程继承 (已在
+        # 上方剥离); comfyui spec 已改锚 GPU-UUID, 与枚举序彻底解耦.
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
@@ -136,25 +151,42 @@ class ServiceLifecycleMixin:
         场景: 服务派生的孙进程脱离了进程树 (taskkill /T 覆盖不到),
         或前次残留的僵尸进程占着端口导致下次启动 bind 失败.
 
-        安全红线 (2026-08-07): 本项目自用端口永不强杀, 避免"霸道清场"
-        误杀正在跑的 web 服务 / 人工网页端 / ComfyUI:
-          - 54321  run_web.py (本项目 uvicorn, 承载页面+导演台)
-          - 7861   人工网页端 webui.py (index-tts-windows 一键启动)
-          - 8188   ComfyUI (LTX 渲染, 显存大户但属本项目管线)
-        托管 TTS 端口 (7860/7862/7861-f5) 才是清场目标。
+        安全红线 (2026-08-07 立, 0917 修订"验明正身才杀"):
+          - 54321 run_web.py / 7861 人工网页端 — 绝对红线, 永不强杀;
+          - 8188 ComfyUI — 旧红线在本管理器要拉起 comfyui 时反而锁死自己:
+            服务端被强杀后 ComfyUI 孤儿僵死占口 (监听但不响应), 健康检查
+            失败 → 拉新实例 → bind 失败"启动即退出"死循环. 现改为: 命令行
+            验明是 ComfyUI main.py 进程才清 (僵死孤儿), 其他进程照旧不动;
+          - 托管 TTS 端口 (7860/7862/7866) 不设红线, 照旧清场.
         """
         port = port_of(spec.base_url)
         if not port or os.name != "nt":
             return
-        # 本项目/人工网页/ComfyUI 端口永不强杀
-        if port in (54321, 7861, 8188):
-            return
+
+        def _killable(pid: int) -> bool:
+            if port in (54321, 7861):  # 本项目/人工网页端: 绝对红线
+                return False
+            if port == 8188:  # ComfyUI 口: 验明正身才杀
+                cmdline = proc_cmdline(pid)
+                ok = ("comfyui" in cmdline.lower() and "main.py" in cmdline.lower())
+                if not ok:
+                    logger.error(
+                        "[gpu_svc] port 8188 held by NON-ComfyUI PID %s "
+                        "(cmdline: %.100s) — 红线不动, 启动可能 bind 失败需人工排查",
+                        pid, cmdline or "<查询失败/已退出>")
+                return ok
+            return True
+
+        pids: list[int] = []
         for _ in range(5):
             pids = pids_listening_on(port)
             pids = [p for p in pids if p not in (0, os.getpid())]
             if not pids:
                 return
+            killed_any = False
             for pid in pids:
+                if not _killable(pid):
+                    continue
                 logger.warning(
                     "[gpu_svc] port %s still held by PID %s after kill, force taskkill",
                     port, pid,
@@ -164,8 +196,11 @@ class ServiceLifecycleMixin:
                         ["taskkill", "/PID", str(pid), "/T", "/F"],
                         capture_output=True, timeout=30,
                     )
+                    killed_any = True
                 except Exception as exc:
                     logger.warning("[gpu_svc] force kill PID %s failed: %s", pid, exc)
+            if not killed_any:
+                break  # 剩下的全是红线保护对象, 等待无意义
             time.sleep(1.0)
         if pids_listening_on(port):
             logger.error("[gpu_svc] port %s STILL occupied after force kill", port)
@@ -194,7 +229,7 @@ class ServiceLifecycleMixin:
         if state.proc is None:
             return
         idle = time.time() - state.last_used
-        if force or idle >= self.idle_timeout_sec:
+        if force or idle >= self._effective_idle(key):  # 0917: 按服务独立阈值
             # 有任务在跑/排队时不关
             if self._gpu_lock.locked() or self._waiting > 0:
                 return

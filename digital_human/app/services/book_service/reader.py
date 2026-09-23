@@ -69,8 +69,15 @@ def _cut_frontmatter(text: str) -> str:
 
 
 def clean_book_title(filename_stem: str) -> str:
-    """文件名 → 书名: 去来源后缀标记."""
-    return _SUFFIX_RE.sub("", filename_stem).strip()
+    """文件名 → 书名: 去来源后缀标记 + 尾部噪声.
+
+    0907: 尾部 +、点号等噪声剥除 — "HBO的内容战略+(zhihailib.com).epub"
+    曾带 "+" 进书名, 口播念成"战略加"、字幕/封面带+ (豆包审稿实锤)。
+    蒸馏txt与原书文件经同一清洗对齐, pending 判定不受影响。
+    """
+    s = _SUFFIX_RE.sub("", filename_stem).strip()
+    s = re.sub(r"[\s\+\-—·、,，.。]+$", "", s).strip()
+    return s
 
 
 def scan_book_sources(root: str | Path) -> list[dict]:
@@ -153,7 +160,18 @@ def _epub_toc(z: zipfile.ZipFile) -> list[str]:
 
 
 def _epub_toc_map(z: zipfile.ZipFile) -> dict[str, str]:
-    """epub 目录 → {章节文件: 标题} (toc.ncx/nav) — 章节名用标题替代文件名 (2026-08-22)."""
+    """epub 目录 → {章节文件: 标题} (toc.ncx/nav) — 章节名用标题替代文件名 (2026-08-22).
+
+    0908 修 (HBO 实锤章名全丢): ncx 的 src 带锚点 (`text00004.html#pre4_4`) 且常无
+    OEBPS/ 目录前缀 — 键规范化为「basename + 全路径」双键 (去锚点), 匹配两头都命中。
+    同文件多锚点条目 (一书多节) 后条覆盖, 粗粒度可接受。
+    """
+    def _keys(src: str) -> list[str]:
+        p = src.split("#")[0].lstrip("/")
+        if not p:
+            return []
+        return [p, p.split("/")[-1]] if "/" in p else [p]
+
     m: dict[str, str] = {}
     for name in z.namelist():
         ln = name.lower()
@@ -163,19 +181,19 @@ def _epub_toc_map(z: zipfile.ZipFile) -> dict[str, str]:
             except Exception:
                 continue
             if "toc.ncx" in ln:
-                # <navLabel><text>标题</text></navLabel><content src="file"/>
                 for mm in re.finditer(
                         r"<navLabel>\s*<text>(.*?)</text>\s*</navLabel>\s*<content src=\"([^\"]+)\"", raw, re.S):
                     t = re.sub(r"<[^>]+>", "", mm.group(1)).strip()
-                    if t:
-                        m[mm.group(2).lstrip("/")] = t
+                    for k in _keys(mm.group(2)):
+                        if t:
+                            m[k] = t
             else:
-                # <a href="file"><span>标题</span></a>
                 for mm in re.finditer(
                         r'<a[^>]*href="([^"]+\.(?:x?html))"[^>]*>(.*?)</a>', raw, re.S):
                     t = re.sub(r"<[^>]+>", "", mm.group(2)).strip()
-                    if t:
-                        m[mm.group(1).lstrip("/")] = t
+                    for k in _keys(mm.group(1)):
+                        if t:
+                            m[k] = t
             if m:
                 break
     return m
@@ -241,24 +259,31 @@ def _split_chapters(text: str) -> list[tuple[str, str]]:
                     title = f"{s} {nxt}"
                     i += 1
             if cur_name or cur:
-                secs.append((cur_name or "前言", "\n".join(cur)))
+                secs.append((cur_name, "\n".join(cur)))
             cur_name, cur = title, []
         else:
             cur.append(lines[i])
         i += 1
     if cur_name or cur:
-        secs.append((cur_name or "前言", "\n".join(cur)))
+        secs.append((cur_name, "\n".join(cur)))
     return secs or [("", text)]
 
 
 def _section_role(name: str, text: str) -> str:
-    """章节角色: frontmatter(序/前言) / backmatter(附录/参考文献/后记) / body."""
+    """章节角色: frontmatter(序/前言) / backmatter(附录/参考文献/后记) / body.
+
+    0908 修 (HBO 实锤 24/43 章被吞): 一文件一章的书, 每章开头常见"引子/导言/序"
+    段落 — head 关键词对长正文文件误杀整章。改为: **长文件 (>4000字) 只按文件名
+    判**, head 关键词仅对短文件 (真版权页/扉页/短序) 生效; 宁可漏杀进 body, 不可
+    误杀丢整章。
+    """
     head = text[:80]
+    use_head = len(text) <= 4000
     for k in _BACK_KEYWORDS:
-        if (k in head and len(head) < 200) or k in name:
+        if k in name or (use_head and k in head):
             return "backmatter"
     for k in _FRONT_KEYWORDS:
-        if (k in head and len(head) < 200) or k in name:
+        if k in name or (use_head and k in head):
             return "frontmatter"
     return "body"
 

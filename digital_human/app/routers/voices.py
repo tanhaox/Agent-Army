@@ -20,7 +20,7 @@ from app.schemas import (
     VoiceUpdate,
 )
 from app.services import voice_service
-from app.routers.jobs import _publish
+from app.services.job_events import _publish
 
 router = APIRouter(prefix="/api/voices", tags=["voices"])
 

@@ -63,6 +63,23 @@ _BUILTIN_SPECS: dict[str, dict[str, Any]] = {
             "HF_HOME": "E:/AI/tts/index-tts-windows/.huggingface",
         },
     },
+    "indextts25": {
+        # IndexTTS-2.5 老谭读书专用通道 (2026-09-10; 案卷 memory indextts-25-upgrade)
+        # 与产线 indextts (7862, IndexTTS2) 完全独立 — 静读书/新闻线不受影响。
+        "display_name": "IndexTTS2.5",
+        "base_url": "http://127.0.0.1:7866",
+        "health_path": "/health",
+        "cwd": "E:/AI/tts/index-tts2.5",
+        "command": [
+            ".venv/Scripts/python.exe", "api_server.py",
+            "--port", "7866", "--host", "127.0.0.1",
+        ],
+        "env": {
+            "PYTHONPATH": "",
+            "HF_ENDPOINT": "https://hf-mirror.com",
+            "HF_HOME": "E:/AI/tts/index-tts2.5/.huggingface",
+        },
+    },
     "comfyui": {
         "display_name": "ComfyUI",
         "base_url": "http://127.0.0.1:8188",
@@ -71,10 +88,21 @@ _BUILTIN_SPECS: dict[str, dict[str, Any]] = {
         "command": [
             "python_embeded/python.exe", "-s", "ComfyUI/main.py",
             "--windows-standalone-build", "--listen", "127.0.0.1",
+            # 0915 花屏/1450 根治: H3 模型栈 51GB > 物理内存 47.6GB, 默认 pinned-RAM
+            # 卸载在超卖时 GetOverlappedResult 1450 (硬错) 或静默脏权重 (噪声废片).
+            # --fast-disk = 磁盘页缓存背书 (pageable 可回收), NVMe 直读 0.2s/64MB 实测健康.
+            "--fast-disk",
         ],
-        # 与 run_nvidia_gpu.bat 一致: CUDA_VISIBLE_DEVICES=0 锚定 4090
-        # (本机 CUDA 视角 CUDA0=4090 / CUDA1=4060, 不设会落 4060 8GB OOM)
-        "env": {"CUDA_VISIBLE_DEVICES": "0"},
+        # 0920 根治 (ep5 46镜全灭案): 序号锚定翻车 — Whisper 对齐在[后端进程]设
+        # CUDA_DEVICE_ORDER=PCI_BUS_ID (alignment_service/_models.py), _launch 的
+        # dict(os.environ) 原样继承 → PCI 序下 0=4060 → ComfyUI 落 8GB 卡,
+        # K2 17.5G 栈 cuDNN SUBLIBRARY_VERSION_MISMATCH + access violation 崩溃环.
+        # 改锚 4090 的 GPU-UUID: 与枚举序完全无关, 双保险见 _lifecycle 剥离继承.
+        "env": {"CUDA_VISIBLE_DEVICES": "GPU-722b3d27-419c-2698-89a1-28a44ae2efd0"},
+        # 0917 用户令: ComfyUI 冷启实测 82s (51GB 模型栈) — 全局 180s 空闲即杀
+        # 在人审/重roll节奏下 = "拉起→干2-7笔→再拉起" churn 主源; 单独保温 30min.
+        # TTS 小栈维持全局 idle_timeout_sec (可被 app.yaml tts_services.comfyui 覆盖).
+        "idle_timeout_sec": 1800,
     },
 }
 
@@ -91,6 +119,9 @@ class ServiceSpec:
     cwd: Path
     command: list[str]
     env: dict[str, str]
+    # None = 跟随管理器全局 idle_timeout_sec; 数值 = 本服务独立空闲关停阈值
+    # (0917: ComfyUI 51GB 栈冷启 82s, 单独保温; 0 = session 结束立即关)
+    idle_timeout_sec: float | None = None
 
     @property
     def health_url(self) -> str:
@@ -104,6 +135,7 @@ def build_specs(raw_cfg: dict[str, Any]) -> tuple[dict[str, ServiceSpec], dict[s
     for key, builtin in _BUILTIN_SPECS.items():
         override = svc_cfg.get(key) or {}
         merged = {**builtin, **override}
+        _idle = merged.get("idle_timeout_sec")
         specs[key] = ServiceSpec(
             key=key,
             display_name=merged["display_name"],
@@ -112,5 +144,6 @@ def build_specs(raw_cfg: dict[str, Any]) -> tuple[dict[str, ServiceSpec], dict[s
             cwd=Path(merged["cwd"]),
             command=list(merged["command"]),
             env=dict(merged.get("env") or {}),
+            idle_timeout_sec=float(_idle) if _idle is not None else None,
         )
     return specs, svc_cfg

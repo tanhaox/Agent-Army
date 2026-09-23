@@ -21,7 +21,7 @@ from app.services.book_service.creation_common import (
     source_context,
 )
 from app.services.book_service.distiller import GemmaClient, load_book_rules
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMService, get_llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def assess_book_risk(title: str, author: str | None = None,
     if meta and meta.get("blurb"):
         user_p += f"\n内容简介：{(meta.get('blurb') or '')[:800]}"
     try:
-        out = LLMService(get_config().deepseek).chat(sys_p, user_p, model="pro",
+        out = get_llm_service().chat(sys_p, user_p, model="pro",
                                                      temperature=0.2, timeout=300)
         a = GemmaClient.parse_json_block(out)
     except Exception as exc:
@@ -105,13 +105,27 @@ def _enrich_meta_fallback(book: BookProject, meta: dict | None) -> dict:
         meta["_gaps_filled"] = filled
     return meta
 def complete_input(db: Session, book: BookProject) -> BookProject:
+    def _is_laotan_book(b: BookProject) -> bool:
+        """老谭读书线判定 (0908): 老谭侧专属字段只对老谭书产出, 静读书零改动."""
+        pid = (b.input_json or {}).get("persona_id") if isinstance(b.input_json, dict) else None
+        if not pid:
+            return False
+        try:
+            from app.models import Persona
+            p = db.query(Persona).filter(Persona.id == pid).first()
+            return bool(p and "laotan" in (p.prompt_template or ""))
+        except Exception:
+            return False
+
     l0 = source_context(book)
     tier = "L0" if l0 else "L2"
     sys_p = (
         "你是拆书稿创作系统的输入补全模块。基于用户提供的书名/作者"
         + ("和【书籍来源文本】" if l0 else "（无来源文本，凭你的知识）")
         + "，补全创作输入清单。严禁编造：来源没有的字段列入 missing，不得猜测填充。"
-        + "输出严格 JSON: {\"书籍类型\":str,\"全书核心主张\":str,\"章节结构\":[str],"
+        "目标读者画像只从书的内容锁定 (谁的什么处境被这本书直接回答), "
+        "禁账号人口学套话。"
+        "输出严格 JSON: {\"书籍类型\":str,\"全书核心主张\":str,\"章节结构\":[str],"
         "\"关键概念清单\":[str],\"核心金句\":[str],\"核心案例\":[str],"
         "\"目标读者画像\":str,\"missing\":[str]}"
     )
@@ -142,15 +156,32 @@ def complete_input(db: Session, book: BookProject) -> BookProject:
         if v not in (None, "", []):
             inp[k] = {"value": v, "tier": tier}
     # 目标读者画像 (2026-08-20): 账号人设级属性, 书级缺省继承 — 不再要求录入时人工补.
-    # LLM 给了书级特定画像用之, 否则回退 Persona.target_reader (静读书固定受众).
+    # LLM 给了书级特定画像用之, 否则回退所选 persona.target_reader (0907 双人物).
     if not (inp.get("目标读者画像") or {}).get("value"):
-        reader = _persona_target_reader(db)
+        reader = _persona_target_reader(db, book)
         if reader:
             inp["目标读者画像"] = {"value": reader, "tier": "persona", "inherited": True}
     missing = list(data.get("missing") or [])
     # 目标读者画像已由人设兜底, 从 missing 剔除
     if "目标读者画像" in missing:
         missing.remove("目标读者画像")
+    # 本书迁移视角 (2026-09-08 老谭侧专属, 静读书不产): 书级一次性产出 3~4 个
+    # 迁移视角 (读书系统适应所有书, 禁一根筋只对职场人) — 稿件层视角适配引用。
+    try:
+        if _is_laotan_book(book) and not (inp.get("本书迁移视角") or {}).get("value"):
+            v_sys = ("你是读书系统的视角规划模块。给定一本书的类型与核心主张, 产出 3~4 个"
+                     "「把这本书讲给谁听」的迁移视角——既要普惠又要有侧重, 按书的性质适配"
+                     "(商业战略书→企业主/部门管理者/小生意人/职场人; 心理书→自我成长/关系/"
+                     "养育者……)。每视角 = 名称 + 一句适用说明。输出严格 JSON: "
+                     '{"views": ["名称:说明", ...]}')
+            v_user = (f"书名：《{book.book_title}》\n类型：{data.get('书籍类型') or ''}\n"
+                      f"核心主张：{str(data.get('全书核心主张') or '')[:200]}")
+            vd = _parse_json(_llm().chat(v_sys, v_user, model="flash", temperature=0.3))
+            views = [str(v) for v in ((vd or {}).get("views") or []) if str(v).strip()][:4]
+            if views:
+                inp["本书迁移视角"] = {"value": views, "tier": tier}
+    except Exception as exc:
+        logger.warning("[book] 迁移视角生成失败(稿件层自选兜底): %s", exc)
     # 核心四字段: 无 L0 时 L2 一律标待补 (防幻觉红线)
     needs = list(missing)
     if not l0:
@@ -166,17 +197,130 @@ def complete_input(db: Session, book: BookProject) -> BookProject:
     return book
 
 
-def _persona_target_reader(db: Session) -> str | None:
-    """书账号人设的目标读者画像 (静读书). 供书级缺省继承."""
+def _persona_target_reader(db: Session, book: BookProject | None = None) -> str | None:
+    """书账号人设的目标读者画像. 供书级缺省继承.
+
+    2026-09-07 双人物: 优先按 book.input_json.persona_id 取所选 persona 的受众
+    (老谭读书=男性认知/升职人群, 静读书=女性成长); 无 persona_id / 查不到
+    回退静读书 (旧书兼容)。
+    0913c 定位收窄: 只做**兜底与语感层** — 目标读者本体由书的内容锁定
+    (_derive_book_reader), 账号受众不再盖到书上。
+    """
     from .persona import ensure_book_account
     from app.models import Persona
     try:
-        host = ensure_book_account(db)
-        p = db.query(Persona).filter(Persona.host_id == host.id).first()
+        p: Persona | None = None
+        if book is not None:
+            pid = (book.input_json or {}).get("persona_id") if isinstance(book.input_json, dict) else None
+            if pid:
+                p = db.query(Persona).filter(Persona.id == pid).first()
+        if p is None:
+            host = ensure_book_account(db)
+            p = db.query(Persona).filter(Persona.host_id == host.id).first()
         return (p.target_reader or "").strip() if p else None
     except Exception as exc:
         logger.warning("[book] persona target_reader lookup failed: %s", exc)
         return None
+
+
+# ── 目标读者以书定 (0913c 用户令) ────────────────────────────────
+def _book_reader_value(inp: dict) -> str | None:
+    """书级目标读者有效值: tier != persona (书内容锁定/人工填) 才算数.
+
+    persona 继承值 (tier=persona, 0907 旧逻辑盖的章) 视为"未定" — 调用方
+    应走 _derive_book_reader 重新从书的内容锁定。
+    """
+    v = inp.get("目标读者画像") if isinstance(inp, dict) else None
+    if isinstance(v, dict) and v.get("value") and v.get("tier") != "persona":
+        return str(v["value"])
+    return None
+
+
+def _derive_audience_map(book: BookProject, facing: dict) -> dict | None:
+    """【受众地图锁定器 v2】(0914 用户令: 两层受众 — L1 书定主线 + L2 两轴闲话池).
+
+    L1 = 书的内容直接锁定的主线读者 (处境+决策场景);
+    L2 池按两轴划分 (跟着书的内容划, 相对 L1 一步之遥, 封闭小集合防大礼包):
+      - 上下游 (价值链): 上游掐钱的/下游消费的 — 与 L1 同链同构的人;
+      - 上下层 (组织): 上层定标准的/下层被摆布的 — 与 L1 同构的组织位置。
+    每组带同构桥一句 (机制同构, 禁鸡汤"道理相通")。
+
+    料 (受众无关面, 不吃 facing 三面重跑): kernel 内核 + L0 章节概念 + 书页 blurb。
+    L1 锁不住 (eligible=false) 返回 None → 调用方 persona 兜底。
+    """
+    kernel = facing.get("kernel") or {}
+    l0 = facing.get("l0") or {}
+    meta = (book.input_json or {}).get("book_meta") or {} \
+        if isinstance(book.input_json, dict) else {}
+    if not (kernel or l0 or meta.get("blurb")):
+        return None
+    concepts: list[str] = []
+    for ch in (l0.get("chapters") or [])[:12]:
+        for c in (ch.get("concepts") or [])[:3]:
+            n = str(c.get("name", "")).strip()
+            if n and n not in concepts:
+                concepts.append(n)
+    user = (f"书名：《{book.book_title}》\n作者：{book.author or '未知'}\n"
+            f"一句话内核：{kernel.get('one_liner', '')}\n"
+            f"为什么值得读：{kernel.get('why_read', '')}\n"
+            f"与同类书的差异：{kernel.get('positioning', '')}\n"
+            f"读者认知转变：{'；'.join(str(x) for x in (kernel.get('reader_shift') or [])[:4])}\n"
+            f"核心概念：{'、'.join(concepts[:15])}\n"
+            f"内容简介：{str(meta.get('blurb') or '')[:300]}")
+    sys_p = (
+        "你是拆书系统的【受众地图锁定器】。只从书的内容锁定这本书的两层受众。\n"
+        "**L1 主线读者**: 书为谁而写 — 处境+决策场景, 写成能直接当开篇筛选器的样子"
+        " (一读就知道是不是自己)。\n"
+        "- 禁从账号定位/平台调性出发, 禁人口学套话 (\"25-50岁男性\"这类账号级画像✗);\n"
+        "- 书讲某行业案例时, 读者≠该行业从业者 (拆HBO≠只给电视人看): 书回答的是"
+        "底层机制问题 → 读者=现实中处于**同构处境**的人群 (谁今天的处境会被这个机制"
+        "直接摆布); 同构=处境被同一机制摆布, 沾边 (只是好奇/想提升) 不纳入;\n"
+        "**L2 闲话池 — 两条轴, 各收 ≤2 组** (跟着书的内容划, 每组=相对 L1 一步之遥):\n"
+        "- 上下游轴 (价值链): 与 L1 同链同构的人 — 给你定规则掏钱的/你产出交给的,"
+        " 那类位置在**观众世界**里的版本;\n"
+        "- 上下层轴 (组织): 与 L1 同构的组织位置 — 你头顶定标准批预算的/你手底下"
+        " 被摆布交付的, 在观众世界里的版本;\n"
+        "- **L2 组是观众世界里的人** (他们会刷到这个视频): 用他们自己的身份+场景指称"
+        " (\"管投放预算的市场负责人\"\"靠客户预算吃饭的乙方\"\"替老板管交付的团队长\"),"
+        " 禁书内角色平移 (\"制片方\"\"广告主\"\"平台\"=书的cast✗ — 他们在这行里, "
+        "闲话句'你不做这行也一样'对他们不成立);\n"
+        "- 轴归位: 平台/渠道/金主=上下游轴 (\"平台就是你的老板\"也归上下游, 不归上下层);"
+        " 上下层只装同一组织内的层级;\n"
+        "- 每组必须带 bridge=同构桥一句: 描述**那群人自己的处境**被同一机制摆布"
+        " (通过了'你不做这行也一样——'句式检验), 不是他们和 L1 的买卖关系;"
+        " 禁鸡汤桥 (\"道理是相通的\"✗);\n"
+        "- 书的内容撑不起某条轴 → 该轴给空数组, 禁硬编。\n"
+        '输出严格 JSON: {"reader":str(≤80字),"evidence":str,"eligible":bool,'
+        '"chain":[{"group":str(≤20字),"bridge":str(≤40字)}],'
+        '"org":[{"group":str(≤20字),"bridge":str(≤40字)}]}'
+    )
+    try:
+        data = _parse_json(_llm().chat(sys_p, user, model="flash", temperature=0.2))
+    except Exception as exc:
+        logger.warning("[book] 受众地图锁定失败(走人设兜底): %s", exc)
+        return None
+    if not (data or {}).get("eligible") or not str(data.get("reader") or "").strip():
+        return None
+
+    def _pool(raw) -> list[dict]:
+        out = []
+        for it in (raw or [])[:2]:
+            g = str((it or {}).get("group") or "").strip()
+            br = str((it or {}).get("bridge") or "").strip()
+            if g:
+                out.append({"group": g[:30], "bridge": br[:60]})
+        return out
+
+    return {"L1": {"reader": str(data["reader"]).strip()[:120],
+                   "evidence": str(data.get("evidence") or "").strip()[:120]},
+            "上下游": _pool(data.get("chain")),
+            "上下层": _pool(data.get("org"))}
+
+
+def _derive_book_reader(book: BookProject, facing: dict) -> dict | None:
+    """v1 兼容壳: 只取 L1。新代码用 _derive_audience_map。"""
+    m = _derive_audience_map(book, facing)
+    return m and {"reader": m["L1"]["reader"], "evidence": m["L1"]["evidence"]}
 
 
 # ── 步骤 2: 评论层书化 (flash) — 读者反应清单 ─────────────────────
@@ -246,10 +390,46 @@ def auto_fill_from_l0(db: Session, book: BookProject) -> list[str]:
             return True
         return False
 
+    # 0914 受众地图 (用户令: 两层受众 — L1 书定主线 + L2 两轴闲话池):
+    # 书级已有非 persona 值用之; persona 继承值视为未定, 重新锁定
+    _br = _book_reader_value(inp)
+    _am = inp.get("受众地图", {}).get("value") if isinstance(inp.get("受众地图"), dict) else None
+    if not _br:
+        _d = _derive_audience_map(book, facing)
+        if _d:
+            _am = _d
+            inp["受众地图"] = {"value": _d, "tier": "L0"}
+            inp["目标读者画像"] = {"value": _d["L1"]["reader"], "tier": "L0",
+                                 "evidence": _d["L1"]["evidence"]}
+            _br = _d["L1"]["reader"]
+            filled.append(f"受众地图←书内容锁定(上下游{len(_d['上下游'])}组/上下层{len(_d['上下层'])}组)")
+            book.input_json = inp  # 提前可见: 评论层回退生成要用书定读者
+    # 受众指纹校验 (0907 立, 0913c 重定向): facing 三面选题角度跟**书定的读者**走,
+    # 书锁不住才退 persona 受众。0907 的病 (老谭账号拆出"全能妈妈"六集) 根因是
+    # 旧 facing 绑默认静读者 — 书定读者同样治它, 且不再把账号人口学盖到书上
+    try:
+        from .facing import facing_audience, run_facings
+        from .l0 import _l0_dir
+        _book_aud = _br or _persona_target_reader(db, book)
+        if _book_aud and facing_audience(_l0_dir(book.book_title)) != _book_aud:
+            run_facings(_l0_dir(book.book_title),
+                        facings=["units", "hooks", "readers"],
+                        audience=_book_aud)
+            facing = _l0_facing_data(book)  # 重载 (新受众角度)
+            logger.info("[book] %s facing 三面已按书定读者重跑", book.book_title)
+    except Exception as exc:
+        logger.warning("[book] facing 受众重跑失败(沿用旧角度): %s", exc)
+
     # 1) 补全字段 ← kernel + L0 概念/金句
     kernel = facing.get("kernel")
     if kernel and _set("全书核心主张", {"value": kernel.get("one_liner", "")}):
         filled.append("核心主张←内核")
+    # 目标读者: 书定已落 (上文) / 书锁不住 → 人设兜底 (语感层, 不再冒充书读者)
+    if not _br and not (inp.get("目标读者画像") or {}).get("value"):
+        _reader = _persona_target_reader(db, book)
+        if _reader:
+            inp["目标读者画像"] = {"value": _reader, "tier": "persona", "inherited": True}
+            filled.append("目标读者←人设(兜底)")
     l0 = facing.get("l0")
     if l0:
         concepts: list[str] = []
@@ -352,7 +532,7 @@ def auto_fill_from_l0(db: Session, book: BookProject) -> list[str]:
                                   "系列预告": preview,
                                   "承上": f"承接{prev_ref}", "启下": f"引出{next_ref}",
                                   "概念": u.get("concepts", [])},
-                    target_duration_sec=600.0, status="pending",
+                    target_duration_sec=_ep_target_duration(book), status="pending",
                 ))
             book.status = "roadmap_review"
             filled.append(f"总纲←facing-units({len(unit_list)}集)")
@@ -361,11 +541,40 @@ def auto_fill_from_l0(db: Session, book: BookProject) -> list[str]:
     return filled
 
 
+def _ep_target_duration(book: BookProject) -> float:
+    """单集目标时长 (秒). 2026-09-22 用户拍板: 老谭读书=240s (指标驱动: 平均播放
+    1min=及格线 → 240s 集进度 25% 即过线; 收藏=最高权重互动 → 摊薄单集提密度,
+    集数由总编剧在结构带内多切 1-2 集); 静读书=600s 维持既有形态 (只动老谭).
+    2026-09-07 旧值: 老谭=300s.
+    """
+    try:
+        pid = (book.input_json or {}).get("persona_id") if isinstance(book.input_json, dict) else None
+        from app.services.book_service.persona import LAOTAN_BOOK_PERSONA_KEY
+        from app.models import Host, Persona
+        from app.database import get_session_maker
+        smk = get_session_maker()
+        if smk is None:
+            return 600.0
+        with smk() as _db:
+            if pid:
+                _p = _db.query(Persona).filter(Persona.id == pid).first()
+                if _p and _p.host_id:
+                    _h = _db.query(Host).filter(Host.id == _p.host_id).first()
+                    if _h and _h.persona_key == LAOTAN_BOOK_PERSONA_KEY:
+                        return 240.0
+            return 600.0
+    except Exception:
+        return 600.0
+
+
 def build_comment_layer(db: Session, book: BookProject) -> BookProject:
     inp = dict(book.input_json or {})  # 必须拷贝: 同实例原地改 SQLAlchemy 不记脏
     l0 = source_context(book, cap=6000)
     readers, units = _l0_facing(book)
-    reader_txt = _persona_target_reader(db) or (inp.get("目标读者画像") or {}).get("value") or ""
+    # 0913c 优先级翻转: 书定读者 > 本书 persona (旧代码漏传 book, 拿的是默认 host
+    # 的人设 — 老谭书可能吃到静读书受众) > 旧 inherited 值
+    reader_txt = (_book_reader_value(inp) or _persona_target_reader(db, book)
+                  or (inp.get("目标读者画像") or {}).get("value") or "")
     if readers or units:
         # 精修 (2026-08-22): 输入 facing 产出, 每条评论关联主题单元 → 逐集按单元戳痛点
         sys_p = (
@@ -488,7 +697,7 @@ def build_roadmap(db: Session, book: BookProject) -> tuple[BookProject, list[str
         db.add(Episode(
             book_id=book.id, ep_index=int(r.get("ep", 0)) or rows.index(r) + 1,
             title=str(r.get("主题", "")), roadmap_json=r,
-            target_duration_sec=600.0, status="pending",
+            target_duration_sec=_ep_target_duration(book), status="pending",
         ))
     book.status = "roadmap_review"
     db.commit()

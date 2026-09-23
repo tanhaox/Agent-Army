@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 __all__ = ["load_quote_pool", "ensure_episode_quotes", "_QUOTE_MIN_CHARS"]
 
 _QUOTE_MIN_CHARS = 12
-_POOL_SECTION_RE = re.compile(r"###\s*可引用原句(.*?)\n## ", re.S)
+# 节级兼容 (0908): 蛤蟆系蒸馏用「### 可引用原句」(三级), HBO 系用「## 可引用原句」
+# (二级) — 匹配 ##/###, 节尾=下一个二级标题或文末
+_POOL_SECTION_RE = re.compile(r"#{2,3}\s*可引用原句(.*?)(?=\n## |\Z)", re.S)
 _SENT_SPLIT = re.compile(r"[。！？；]")
 
 
@@ -35,7 +37,34 @@ def _visible_len(s: str) -> int:
 
 
 def load_quote_pool(book: BookProject) -> list[str]:
-    """L0 蒸馏 txt「可引用原句」节 → 去空白校验后的句池 (≥12 字, 去重)."""
+    """L0「可引用原句」池 (≥12 字, 去重).
+
+    v2 (0908 料仓迁移): 优先 sections/可引用原句.txt 按需取料 (行格式宽松兼容
+    * / - / 编号); 缺失回退旧整 txt 节解析。
+    """
+    quotes: list[str] = []
+    seen: set[str] = set()
+
+    def _push(q: str):
+        if _visible_len(q) < _QUOTE_MIN_CHARS:
+            return
+        key = re.sub(r"[\s，。、；：！？''\"\"]", "", q)
+        if key not in seen:
+            seen.add(key)
+            quotes.append(q)
+
+    from .distiller import load_section
+    sec = load_section(book.book_title, "可引用原句")
+    if sec:
+        for line in sec.splitlines():
+            s = line.strip().lstrip("*-•·").strip()
+            s = re.sub(r"^\d+[.、)．]\s*", "", s)
+            if s and not s.startswith("#"):
+                _push(s)
+        if quotes:
+            return sanitize_quote_pool(quotes, book.book_title,
+                                       source_path=book.source_path or "")
+    # 回退: 旧整 txt 节解析
     src = book.source_path
     if not src or not Path(src).exists():
         logger.warning("[book-quotes] L0 源缺失: %s", src)
@@ -45,21 +74,14 @@ def load_quote_pool(book: BookProject) -> list[str]:
     if not m:
         logger.warning("[book-quotes] 蒸馏txt 无「可引用原句」节: %s", src)
         return []
-    quotes: list[str] = []
-    seen: set[str] = set()
     for line in m.group(1).splitlines():
         line = line.strip()
-        if not line.startswith("*"):
-            continue
-        q = line.lstrip("* ").strip()
-        if _visible_len(q) < _QUOTE_MIN_CHARS:
-            continue
-        key = re.sub(r"[\s，。、；：！？''\"\"]", "", q)
-        if key in seen:
-            continue
-        seen.add(key)
-        quotes.append(q)
-    return quotes
+        if line.startswith("*"):
+            _push(line.lstrip("* ").strip())
+    # Gate 0.5 (0908): 选句池合规过滤 — B-Q1 字幕上屏零容忍, 敏感句剔除
+    from .compliance_gate import sanitize_quote_pool
+    return sanitize_quote_pool(quotes, book.book_title,
+                               source_path=book.source_path or "")
 
 
 def _bigrams(s: str) -> set[str]:
